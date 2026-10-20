@@ -1,17 +1,16 @@
 use super::*;
-use tinystoragedrivers_api::StorageBackend;
 use crate::testkit::MemoryStorage;
 use crate::turn_state::TurnState;
 use serde_json::json;
 use tinyagents_storage_kit::{Capabilities, Fence, Filter};
+use tinystoragedrivers_api::StorageBackend;
 
 #[test]
 fn actor_factory_uses_supplied_backend_with_independent_stable_agent_cache() {
     let original_backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let admitted_backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let original =
-        DriverSessionStores::new(original_backend, Scope::new("local").unwrap())
-            .unwrap();
+        DriverSessionStores::new(original_backend, Scope::new("local").unwrap()).unwrap();
     let old = original.for_agent("alice~planner");
     old.turn_states
         .put(&TurnState::started(
@@ -91,11 +90,8 @@ fn set_epoch(backend: &Arc<dyn StorageBackend>, epoch: u64) {
 fn fresh_actor_after_native_takeover_preserves_namespace_and_refuses_retained_old_handles() {
     let inner: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     set_epoch(&inner, 1);
-    let original = DriverSessionStores::new(
-        admitted(&inner, 1),
-        Scope::new("local").unwrap(),
-    )
-    .unwrap();
+    let original =
+        DriverSessionStores::new(admitted(&inner, 1), Scope::new("local").unwrap()).unwrap();
     let old = original.for_agent("alice~planner");
     let saved = TurnState::started("persisted", "r", 1, "2026-01-01T00:00:00Z");
     old.turn_states.put(&saved).unwrap();

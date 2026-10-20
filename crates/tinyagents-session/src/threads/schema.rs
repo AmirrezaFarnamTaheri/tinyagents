@@ -34,8 +34,8 @@
 //!   record's expiry is its `_expires_ms`, which the store never sets.
 
 use super::schema_steps;
-use tinyagents_storage_kit::{Owner, Schema, ScopeClass};
 use tinyagents_storage_kit::{CollectionSpec, Key, StorageError};
+use tinyagents_storage_kit::{Owner, Schema, ScopeClass};
 
 /// The owner of the conversation store's collections and streams.
 pub(super) const OWNER: &str = "conversations";

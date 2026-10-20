@@ -72,7 +72,10 @@ impl MemoryStorage {
         scope: &tinyagents_storage_kit::Scope,
     ) -> tinyagents_storage_kit::error::Result<tinyagents_storage_kit::ScopedStorage> {
         let storage = tinystoragedrivers_api::StorageBackend::for_scope(self, scope)?;
-        Ok(tinyagents_storage_kit::ScopedStorage::new(storage, scope.clone()))
+        Ok(tinyagents_storage_kit::ScopedStorage::new(
+            storage,
+            scope.clone(),
+        ))
     }
 }
 
@@ -101,8 +104,8 @@ pub use in_memory_transcript::InMemoryTranscriptHistory;
 pub fn in_memory_transcript() -> std::sync::Arc<dyn crate::transcript::TranscriptLocator> {
     use crate::port::{DriverSessionStores, SessionStoreProvider};
     use std::sync::Arc;
-    use tinystoragedrivers_testkit::memory_backend;
     use tinyagents_storage_kit::Scope;
+    use tinystoragedrivers_testkit::memory_backend;
 
     let scope = Scope::new("test-transcript").unwrap();
     let factory = mapped_storage_factory(
@@ -110,9 +113,9 @@ pub fn in_memory_transcript() -> std::sync::Arc<dyn crate::transcript::Transcrip
         [("test".to_owned(), scope)].into_iter().collect(),
     );
     DriverSessionStores::new(factory)
-    .expect("driver session stores over memory")
-    .for_agent("test")
-    .transcripts
+        .expect("driver session stores over memory")
+        .for_agent("test")
+        .transcripts
 }
 
 #[cfg(test)]

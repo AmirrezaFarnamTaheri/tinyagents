@@ -26,6 +26,7 @@ tinystoragedrivers-types = { workspace = true }
 
 [dev-dependencies]
 tinystoragedrivers-testkit = { workspace = true }
+tinystoragedrivers-document = { version = "1.0.0", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.0-alpha.1" }
 tempfile = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 

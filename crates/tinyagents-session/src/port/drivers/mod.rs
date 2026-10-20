@@ -350,12 +350,8 @@ impl SessionStoreProvider for DriverSessionStores {
         factory: AgentStorageFactory,
         admission: SchemaAdmission,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
-        let actor = Self::with_bridge_and_schema_admission(
-            factory,
-            self.bridge.clone(),
-            admission,
-        )
-        .recover_on_open(self.recover_on_open);
+        let actor = Self::with_bridge_and_schema_admission(factory, self.bridge.clone(), admission)
+            .recover_on_open(self.recover_on_open);
         Ok(Some(Arc::new(actor)))
     }
 

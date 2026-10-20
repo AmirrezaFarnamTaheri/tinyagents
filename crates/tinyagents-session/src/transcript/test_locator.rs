@@ -6,7 +6,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::{read_transcript, TranscriptHistory, TranscriptLocator, TranscriptTurn};
+use super::{TranscriptHistory, TranscriptLocator, TranscriptTurn, read_transcript};
 
 /// An empty driver-backed locator (the production store, over memory).
 pub(crate) fn driver_locator() -> Arc<dyn TranscriptLocator> {

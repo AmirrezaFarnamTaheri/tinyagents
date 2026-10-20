@@ -1,14 +1,13 @@
 use super::*;
-use tinystoragedrivers_api::StorageBackend;
-use crate::testkit::MemoryStorage;
 use crate::port::SessionStoreProvider;
+use crate::testkit::MemoryStorage;
 use crate::turn_state::TurnState;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tinyagents_storage_kit::{
-    Filter, Item, MigrateOptions, Precondition, Registry, Scope, ScopedStorage,
-    WriteOptions,
+    Filter, Item, MigrateOptions, Precondition, Registry, Scope, ScopedStorage, WriteOptions,
 };
+use tinystoragedrivers_api::StorageBackend;
 
 fn agent_storage(backend: &Arc<dyn StorageBackend>) -> ScopedStorage {
     backend

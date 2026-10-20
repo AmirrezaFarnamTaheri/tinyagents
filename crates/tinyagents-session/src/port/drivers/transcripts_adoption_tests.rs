@@ -10,8 +10,12 @@ const THREAD: &str = "t";
 
 fn locator() -> DriverTranscriptLocator {
     let storage = MemoryStorage::new();
-    let docs: Arc<dyn DocumentStore> =
-        Arc::clone(storage.for_scope(&Scope::new("local").unwrap()).unwrap().documents());
+    let docs: Arc<dyn DocumentStore> = Arc::clone(
+        storage
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap()
+            .documents(),
+    );
     DriverTranscriptLocator::new(docs, Blocking::new().unwrap(), "memory://adoption")
 }
 
@@ -234,8 +238,18 @@ fn a_reserved_stem_reports_nothing_adopted() {
 #[test]
 fn pre_identity_roots_are_adopted_and_resume_the_folded_history() {
     let locator = locator();
-    write_root(&locator, "1700000100_orchestrator", &legacy("orchestrator", "2026-01-01", 1, 0), &["first"]);
-    write_root(&locator, "1700000200_orchestrator", &legacy("orchestrator", "2026-01-02", 1, 0), &["second"]);
+    write_root(
+        &locator,
+        "1700000100_orchestrator",
+        &legacy("orchestrator", "2026-01-01", 1, 0),
+        &["first"],
+    );
+    write_root(
+        &locator,
+        "1700000200_orchestrator",
+        &legacy("orchestrator", "2026-01-02", 1, 0),
+        &["second"],
+    );
     let session = SessionRef::scoped(THREAD, "orchestrator");
     let seed = legacy("orchestrator", "2026-02-01", 0, 0);
 
@@ -256,10 +270,7 @@ fn pre_identity_roots_are_adopted_and_resume_the_folded_history() {
             .unwrap()
             .is_none()
     );
-    assert_eq!(
-        contents(&locator, &session),
-        vec!["first", "second"]
-    );
+    assert_eq!(contents(&locator, &session), vec!["first", "second"]);
 }
 
 #[test]

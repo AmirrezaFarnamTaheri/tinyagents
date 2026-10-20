@@ -1,7 +1,7 @@
 use super::*;
-use tinystoragedrivers_api::StorageBackend;
 use crate::testkit::MemoryStorage;
 use serde_json::Value;
+use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_types::MemoryStorage;
 
 #[tokio::test]
@@ -145,7 +145,8 @@ impl Store for BlockingStore {
 #[tokio::test]
 async fn rebind_during_a_blocked_store_call_keeps_that_call_old_and_routes_the_next_new() {
     let base_provider =
-        DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::new("local").unwrap()).unwrap();
+        DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::new("local").unwrap())
+            .unwrap();
     let mut old = base_provider.for_agent("agent");
     let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
@@ -325,7 +326,9 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
             .put("n", "fresh", serde_json::json!("current"))
             .await
             .unwrap();
-        let direct = DriverSessionStores::new(backends[winner].clone(), Scope::new("local").unwrap()).unwrap();
+        let direct =
+            DriverSessionStores::new(backends[winner].clone(), Scope::new("local").unwrap())
+                .unwrap();
         assert_eq!(
             direct.for_agent("agent").kv.get("n", "k").await.unwrap(),
             Some(serde_json::json!("same-backend"))

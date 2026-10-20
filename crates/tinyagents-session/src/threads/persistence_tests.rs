@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::json;
+use tinyagents_storage_kit::Scope;
 use tinystoragedrivers_types::ErrorKind;
-use tinyagents_storage_kit::{Scope};
 
 async fn memory_store() -> DriverConversationStore {
     let backend = tinystoragedrivers_testkit::memory_backend();
@@ -36,8 +36,7 @@ fn message(id: &str, content: &str) -> ThreadMessage {
 
 #[tokio::test(flavor = "current_thread")]
 async fn memory_store_preserves_deterministic_append_and_missing_thread_behavior() {
-    let store: Box<dyn ConversationPersistence> =
-        Box::new(memory_store().await);
+    let store: Box<dyn ConversationPersistence> = Box::new(memory_store().await);
     assert!(store.get_thread("missing").await.unwrap().is_none());
     assert!(store.get_messages("missing").await.unwrap().is_empty());
     assert!(matches!(

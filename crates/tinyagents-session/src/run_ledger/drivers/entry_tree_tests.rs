@@ -1,8 +1,8 @@
 use super::*;
-use tinystoragedrivers_api::StorageBackend;
-use crate::testkit::MemoryStorage;
 use crate::entry_tree::{ForkPosition, ForkScope};
+use crate::testkit::MemoryStorage;
 use crate::transcript::TranscriptMessage;
+use tinystoragedrivers_api::StorageBackend;
 
 fn kind(text: &str) -> EntryKind {
     EntryKind::Message(TranscriptMessage::new("user", text))
@@ -593,7 +593,8 @@ async fn imported_cycle_and_native_ordinal_exhaustion_refuse_without_partial_ent
 #[tokio::test]
 async fn terminal_entry_allocators_remain_representable_in_native_bson() {
     let backend = MemoryStorage::new();
-    let native = super::event_bson_tests::wrap(backend.for_scope(&Scope::new("local").unwrap()).unwrap());
+    let native =
+        super::event_bson_tests::wrap(backend.for_scope(&Scope::new("local").unwrap()).unwrap());
     native.declare().await.unwrap();
     native
         .scoped

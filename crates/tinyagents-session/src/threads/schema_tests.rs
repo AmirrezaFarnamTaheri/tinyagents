@@ -1,5 +1,4 @@
 use super::*;
-use tinystoragedrivers_api::StorageBackend;
 use crate::testkit::MemoryStorage;
 use crate::threads::{
     ConversationPersistence, CreateConversationThread, DriverConversationStore, ThreadMessage,
@@ -9,10 +8,11 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tinyagents_storage_kit::{
-    CollectionSpec, Item, MigrateOptions, Precondition, Registry, Scope, ScopeClass,
-    ScopedStorage, WriteOptions,
+    CollectionSpec, Item, MigrateOptions, Precondition, Registry, Scope, ScopeClass, ScopedStorage,
+    WriteOptions,
     schema::{StepBody, StreamStepFn},
 };
+use tinystoragedrivers_api::StorageBackend;
 
 const INCARNATION: &str = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
 const TOKEN: &str = "0b4e8d6c-3c0e-4f5e-9d3f-1d2c3b4a5f60";

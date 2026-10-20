@@ -115,12 +115,14 @@ async fn live_workflow_leases_and_history_counters_move_to_the_shared_primitives
     assert_eq!(id, 11);
     // The v1 collections are emptied.
     for legacy in ["session_history_counters", "run_ledger_agent_imports"] {
-        assert!(storage
-            .documents()
-            .query_all(legacy, &Default::default())
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            storage
+                .documents()
+                .query_all(legacy, &Default::default())
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }
 

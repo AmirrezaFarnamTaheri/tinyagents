@@ -17,11 +17,11 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tinyagents_storage_kit::ScopedStorage;
 use tinyagents_storage_kit::primitives::Repo;
-use tinystoragedrivers_api::{DocumentStore, StreamStore};
 use tinyagents_storage_kit::{
     CollectionSpec, ErrorKind, Filter, Key, Precondition, Query, StorageError, Versioned,
     WriteOptions,
 };
+use tinystoragedrivers_api::{DocumentStore, StreamStore};
 mod append;
 mod pending;
 mod reader;

@@ -1,10 +1,11 @@
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::completions::{CompletionResult, RecordOutcome};
 use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
 use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_document::memory::MemoryConnection;
 use tinystoragedrivers_testkit::MemoryBackend;
 
 fn record(task: &str, parent: &str) -> CompletionRecord {
@@ -180,30 +181,57 @@ async fn compaction_drops_settled_records_only_and_keeps_pending_work() {
     ));
 }
 
+/// A backend whose clock the test moves, since the update time is the driver's.
+fn clocked_store() -> (DriverCompletionStore, Arc<std::sync::atomic::AtomicU64>) {
+    let now = Arc::new(std::sync::atomic::AtomicU64::new(1_700_000_000_000));
+    let clock = {
+        let now = Arc::clone(&now);
+        Arc::new(move || now.load(std::sync::atomic::Ordering::SeqCst))
+    };
+    let connection = MemoryConnection::with_clock(clock);
+    let docs = connection
+        .for_scope(Scope::new("local").unwrap())
+        .documents();
+    let store = DriverCompletionStore::new(docs).unwrap();
+    (store, now)
+}
+
 #[test]
-fn in_memory_compaction_uses_each_record_update_time_for_retention() {
+fn compaction_drops_settled_records_older_than_the_window_like_the_in_memory_store() {
+    let (driver, now) = clocked_store();
     let memory = InMemoryCompletionStore::new();
     let real_now = SystemTime::now();
+    let ms = |t: SystemTime| t.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
     let old = real_now - Duration::from_secs(60);
-    for (task, state) in [
-        ("done", CompletionState::Delivered),
-        ("gave-up", CompletionState::GaveUp),
-        ("pending", CompletionState::Pending),
-    ] {
-        let mut r = record(task, "p");
-        r.state = state;
-        r.updated_at = old;
-        memory.put(&r).unwrap();
-    }
+    let seed = |store: &dyn CompletionStore, at: SystemTime| {
+        for (task, state) in [
+            ("done", CompletionState::Delivered),
+            ("gave-up", CompletionState::GaveUp),
+            ("pending", CompletionState::Pending),
+        ] {
+            let mut r = record(task, "p");
+            r.state = state;
+            r.updated_at = at;
+            store.put(&r).unwrap();
+        }
+    };
+    now.store(ms(old), std::sync::atomic::Ordering::SeqCst);
+    seed(&driver, old);
+    seed(&memory, old);
+    now.store(ms(real_now), std::sync::atomic::Ordering::SeqCst);
     let mut recent = record("recent", "p");
     recent.state = CompletionState::Delivered;
+    driver.put(&recent).unwrap();
     recent.updated_at = real_now;
     memory.put(&recent).unwrap();
     assert_eq!(memory.compact(Duration::from_secs(1)).unwrap(), 2);
-    assert!(memory.get("pending").is_some());
-    assert!(memory.get("recent").is_some());
-    assert!(memory.get("done").is_none());
-    assert!(memory.get("gave-up").is_none());
+    assert_eq!(driver.compact(Duration::from_secs(1)).unwrap(), 2);
+    for id in ["pending", "recent"] {
+        assert!(memory.get(id).is_some() && driver.get(id).is_some(), "{id}");
+    }
+    for id in ["done", "gave-up"] {
+        assert!(memory.get(id).is_none() && driver.get(id).is_none(), "{id}");
+    }
 }
 
 #[tokio::test]

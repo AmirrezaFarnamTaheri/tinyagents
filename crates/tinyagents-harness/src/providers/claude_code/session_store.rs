@@ -229,18 +229,21 @@ pub async fn import_legacy_sessions(
     let legacy: LegacySessionFile = serde_json::from_slice(bytes)
         .map_err(|error| StorageError::serialization(error.to_string()))?;
     let mut imported = 0;
-    for (thread_id, session_id) in legacy.sessions {
+    let thread_ids: std::collections::HashSet<_> = legacy
+        .sessions
+        .keys()
+        .chain(legacy.delivered.keys())
+        .cloned()
+        .collect();
+    for thread_id in thread_ids {
         let record = SessionRecord {
-            session_id: Some(session_id),
-            delivered: legacy
-                .delivered
-                .get(&thread_id)
-                .cloned()
-                .unwrap_or_default(),
+            session_id: legacy.sessions.get(&thread_id).cloned(),
+            delivered: legacy.delivered.get(&thread_id).cloned().unwrap_or_default(),
         };
+        let has_legacy_state = record.session_id.is_some() || !record.delivered.is_empty();
         let before = store.record(&thread_id).await?;
         store.import_record(&thread_id, record).await?;
-        if before.is_none() {
+        if before.is_none() && has_legacy_state {
             imported += 1;
         }
     }

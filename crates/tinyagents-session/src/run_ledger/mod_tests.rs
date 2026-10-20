@@ -5,7 +5,7 @@ use tinyagents_harness::tool::{
     ToolEffectLedger, ToolEffectSettle as HarnessSettle, ToolEffectStart as HarnessStart,
     ToolEffectStatus as HarnessStatus,
 };
-use tinyagents_storage_kit::{Scope};
+use tinyagents_storage_kit::Scope;
 
 use super::*;
 

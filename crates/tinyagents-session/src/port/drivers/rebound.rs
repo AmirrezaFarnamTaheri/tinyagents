@@ -47,10 +47,7 @@ impl SessionStoreRegistry {
     }
 
     /// Rebinds every provider registered here, returning the number moved.
-    pub fn rebind(
-        &self,
-        factory: AgentStorageFactory,
-    ) -> std::result::Result<usize, StorageError> {
+    pub fn rebind(&self, factory: AgentStorageFactory) -> std::result::Result<usize, StorageError> {
         let stores = self.live();
         for store in &stores {
             store.rebind(Arc::clone(&factory))?;
@@ -84,7 +81,8 @@ impl RebindableSessionStores {
         factory: AgentStorageFactory,
         recover_on_open: bool,
     ) -> std::result::Result<Arc<Self>, StorageError> {
-        let driver = DriverSessionStores::new(Arc::clone(&factory))?.recover_on_open(recover_on_open);
+        let driver =
+            DriverSessionStores::new(Arc::clone(&factory))?.recover_on_open(recover_on_open);
         let this = Arc::new(Self {
             current: RwLock::new(Arc::new(driver)),
             live: Mutex::new(HashMap::new()),
@@ -103,18 +101,14 @@ impl RebindableSessionStores {
     ///
     /// Existing method calls retain the provider snapshot they started with;
     /// subsequent calls through a live handle resolve against the new backend.
-    pub fn rebind(
-        &self,
-        factory: AgentStorageFactory,
-    ) -> std::result::Result<(), StorageError> {
+    pub fn rebind(&self, factory: AgentStorageFactory) -> std::result::Result<(), StorageError> {
         // Serialize publication with agent registration so a concurrent
         // `for_agent` cannot attach to the old provider after this registry
         // snapshot. This synchronous lock is never held over async I/O.
         let mut live_registry = self.live.lock().unwrap_or_else(PoisonError::into_inner);
         live_registry.retain(|_, weak| weak.strong_count() > 0);
         let next = Arc::new(
-            DriverSessionStores::new(Arc::clone(&factory))?
-                .recover_on_open(self.recover_on_open),
+            DriverSessionStores::new(Arc::clone(&factory))?.recover_on_open(self.recover_on_open),
         );
         let live = live_registry
             .iter()
