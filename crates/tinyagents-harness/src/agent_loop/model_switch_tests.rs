@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::context::{RunConfig, RunContext};
+use crate::host::ModelResolver;
 use crate::events::AgentEvent;
 use crate::middleware::{Middleware, MiddlewareModelOutcome, ModelHandler, ModelMiddleware};
 use crate::retry::{FallbackPolicy, RetryPolicy};

@@ -20,7 +20,7 @@ use crate::middleware::{LoggingMiddleware, Middleware, ModelFallbackMiddleware};
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::runtime::{AgentHarness, AgentInvocation, AgentTurnRequest, RunPolicy};
 use crate::testkit::ScriptedModel;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use sha2::Digest;
 use tinyagents_definition::{
     AgentDefinition, DefinitionRegistry, DefinitionRegistryError, InMemoryDefinitionRegistry,
@@ -56,6 +56,11 @@ struct RedactDeltaMiddleware;
 /// than racing a pre-resolution checkpoint.
 struct PendingResolver {
     started: Arc<tokio::sync::Notify>,
+}
+
+struct PendingNamedFallbackResolver {
+    primary: Arc<dyn ChatModel<()>>,
+    named_started: Arc<tokio::sync::Notify>,
 }
 
 struct FirstThenPendingResolver {
@@ -558,6 +563,28 @@ impl crate::host::ModelResolver<()> for PendingResolver {
     ) -> crate::error::Result<Arc<dyn ChatModel<()>>> {
         self.started.notify_one();
         std::future::pending().await
+    }
+}
+
+#[async_trait]
+impl crate::host::ModelResolver<()> for PendingNamedFallbackResolver {
+    async fn resolve(
+        &self,
+        _request: &crate::host::ModelResolveRequest,
+    ) -> crate::error::Result<Arc<dyn ChatModel<()>>> {
+        Ok(self.primary.clone())
+    }
+
+    async fn resolve_named(
+        &self,
+        _name: &str,
+    ) -> crate::error::Result<Option<Arc<dyn ChatModel<()>>>> {
+        self.named_started.notify_one();
+        std::future::pending().await
+    }
+
+    fn selected_name(&self, request: &crate::host::ModelResolveRequest) -> Option<String> {
+        Some(request.model_pin.clone().unwrap_or_else(|| "primary".to_owned()))
     }
 }
 
@@ -1218,6 +1245,61 @@ async fn initial_host_model_resolution_is_cancelled_while_the_resolver_is_pendin
     };
     assert_eq!(error.kind, crate::runtime::HostedErrorKind::Cancelled);
     assert_eq!(error.timeout_bound, None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn pending_named_fallback_resolution_obeys_the_model_call_deadline() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_model_resolver(Arc::new(PendingNamedFallbackResolver {
+        primary: Arc::new(RetryableFailingModel),
+        named_started: started.clone(),
+    }));
+    harness.with_policy(RunPolicy {
+        limits: RunLimits::default().with_max_model_call_ms(Some(10)),
+        retry: RetryPolicy::default().with_max_attempts(1).with_backoff_sleep(false),
+        fallback: Some(FallbackPolicy::new(["primary", "backup"])),
+        ..RunPolicy::default()
+    });
+
+    let error = harness.invoke_default(&(), vec![tinyinference_llm::message::Message::user("go")])
+        .await.expect_err("the named fallback resolver remains pending");
+    assert!(matches!(error, crate::error::TinyAgentsError::Timeout(_)
+        | crate::error::TinyAgentsError::CallTimeout(_)), "got {error:?}");
+    assert!(started.notified().now_or_never().is_some(), "fallback lookup was entered");
+}
+
+#[tokio::test]
+async fn pending_named_fallback_resolution_is_cancelled_with_the_run() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_model_resolver(Arc::new(PendingNamedFallbackResolver {
+        primary: Arc::new(RetryableFailingModel),
+        named_started: started.clone(),
+    }));
+    harness.with_policy(RunPolicy {
+        retry: RetryPolicy::default().with_max_attempts(1).with_backoff_sleep(false),
+        fallback: Some(FallbackPolicy::new(["primary", "backup"])),
+        ..RunPolicy::default()
+    });
+    let token = crate::CancellationToken::new();
+    let invocation = harness.invoke_in_context(
+        &(),
+        RunContext::new(RunConfig::new("named-fallback-cancel"), ())
+            .with_cancellation(token.clone()),
+        vec![tinyinference_llm::message::Message::user("go")],
+    );
+    tokio::pin!(invocation);
+    let error = tokio::select! {
+        _ = started.notified() => {
+            token.cancel();
+            tokio::time::timeout(Duration::from_secs(1), &mut invocation)
+                .await.expect("cancellation drops the pending resolver")
+                .expect_err("cancelled fallback resolution cannot succeed")
+        }
+        result = &mut invocation => panic!("pending named resolver unexpectedly finished: {result:?}"),
+    };
+    assert!(matches!(error, crate::error::TinyAgentsError::Cancelled), "got {error:?}");
 }
 
 #[tokio::test]

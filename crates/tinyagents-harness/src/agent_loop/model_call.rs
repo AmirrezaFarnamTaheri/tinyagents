@@ -87,22 +87,6 @@ fn positive_window(ms: Option<u64>) -> Option<Duration> {
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
-    /// Previews which model `request` would reach through the local
-    /// [`crate::host::ModelResolver`] and returns its capability
-    /// profile, without dispatching anything.
-    ///
-    /// A pure registry lookup (no network call), so it is cheap enough to run
-    /// before every `before_model` pass and before every tool-change patch.
-    /// `None` when nothing resolves or the model advertises no profile. A
-    /// Hosted runs use their resolver for the profile shown to middleware;
-    /// this local preview is only their initial fallback.
-    pub(super) fn preview_model_profile(
-        &self,
-        request: &ModelRequest,
-    ) -> Option<tinyinference_llm::model::ModelProfile> {
-        preview_local_model_profile(self.model_resolver.as_ref(), self.fixed_model.as_ref(), request)
-    }
-
     /// Resolves the model binding through the host's routing authority when
     /// this run is a hosted invocation; returns `None` for a plain SDK run so
     /// the caller falls through to the configured local resolver instead.
