@@ -920,36 +920,41 @@ where
         error: String,
         generation: Option<u64>,
     ) -> Result<T, TurnRunnerError> {
-        let (class, message) = self.failures.classify(&error);
+        let classification = self.failures.classify_failure(&error);
         let queued = self.retire_generation(request, generation).await;
         if request.disposition == QueueDisposition::Parallel {
             self.clear_parallel_tracking(request).await;
         }
         for queued_request in queued {
+            let queued_message = format!("queued turn was not run: {}", classification.message);
+            let mut queued_classification = classification.clone();
+            queued_classification.message = queued_message.clone();
             self.events
-                .terminal(
+                .classified_failure(
                     &queued_request,
                     TerminalEvent::Failed {
                         request_id: queued_request.request_id.clone(),
-                        message: format!("queued turn was not run: {message}"),
-                        class: class.clone(),
+                        message: queued_message,
+                        class: classification.class.clone(),
                         error: error.clone(),
                     },
+                    queued_classification,
                 )
                 .await;
         }
         self.events
-            .terminal(
+            .classified_failure(
                 request,
                 TerminalEvent::Failed {
                     request_id: request.request_id.clone(),
-                    message: message.clone(),
-                    class,
-                    error,
+                    message: classification.message.clone(),
+                    class: classification.class.clone(),
+                    error: error.clone(),
                 },
+                classification.clone(),
             )
             .await;
-        Err(TurnRunnerError::Failed(message))
+        Err(TurnRunnerError::Failed(classification.message))
     }
 
     async fn finalize_generation(
