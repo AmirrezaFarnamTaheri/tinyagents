@@ -10,10 +10,10 @@ mod types;
 mod work_tracker;
 
 pub use types::{
-    EventSink, FailureClassifier, IngressDecision, IngressPolicy, IngressStage, LiveTurn,
-    QueueDisposition, ReplyStore, RequeuePayload, ScopeKey, Summarizer, TerminalEvent, TurnHost,
-    TurnRequest, TurnResult, TurnRunner, TurnRunnerConfig, TurnRunnerError, TurnSession,
-    TurnSignal, deterministic_reply_id,
+    EventSink, FailureClassification, FailureClassifier, IngressDecision, IngressPolicy,
+    IngressStage, LiveTurn, QueueDisposition, ReplyStore, RequeuePayload, ScopeKey, Summarizer,
+    TerminalEvent, TurnHost, TurnRequest, TurnResult, TurnRunner, TurnRunnerConfig,
+    TurnRunnerError, TurnSession, TurnSignal, deterministic_reply_id,
 };
 pub use work_tracker::WorkTracker;
 
