@@ -29,10 +29,6 @@
 //! `tinyagents-session` crate: a host reads history into a run's `input` and
 //! appends the run's messages back afterward.
 //!
-//! Wiring any of these directly into the loop is deliberately future work
-//! rather than default behavior, so a host that does not need one pays
-//! nothing for it.
-//!
 //! # Vendor re-exports
 //!
 //! The harness pins exact versions of the `tinyinference-llm`, `tinytools`,
