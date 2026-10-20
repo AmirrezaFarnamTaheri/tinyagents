@@ -8,3 +8,6 @@ warning: unused import: `display::with_background as display_with_background_row
     |
     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
 
+warning: `tinyagents-session` (lib test) generated 1 warning (run `cargo fix --lib -p tinyagents-session --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.96s
+  Executable unittests src/lib.rs (target/debug/deps/tinyagents_session-42f45447a4fec9ba)
