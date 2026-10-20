@@ -73,7 +73,7 @@ fn harness_with(
     max_calls: usize,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model)));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_model_calls(max_calls),
         ..RunPolicy::default()

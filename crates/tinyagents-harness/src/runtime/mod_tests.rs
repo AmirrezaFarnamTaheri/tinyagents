@@ -1513,7 +1513,7 @@ async fn hosted_model_fallback_rebinds_through_the_host_resolver_not_the_local_r
         resolver.clone(),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::constant("local bypass")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("local bypass")))));
     harness.push_middleware(Arc::new(FallbackGuidance));
     harness.push_model_middleware(Arc::new(ModelFallbackMiddleware::new(["host-backup"])));
 
@@ -3092,7 +3092,7 @@ async fn retryable_classifier_changes_the_model_visible_result_without_redispatc
 async fn explicit_model_paths_accept_borrowed_state() {
     async fn exercise<'state>(state: &'state str) {
         let mut harness: AgentHarness<&'state str> = AgentHarness::new();
-        harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(BorrowedStateModel))));
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(BorrowedStateModel))));
 
         let unary = harness
             .invoke(

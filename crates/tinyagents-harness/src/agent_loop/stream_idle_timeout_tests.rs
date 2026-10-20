@@ -143,7 +143,7 @@ fn harness_with(
     attempts: usize,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(primary)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(primary)));
     harness.with_policy(RunPolicy {
         limits,
         retry: RetryPolicy::default()
@@ -163,10 +163,10 @@ fn harness_with_chain(
     attempts: usize,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(primary)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(primary)));
     let mut models = vec!["primary".to_string()];
     for (name, model) in others {
-        harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model)));
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model)));
         models.push(name.to_string());
     }
     harness.with_policy(RunPolicy {
@@ -812,7 +812,7 @@ async fn non_streaming_calls_ignore_the_idle_timeout() {
     // A buffered call has no inter-event gaps to measure: a 300s call under a
     // 1s idle timeout must still complete.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(SlowModel::new(Duration::from_secs(300), "done")),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(SlowModel::new(Duration::from_secs(300), "done")),)));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default()
             .with_stream_idle_timeout_ms(Some(1_000))

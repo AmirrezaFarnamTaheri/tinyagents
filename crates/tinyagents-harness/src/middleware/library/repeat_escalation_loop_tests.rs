@@ -66,7 +66,7 @@ async fn blocked_calls_never_execute_and_the_second_block_pauses_the_run() {
         runs: Mutex::new(0),
     });
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(
             (0..12).map(repeat_call).collect::<Vec<_>>(),
         )),)));
     harness.register_tool(tool.clone());
@@ -134,7 +134,7 @@ async fn a_later_registered_after_tool_sees_the_marker_on_refused_calls() {
         runs: Mutex::new(0),
     });
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(
             (0..12).map(repeat_call).collect::<Vec<_>>(),
         )),)));
     harness.register_tool(tool);
@@ -165,7 +165,7 @@ async fn a_guard_halt_is_reported_as_a_halted_terminal_outcome() {
     let steering = SteeringHandle::allow_all();
     let summary: HaltSummarySlot = Arc::new(Mutex::new(None));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(
             (0..12).map(repeat_call).collect::<Vec<_>>(),
         )),)));
     harness.register_tool(Arc::new(CountingTool {

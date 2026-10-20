@@ -31,7 +31,7 @@ impl Middleware<(), ()> for RecordDepth {
 async fn driver_scopes_the_real_configured_depth_for_unary_and_streaming_runs() {
     let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::constant("done")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("done")))));
     harness.push_middleware(Arc::new(RecordDepth(recorded.clone())));
     let incoming = RunDepth {
         depth: 1,

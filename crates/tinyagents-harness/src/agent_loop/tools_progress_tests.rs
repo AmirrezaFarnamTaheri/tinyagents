@@ -112,7 +112,7 @@ struct Fixture {
 fn fixture(first_turn: ModelResponse) -> Fixture {
     let model = Arc::new(ScriptedModel::new(vec![first_turn, response(vec![], "ok")]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model as _)));
     Fixture {
         harness,
         recorder: EventRecorder::new(),

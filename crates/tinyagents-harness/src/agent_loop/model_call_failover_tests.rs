@@ -111,8 +111,8 @@ fn harness_with_primary(
     max_attempts: usize,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(primary)));
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(backup.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(primary)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(backup.clone())));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(max_attempts)
@@ -129,8 +129,8 @@ fn harness(
     max_attempts: usize,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(primary.clone())));
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(backup.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(primary.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(backup.clone())));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(max_attempts)
@@ -267,8 +267,8 @@ impl ChatModel<()> for Windowed {
 
 fn windowed_harness(primary: &Arc<Windowed>, sibling: &Arc<Windowed>) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(primary.clone())));
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(sibling.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(primary.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(sibling.clone())));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(2)
@@ -383,7 +383,7 @@ async fn plain_auth_failure_is_retried_on_the_next_call() {
 
 fn single_model_harness(model: &Arc<ScriptedOutcomes>) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(1)
@@ -432,9 +432,9 @@ async fn a_fallback_chosen_by_the_skip_hint_is_not_tried_twice() {
     let b = ScriptedOutcomes::failing(400, "bad request", false);
     let c = ScriptedOutcomes::failing(400, "bad request", false);
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(a.clone())));
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(b.clone())));
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(c.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(a.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(b.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(c.clone())));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(1)

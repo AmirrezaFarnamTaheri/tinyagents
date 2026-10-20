@@ -126,8 +126,8 @@ fn two_models(
 ) -> (AgentHarness<()>, Arc<ScriptedModel>, Arc<ScriptedModel>) {
     let (a, b) = (Arc::new(a), Arc::new(b));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(a.clone())));
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(b.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(a.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(b.clone())));
     harness.register_tool(Arc::new(FakeTool::returning("lookup", "ok")));
     (harness, a, b)
 }
@@ -213,8 +213,8 @@ async fn mid_run_switch_applies_to_the_next_call_and_stays_sticky() {
         ModelResponse::assistant("done"),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(a)));
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(b.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(a)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(b.clone())));
     harness.register_tool(Arc::new(FakeTool::returning("lookup", "ok")));
     let recorder = EventRecorder::new();
 
@@ -450,7 +450,7 @@ fn failover_harness(
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     for (name, model) in models {
-        harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model)));
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model)));
     }
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
@@ -659,7 +659,7 @@ async fn switch_wins_over_a_model_chosen_by_before_model_middleware() {
         ScriptedModel::replies(vec!["from a"]),
         ScriptedModel::replies(vec!["from b"]),
     );
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(ScriptedModel::replies(vec!["from c"])))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(ScriptedModel::replies(vec!["from c"])))));
     harness.push_middleware(Arc::new(Tweak {
         model: Some("c"),
         tool_calling: false,
@@ -687,7 +687,7 @@ async fn rejected_switch_keeps_the_model_a_middleware_picked() {
     let c = Arc::new(
         ScriptedModel::replies(vec!["from c"]).with_profile(tool_capable("openai", "gpt-5-mini")),
     );
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(c.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(c.clone())));
     harness.push_middleware(Arc::new(Tweak {
         model: Some("c"),
         tool_calling: true,
