@@ -9,10 +9,6 @@ use crate::document::{
 use crate::error::{ErrorKind, Result, StorageError};
 use crate::filter::{Filter, ID_FIELD, SCHEMA_FIELD, Sort};
 
-#[cfg(any(test, doc))]
-use super::Registry;
-#[cfg(any(test, doc))]
-use super::Step;
 use super::TransformExecutor;
 use super::compose::PreparedRegistry;
 use super::migrations::{Migrations, Progress, migrations_spec, step_key};

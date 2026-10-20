@@ -12,8 +12,6 @@ use crate::primitives;
 use crate::scope::Scope;
 use crate::stream::{SEALED_BLOB_PREFIX, validate_stream};
 
-#[cfg(any(test, doc))]
-use super::Step;
 use super::migrations::migrations_spec;
 use super::prepared::{PreparedBody as StepBody, PreparedSchema, PreparedStep};
 use super::types::{Item, Owner, Schema};
@@ -126,14 +124,6 @@ impl Registry {
         })
     }
 
-    #[cfg(test)]
-    fn set_pending(&self, scope: &Scope, items: HashSet<String>) {
-        self.prepared.set_pending(scope, items);
-    }
-    #[cfg(test)]
-    fn mark_ready(&self, scope: &Scope, item: &str) {
-        self.prepared.mark_ready(scope, item);
-    }
     /// Original closure declarations, in composition order.
     pub fn schemas(&self) -> &[Schema] {
         &self.schemas

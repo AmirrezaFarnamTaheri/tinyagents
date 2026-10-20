@@ -1,10 +1,13 @@
 {
   "sessions": {
-    "same": "uuid-a",
     "different": "uuid-old",
-    "new": "uuid-new"
+    "new": "uuid-new",
+    "same": "uuid-a"
   },
   "delivered": {
+    "orphan": [
+      "orphan-turn"
+    ],
     "same": [
       "old-turn"
     ]

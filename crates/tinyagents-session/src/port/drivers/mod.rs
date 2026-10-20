@@ -189,20 +189,6 @@ impl DriverSessionStores {
         })
     }
 
-    /// The storage of `agent_id`'s scope, and whether this provider may
-    /// declare collections in it. Used by host-side one-time bookkeeping (the
-    /// legacy import marker in `tsd.migrations`) that sits beside the session
-    /// collections.
-    pub(crate) fn scoped_for(&self, agent_id: &str) -> Result<(ScopedStorage, bool), StorageError> {
-        let scoped = self.scoped_storage(agent_id)?;
-        Ok((scoped, self.schema_admission == SchemaAdmission::Declare))
-    }
-
-    /// The bridge this provider runs synchronous seams on.
-    pub(crate) fn bridge(&self) -> &Blocking {
-        &self.bridge
-    }
-
     fn scoped_storage(&self, agent_id: &str) -> Result<ScopedStorage, StorageError> {
         (self.factory)(agent_id)
     }
