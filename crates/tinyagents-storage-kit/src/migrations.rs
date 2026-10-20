@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tinystoragedrivers_api::DocumentStore;
-use tinystoragedrivers_types::{Precondition, Result, StorageError};
+use tinystoragedrivers_types::Result;
 
 use crate::{DocumentStoreExt, Key, ScopedStorage};
 
@@ -40,25 +40,5 @@ impl Migrations {
             .get_as::<Progress>(MIGRATIONS_COLLECTION, id.as_str())
             .await?
             .is_some_and(|found| found.doc.done))
-    }
-
-    /// Mark a named owner step complete. Repeating the call is safe.
-    pub async fn mark_done(&self, owner: &str, step: &str) -> Result<()> {
-        let id = Key::of([owner, step])?;
-        let progress = Progress {
-            owner: owner.to_owned(),
-            step: step.to_owned(),
-            done: true,
-        };
-        self.docs
-            .ensure_collection(&tinystoragedrivers_types::CollectionSpec::new(
-                MIGRATIONS_COLLECTION,
-            ))
-            .await?;
-        let body = serde_json::to_value(progress).map_err(StorageError::from)?;
-        self.docs
-            .put(MIGRATIONS_COLLECTION, id.as_str(), body, Precondition::None)
-            .await?;
-        Ok(())
     }
 }

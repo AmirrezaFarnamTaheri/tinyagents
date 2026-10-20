@@ -24,8 +24,8 @@ pub(super) fn migrations_spec() -> CollectionSpec {
 
 /// The body of a `tsd.migrations` document: `{owner, step, from, to, cursor,
 /// written, done}`. A runner step has the id `Key::of([owner, item, step])`;
-/// an importer marked with [`Migrations::mark_done`] has `Key::of([owner,
-/// step])` and `from` and `to` of 0.
+/// An importer marked by [`MigrationLease::mark_done`](crate::MigrationLease::mark_done)
+/// has `Key::of([owner, step])` and `from` and `to` of 0.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Progress {
     /// The owner of the step.
@@ -45,29 +45,9 @@ pub struct Progress {
     pub done: bool,
 }
 
-/// A handle on `tsd.migrations` in one scope.
-///
-/// Hosts use it for legacy-file importers, which have no source collection
-/// for the runner to page: the importer runs, then calls
-/// [`mark_done`](Self::mark_done); on the next start [`done`](Self::done)
-/// says to skip it. This replaces the per-domain `*_import` marker
-/// collections.
-///
-/// ```
-/// use tinyagents_storage_kit::{Migrations, Scope, StorageBackend};
-/// use tinystoragedrivers_testkit::memory_backend;
-///
-/// # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
-/// let storage = memory_backend().for_scope(&Scope::new("local")?)?;
-/// let migrations = Migrations::new(&storage);
-/// assert!(!migrations.done("threads", "import_v1").await?);
-/// migrations.mark_done("threads", "import_v1").await?;
-/// assert!(migrations.done("threads", "import_v1").await?);
-/// # Ok::<_, tinyagents_storage_kit::error::StorageError>(())
-/// # }).unwrap();
-/// ```
+/// Internal handle on the runner's `tsd.migrations` progress documents.
 #[derive(Debug, Clone)]
-pub struct Migrations {
+pub(super) struct Migrations {
     docs: Arc<dyn DocumentStore>,
 }
 
@@ -76,43 +56,10 @@ impl Migrations {
     /// declared by [`Registry::prepare`](super::Registry::prepare) or
     /// [`Registry::migrate`](super::Registry::migrate).
     #[must_use]
-    pub fn new(storage: &ScopedStorage) -> Self {
+    pub(super) fn new(storage: &ScopedStorage) -> Self {
         Self {
             docs: Arc::clone(storage.documents()),
         }
-    }
-
-    /// Whether the importer `step` of `owner` has been marked done.
-    ///
-    /// # Errors
-    ///
-    /// Whatever the document store returns.
-    pub async fn done(&self, owner: &str, step: &str) -> Result<bool> {
-        let id = importer_key(owner, step)?;
-        Ok(self.load(&id).await?.is_some_and(|found| found.done))
-    }
-
-    /// Record the importer `step` of `owner` as complete. Marking twice is
-    /// fine.
-    ///
-    /// # Errors
-    ///
-    /// Whatever the document store returns.
-    pub async fn mark_done(&self, owner: &str, step: &str) -> Result<()> {
-        let id = importer_key(owner, step)?;
-        self.save(
-            &id,
-            &Progress {
-                owner: owner.to_owned(),
-                step: step.to_owned(),
-                from: 0,
-                to: 0,
-                cursor: None,
-                written: 0,
-                done: true,
-            },
-        )
-        .await
     }
 
     pub(super) async fn load(&self, id: &Key) -> Result<Option<Progress>> {
@@ -134,10 +81,6 @@ impl Migrations {
             .await
             .map(|_| ())
     }
-}
-
-fn importer_key(owner: &str, step: &str) -> Result<Key> {
-    Key::of([owner, step])
 }
 
 /// The id of a runner step's progress document.

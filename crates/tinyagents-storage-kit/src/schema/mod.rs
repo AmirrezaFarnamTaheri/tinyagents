@@ -54,7 +54,7 @@
 //! resume.
 //!
 //! Out of scope here: legacy-file importers (steps with no source) are run by
-//! the host, which records completion with [`Migrations::mark_done`].
+//! the owner, which records completion through a [`MigrationLease`](crate::MigrationLease).
 //! A stream's [`SealPolicy`](crate::SealPolicy) is applied by [`Registry::maintain`].
 
 mod compose;
