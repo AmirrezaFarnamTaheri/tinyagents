@@ -8,10 +8,9 @@
 //! an optional bound [`crate::run_ledger::RunLedgerStore`] independently of this
 //! bundle, through [`SessionStoreProvider::run_ledger_for_agent`].
 //!
-//! That is what lets one process serve many users from a shared database: a
-//! cloud host implements the provider over its own store (MongoDB, Postgres,
-//! …) and scopes every query by agent id, while a desktop host keeps today's
-//! on-disk layout behind the same traits.
+//! Hosts resolve each identity and supply a [`tinyagents_storage_kit::ScopedStorage`]
+//! already bound to the authorized scope. The session library does not choose
+//! scope labels or open a backend.
 //!
 //! # Isolation
 //!
@@ -40,12 +39,10 @@
 //!
 //! - `testkit::InMemorySessionStores`: per-agent, process-lifetime storage for
 //!   tests and explicit test-only hosts.
-//! - `DriverSessionStores` (feature `storage-drivers`): every agent's stores
-//!   in one `tinystoragedrivers` backend (SQLite, MongoDB, ...), each agent
-//!   under its own storage scope.
-//! - The on-disk layout (`session_raw/`, `tinyagents_store/`, turn-state
-//!   files) is wrapped by the host that owns it, not here: this crate keeps
-//!   the file and SQLite building blocks, and a host crate decides to use them.
+//! - `DriverSessionStores` (feature `storage-drivers`): opens each agent's
+//!   stores from the host-supplied bound-storage factory.
+//! - Workspace files, JSONL transcripts and database engines belong to the
+//!   host; `docs/legacy-import-handoff.md` records the source migration handoff.
 
 mod drivers;
 mod helpers;
