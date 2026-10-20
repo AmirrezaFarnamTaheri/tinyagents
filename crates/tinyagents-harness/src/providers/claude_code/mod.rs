@@ -87,7 +87,7 @@ pub fn render_request_stdin(request: &ModelRequest, is_new_session: bool) -> Vec
 }
 
 #[cfg(test)]
-pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static ENV_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[cfg(test)]
 #[allow(unsafe_code)]
