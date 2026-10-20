@@ -103,11 +103,9 @@ impl DocumentSubagentPersistence {
     async fn declare(&self) -> std::result::Result<(), StorageError> {
         self.declared
             .get_or_try_init(|| async {
-                for spec in tinyagents_storage_kit::primitives::collection_specs() {
-                    if spec.name == tinyagents_storage_kit::primitives::KV {
-                        self.docs.ensure_collection(&spec).await?;
-                    }
-                }
+                self.docs
+                    .ensure_collection(&tinyagents_storage_kit::primitives::kv_collection_spec())
+                    .await?;
                 Ok(())
             })
             .await

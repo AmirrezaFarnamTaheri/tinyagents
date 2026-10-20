@@ -90,10 +90,7 @@ impl DriverStore {
     /// (`Registry::prepare` declares it too). Returning a declaration grants no
     /// access and does not initialize the backend.
     pub fn collection_spec() -> CollectionSpec {
-        primitives::collection_specs()
-            .into_iter()
-            .find(|spec| spec.name == primitives::KV)
-            .expect("the primitives always declare tsd.kv")
+        primitives::kv_collection_spec()
     }
 
     /// The `Kv` namespace `namespace` of this store's owner.
