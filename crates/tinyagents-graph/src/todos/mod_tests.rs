@@ -2,6 +2,36 @@
 
 use super::types::*;
 
+#[cfg(feature = "json-schema")]
+fn schema_string_values(root: &serde_json::Value, mut schema: &serde_json::Value) -> Vec<String> {
+    while let Some(reference) = schema.get("$ref").and_then(serde_json::Value::as_str) {
+        let pointer = reference.strip_prefix('#').expect("local schema reference");
+        schema = root.pointer(pointer).expect("schema reference resolves");
+    }
+
+    let mut values = if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array) {
+        values
+            .iter()
+            .map(|value| value.as_str().expect("string enum value").to_owned())
+            .collect()
+    } else {
+        schema
+            .get("oneOf")
+            .and_then(serde_json::Value::as_array)
+            .expect("string enum or oneOf schema")
+            .iter()
+            .map(|variant| {
+                variant["const"]
+                    .as_str()
+                    .expect("string oneOf const")
+                    .to_owned()
+            })
+            .collect()
+    };
+    values.sort();
+    values
+}
+
 fn item(content: &str, status: TodoStatus) -> TodoItem {
     TodoItem::with_status(content, status)
 }
@@ -39,21 +69,17 @@ fn public_todo_schema_matches_the_serialized_item_shape() {
     assert!(properties.get("content").is_some());
     assert!(properties.get("status").is_some());
     assert!(properties.get("reason").is_some());
-    assert_eq!(properties["status"]["$ref"], "#/$defs/TodoStatus");
-    let status_values = schema["$defs"]["TodoStatus"]["oneOf"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|variant| variant["const"].clone())
-        .collect::<Vec<_>>();
+    let status_values = schema_string_values(&schema, &properties["status"]);
+    let mut expected_status_values = vec![
+        "pending".to_owned(),
+        "in_progress".to_owned(),
+        "completed".to_owned(),
+        "cancelled".to_owned(),
+    ];
+    expected_status_values.sort();
     assert_eq!(
         status_values,
-        vec![
-            serde_json::json!("pending"),
-            serde_json::json!("in_progress"),
-            serde_json::json!("completed"),
-            serde_json::json!("cancelled"),
-        ]
+        expected_status_values
     );
     assert_eq!(
         serde_json::to_value(TodoItem::new("ship it")).unwrap(),
