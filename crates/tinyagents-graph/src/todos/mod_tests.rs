@@ -39,7 +39,8 @@ fn public_todo_schema_matches_the_serialized_item_shape() {
     assert!(properties.get("content").is_some());
     assert!(properties.get("status").is_some());
     assert!(properties.get("reason").is_some());
-    let status_values = properties["status"]["oneOf"]
+    assert_eq!(properties["status"]["$ref"], "#/$defs/TodoStatus");
+    let status_values = schema["$defs"]["TodoStatus"]["oneOf"]
         .as_array()
         .unwrap()
         .iter()

@@ -51,7 +51,8 @@ fn public_goal_schema_uses_the_serialized_camel_case_record() {
     ] {
         assert!(properties.get(field).is_some(), "missing {field}: {schema}");
     }
-    let status_values = properties["status"]["oneOf"]
+    assert_eq!(properties["status"]["$ref"], "#/$defs/ThreadGoalStatus");
+    let status_values = schema["$defs"]["ThreadGoalStatus"]["oneOf"]
         .as_array()
         .unwrap()
         .iter()
