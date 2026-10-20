@@ -676,8 +676,8 @@ fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
 
 #[tokio::test]
 async fn native_provider_returns_stable_bound_ledger_and_rebinds_actor_independently() {
-    let backend = Arc::new(MemoryStorage::new());
-    let provider = DriverSessionStores::new(backend, Scope::new("local").unwrap()).unwrap();
+    let provider = DriverSessionStores::new(storage_factory(Arc::new(MemoryStorage::new())))
+        .unwrap();
     let one = provider.run_ledger_for_agent("alice").unwrap().unwrap();
     let same = provider.run_ledger_for_agent("alice").unwrap().unwrap();
     assert!(Arc::ptr_eq(&one, &same));
@@ -700,7 +700,7 @@ async fn native_provider_returns_stable_bound_ledger_and_rebinds_actor_independe
         0
     );
     let actor = provider
-        .bind_actor(Arc::new(MemoryStorage::new()))
+        .bind_actor(storage_factory(Arc::new(MemoryStorage::new())))
         .unwrap()
         .unwrap();
     let rebound = actor.run_ledger_for_agent("alice").unwrap().unwrap();
@@ -719,15 +719,13 @@ async fn native_provider_returns_stable_bound_ledger_and_rebinds_actor_independe
 }
 
 async fn prepared_restricted_actor_contract(backend: Arc<dyn StorageBackend>) {
-    backend.prepare_schema().await.unwrap();
-    let bootstrap = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
+    let factory = storage_factory(Arc::clone(&backend));
+    let bootstrap = factory("prepared-actor").unwrap();
     DriverSessionStores::prepare_schema(bootstrap.documents().as_ref())
         .await
         .unwrap();
-    let restricted = backend.existing_schema().unwrap();
     let actor = DriverSessionStores::new_with_schema_admission(
-        restricted,
-        Scope::new("local").unwrap(),
+        factory,
         SchemaAdmission::ValidateOnly,
     )
     .unwrap()
@@ -748,10 +746,9 @@ async fn prepared_restricted_actor_recovers_and_uses_memory_stores() {
 }
 
 #[tokio::test]
-#[tokio::test]
 async fn the_journal_lives_in_the_harness_journal_stream_family() {
-    let backend = Arc::new(MemoryStorage::new());
-    let provider = DriverSessionStores::new(backend.clone(), Scope::new("local").unwrap()).unwrap();
+    let backend = MemoryStorage::new();
+    let provider = DriverSessionStores::new(storage_factory(Arc::new(backend.clone()))).unwrap();
     let stores = provider.for_agent("agent-1");
     stores
         .journal
@@ -760,7 +757,7 @@ async fn the_journal_lives_in_the_harness_journal_stream_family() {
         .unwrap();
 
     let scoped = backend
-        .for_scope(&provider.scope_for("agent-1").unwrap())
+        .for_scope(&Scope::new("test-bound-agent-1").unwrap())
         .unwrap();
     assert_eq!(
         scoped.streams().streams("").await.unwrap(),
