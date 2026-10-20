@@ -4,7 +4,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::*;
 use crate::completions::{CompletionResult, RecordOutcome};
 use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
-use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn record(task: &str, parent: &str) -> CompletionRecord {
     CompletionRecord::new(
@@ -109,7 +110,7 @@ async fn delivered_and_tombstoned_stay_deduped_after_a_reopen() {
 
 #[tokio::test]
 async fn the_store_keeps_the_latest_record_per_task() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
     let mut first = record("t1", "p");
     store.put(&first).unwrap();
@@ -132,7 +133,7 @@ async fn migration_listing_fails_on_corrupt_records_while_legacy_listing_skips_t
     use serde_json::json;
     use tinyagents_storage_kit::Precondition;
 
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
     store.put(&record("corrupt", "p")).unwrap();
     store
@@ -191,7 +192,7 @@ fn clocked_store() -> (DriverCompletionStore, Arc<std::sync::atomic::AtomicU64>)
         let now = Arc::clone(&now);
         Arc::new(move || now.load(std::sync::atomic::Ordering::SeqCst))
     };
-    let storage = MemoryStorage::with_clock(clock);
+    let storage = MemoryBackend::with_clock(clock);
     let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
     (store, now)
 }
@@ -258,7 +259,7 @@ async fn a_cancelled_parent_stays_cancelled_after_a_reopen() {
 #[tokio::test]
 async fn an_unreadable_record_is_skipped_without_hiding_the_rest() {
     use tinyagents_storage_kit::Precondition;
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let docs = docs_of(&storage, "local");
     let store = DriverCompletionStore::new(docs.clone()).unwrap();
     store.put(&record("good", "p")).unwrap();
@@ -277,7 +278,7 @@ async fn an_unreadable_record_is_skipped_without_hiding_the_rest() {
 
 #[tokio::test]
 async fn scopes_keep_completions_apart() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let alice = DriverCompletionStore::new(docs_of(&storage, "alice")).unwrap();
     let bob = DriverCompletionStore::new(docs_of(&storage, "bob")).unwrap();
     alice.put(&record("t", "p")).unwrap();
@@ -287,14 +288,14 @@ async fn scopes_keep_completions_apart() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_sync_trait_works_from_a_multi_thread_runtime() {
-    let store = DriverCompletionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let store = DriverCompletionStore::new(docs_of(&MemoryBackend::new(), "local")).unwrap();
     store.put(&record("mt", "p")).unwrap();
     assert!(store.get("mt").is_some());
 }
 
 #[tokio::test]
 async fn completions_are_v2_documents_with_key_ids_and_metadata_update_times() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let docs = docs_of(&storage, "local");
     let store = DriverCompletionStore::new(docs.clone()).unwrap();
     store.put(&record("c/1", "p")).unwrap();

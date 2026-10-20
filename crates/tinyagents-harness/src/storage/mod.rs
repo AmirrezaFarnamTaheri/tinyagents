@@ -7,7 +7,8 @@ mod kv_import;
 mod steps;
 
 use tinyagents_storage_kit::{
-    CollectionSpec, IndexSpec, Owner, Schema, ScopeClass, SealPolicy, SealWhen,
+    CollectionSpec, DocumentStoreExt, IndexSpec, MigrateOptions, Owner, Registry, Schema,
+    ScopeClass, ScopedStorage, SealPolicy, SealWhen,
 };
 
 pub(crate) use kv::{CACHE_NS_PREFIX, KV, KvEntry, NAMESPACED_NS_PREFIX, kv_id};
@@ -98,6 +99,26 @@ pub fn storage_schema() -> Schema {
 #[must_use]
 pub fn collections() -> Vec<CollectionSpec> {
     storage_schema().collections()
+}
+
+/// Open harness storage for one scope, declaring its collections and applying
+/// the harness-owned migrations before returning the scope-bound ports.
+pub async fn open_storage(
+    storage: ScopedStorage,
+) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
+    let registry = Registry::compose([storage_schema()])?;
+    for spec in collections() {
+        storage.documents().ensure_collection(&spec).await?;
+    }
+    registry.migrate(&storage, &MigrateOptions::new()).await?;
+    for (collection, kind) in [
+        ("harness_store", LegacyKv::Flat),
+        ("harness_namespaced_store", LegacyKv::Namespaced),
+        ("harness_response_cache", LegacyKv::ResponseCache),
+    ] {
+        import_legacy_kv(&storage, "harness", collection, kind).await?;
+    }
+    Ok(storage)
 }
 
 const BLOB_STEP_IDS: [&str; 5] = [

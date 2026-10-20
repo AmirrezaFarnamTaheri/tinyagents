@@ -1,9 +1,9 @@
 use super::*;
 use tinyagents_session::run_ledger::{DriverRunLedger, LedgerError};
 use tinyagents_storage_kit::{
-    CollectionSpec, ErrorKind, Fence, MemoryStorage, Precondition, Scope, ScopedStorage,
-    StorageBackend,
+    CollectionSpec, ErrorKind, Fence, Precondition, Scope, ScopedStorage, StorageBackend,
 };
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn native_kind(error: &WorkflowPersistenceError) -> ErrorKind {
     match innermost(error) {
@@ -13,7 +13,7 @@ fn native_kind(error: &WorkflowPersistenceError) -> ErrorKind {
 }
 
 async fn fenced_ledger() -> (DriverRunLedger, DriverRunLedger, ScopedStorage) {
-    let backend = MemoryStorage::new();
+    let backend = MemoryBackend::new();
     let owner_scope = Scope::new("owners").unwrap();
     let owner = backend.for_scope(&owner_scope).unwrap();
     owner
@@ -133,7 +133,7 @@ async fn heartbeat_awaits_native_fence_and_cancels_committed_child_on_takeover()
 
 #[tokio::test(flavor = "current_thread")]
 async fn independent_scoped_drivers_keep_complete_workflow_runs_separate() {
-    let backend = MemoryStorage::new();
+    let backend = MemoryBackend::new();
     let a = Arc::new(DriverRunLedger::new(
         backend
             .for_scope(&Scope::new("profile-a").unwrap())
@@ -216,7 +216,7 @@ impl AsyncWorkflowExecutor for HeldChild {
 
 #[tokio::test(flavor = "current_thread")]
 async fn independent_authoritative_engines_acquire_only_one_live_owner() {
-    let backend = MemoryStorage::new();
+    let backend = MemoryBackend::new();
     let scope = Scope::new("profile-a").unwrap();
     let first = Arc::new(DriverRunLedger::new(backend.for_scope(&scope).unwrap()));
     let second = Arc::new(DriverRunLedger::new(backend.for_scope(&scope).unwrap()));
@@ -395,7 +395,7 @@ impl AsyncWorkflowExecutor for WorkflowTakeoverChild {
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn workflow_owner_takeover_returns_typed_loss_without_mutating_replacement() {
-    let backend = MemoryStorage::new();
+    let backend = MemoryBackend::new();
     let scope = Scope::new("profile-a").unwrap();
     let ledger = Arc::new(DriverRunLedger::new(backend.for_scope(&scope).unwrap()));
     let executor = Arc::new(WorkflowTakeoverChild {

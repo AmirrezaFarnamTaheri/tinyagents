@@ -9,9 +9,7 @@
 //! The store takes a blob handle, never a filesystem path:
 //!
 //! * [`ToolResultArtifactStore::new`] writes to a host-supplied scoped blob
-//!   store (SQLite, MongoDB, files, ...).
-//! * [`ToolResultArtifactStore::in_memory`] is the default for library users
-//!   with no storage backend; nothing outlives the process.
+//!   store. The library has no implicit storage fallback.
 //!
 //! Nothing lands in the agent's working tree. A host that lets the model open
 //! the pointer must serve the key from the blob store in its read tool (see

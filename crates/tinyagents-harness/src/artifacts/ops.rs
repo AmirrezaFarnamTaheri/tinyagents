@@ -4,7 +4,7 @@
 //! [`ArtifactOffload`] is the per-run writer: it resolves a target key via
 //! [`super::paths::resolve_artifact_key`], applies the host redactor from
 //! [`super::policy`], and stores the redacted body on a
-//! [`BlobStore`] port (memory by default). [`should_offload`]
+//! [`BlobStore`] port. [`should_offload`]
 //! and [`effective_offload_threshold`] decide *whether* a result should be
 //! written; [`offload_oversized_result`] ties threshold decision, write, and
 //! pointer rendering into the single entry point most callers use.

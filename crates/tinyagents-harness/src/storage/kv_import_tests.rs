@@ -1,11 +1,12 @@
 use super::*;
 use serde_json::json;
-use tinyagents_storage_kit::{
-    Kv, MemoryStorage, Migrations, Precondition, Scope, ScopedStorage, StorageBackend,
-};
+use tinyagents_storage_kit::{Kv, Migrations, Precondition, Scope, ScopedStorage, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn scoped() -> ScopedStorage {
-    MemoryStorage::new().for_scope(&Scope::local()).unwrap()
+    MemoryBackend::new()
+        .for_scope(&Scope::new("local").unwrap())
+        .unwrap()
 }
 
 async fn seed(storage: &ScopedStorage, collection: &str, id: &str, body: serde_json::Value) {

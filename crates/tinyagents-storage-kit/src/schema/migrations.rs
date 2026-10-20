@@ -54,16 +54,16 @@ pub struct Progress {
 /// collections.
 ///
 /// ```
-/// use tinystoragedrivers_core::schema::Migrations;
-/// use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+/// use tinyagents_storage_kit::{Migrations, Scope, StorageBackend};
+/// use tinystoragedrivers_testkit::memory_backend;
 ///
 /// # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
-/// let storage = MemoryStorage::new().for_scope(&Scope::local())?;
+/// let storage = memory_backend().for_scope(&Scope::new("local")?)?;
 /// let migrations = Migrations::new(&storage);
 /// assert!(!migrations.done("threads", "import_v1").await?);
 /// migrations.mark_done("threads", "import_v1").await?;
 /// assert!(migrations.done("threads", "import_v1").await?);
-/// # Ok::<_, tinystoragedrivers_core::StorageError>(())
+/// # Ok::<_, tinyagents_storage_kit::error::StorageError>(())
 /// # }).unwrap();
 /// ```
 #[derive(Debug, Clone)]

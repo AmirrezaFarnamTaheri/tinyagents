@@ -2,10 +2,10 @@ use super::*;
 use serde_json::Value;
 use tinyagents_session::run_ledger::DriverRunLedger;
 use tinyagents_storage_kit::{
-    Capabilities, Capability, CollectionSpec, DocumentStore, ErrorKind, Filter, MemoryStorage,
-    Page, Precondition, Query, Scope, ScopedStorage, Sort, StorageBackend, StorageError, Version,
-    Versioned,
+    Capabilities, Capability, CollectionSpec, DocumentStore, ErrorKind, Filter, Page, Precondition,
+    Query, Scope, ScopedStorage, Sort, StorageBackend, StorageError, Version, Versioned,
 };
+use tinystoragedrivers_testkit::MemoryBackend;
 
 #[derive(Debug)]
 struct RefusedDocuments(ErrorKind);
@@ -86,7 +86,7 @@ async fn authoritative_refusals_preserve_native_kind_and_never_create_sqlite() {
         ErrorKind::Fenced,
         ErrorKind::Unsupported(Capability::Transactions),
     ] {
-        let memory = MemoryStorage::new();
+        let memory = MemoryBackend::new();
         let scope = Scope::new("explicit-profile").unwrap();
         let handles = memory.for_scope(&scope).unwrap();
         let admitted = ScopedStorage::new(

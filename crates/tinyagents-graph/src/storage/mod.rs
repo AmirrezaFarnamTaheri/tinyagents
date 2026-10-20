@@ -6,7 +6,10 @@ mod import;
 mod steps;
 mod types;
 
-use tinyagents_storage_kit::{CollectionSpec, IndexSpec, Owner, Schema, ScopeClass, primitives};
+use tinyagents_storage_kit::{
+    CollectionSpec, DocumentStoreExt, IndexSpec, MigrateOptions, Owner, Registry, Schema,
+    ScopeClass, ScopedStorage, primitives,
+};
 
 pub use import::{import_legacy_leases, import_legacy_task_cache};
 pub(crate) use types::{
@@ -115,6 +118,21 @@ pub fn storage_schema() -> Schema {
 #[must_use]
 pub fn collections() -> Vec<CollectionSpec> {
     storage_schema().collections()
+}
+
+/// Open graph storage for one scope, applying graph-owned migrations and
+/// importing the graph's legacy cache and lease records before use.
+pub async fn open_storage(
+    storage: ScopedStorage,
+) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
+    let registry = Registry::compose([storage_schema()])?;
+    for spec in collections() {
+        storage.documents().ensure_collection(&spec).await?;
+    }
+    registry.migrate(&storage, &MigrateOptions::new()).await?;
+    import_legacy_leases(&storage).await?;
+    import_legacy_task_cache(&storage).await?;
+    Ok(storage)
 }
 
 #[cfg(test)]

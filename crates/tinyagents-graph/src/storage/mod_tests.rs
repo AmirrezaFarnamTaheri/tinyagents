@@ -6,12 +6,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tinyagents_harness::ids::{GraphId, NodeId, now_ms};
 use tinyagents_storage_kit::{
-    DocumentStoreExt, MemoryStorage, MigrateOptions, Precondition, Query, Registry, Scope,
-    ScopeClass, ScopedStorage, StorageBackend,
+    DocumentStoreExt, MigrateOptions, Precondition, Query, Registry, Scope, ScopeClass,
+    ScopedStorage, StorageBackend,
 };
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn scoped() -> ScopedStorage {
-    MemoryStorage::new().for_scope(&Scope::local()).unwrap()
+    MemoryBackend::new()
+        .for_scope(&Scope::new("local").unwrap())
+        .unwrap()
 }
 
 async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value) {

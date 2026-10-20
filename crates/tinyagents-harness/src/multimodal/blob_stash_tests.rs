@@ -1,5 +1,6 @@
 use super::*;
-use tinyagents_storage_kit::{MemoryStorage, Scope, ScopedStorage, StorageBackend};
+use tinyagents_storage_kit::{Scope, ScopedStorage, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 const TINY_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
@@ -17,7 +18,7 @@ fn stash_on(storage: &ScopedStorage, max: u64, ttl: Duration) -> BlobAttachmentS
 }
 
 fn stash(max: u64, ttl: Duration) -> BlobAttachmentStash {
-    stash_on(&scoped(&MemoryStorage::new(), "local"), max, ttl)
+    stash_on(&scoped(&MemoryBackend::new(), "local"), max, ttl)
 }
 
 fn image_uri(fill: u8, len: usize) -> String {
@@ -105,7 +106,7 @@ async fn sweep_removes_only_attachments_older_than_the_ttl() {
 
 #[tokio::test]
 async fn tenants_do_not_see_each_others_attachments() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let alice = stash_on(
         &scoped(&storage, "alice"),
         u64::MAX,
@@ -175,7 +176,7 @@ async fn concurrent_writes_under_a_tight_cap_leave_the_stash_within_its_cap() {
 /// `harness.attachment_stash` row per id with its last use as `touched_ms`.
 #[tokio::test]
 async fn bytes_and_index_use_the_v2_names() {
-    let storage = scoped(&MemoryStorage::new(), "local");
+    let storage = scoped(&MemoryBackend::new(), "local");
     let s = stash_on(&storage, u64::MAX, Duration::from_secs(3600));
     s.write("abc123", TINY_PNG).await.unwrap();
 

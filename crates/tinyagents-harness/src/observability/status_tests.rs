@@ -11,7 +11,8 @@ use crate::observability::{
     StoreEventJournal,
 };
 use crate::store::{AppendStore, DriverAppendStore};
-use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn scoped(storage: &dyn StorageBackend, scope: &str) -> tinyagents_storage_kit::ScopedStorage {
     storage.for_scope(&Scope::new(scope).unwrap()).unwrap()
@@ -19,7 +20,7 @@ fn scoped(storage: &dyn StorageBackend, scope: &str) -> tinyagents_storage_kit::
 
 fn status_store() -> DriverStatusStore {
     DriverStatusStore::new(Arc::clone(
-        scoped(&MemoryStorage::new(), "local").documents(),
+        scoped(&MemoryBackend::new(), "local").documents(),
     ))
 }
 
@@ -104,7 +105,7 @@ async fn status_store_round_trips_and_answers_queries() {
 #[tokio::test]
 async fn undecodable_record_is_skipped_and_does_not_hide_valid_runs() {
     use tinyagents_storage_kit::Precondition;
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let docs = Arc::clone(scoped(&storage, "local").documents());
     let store = DriverStatusStore::new(docs.clone());
     let mut status = HarnessRunStatus::new(mint_run_id(), ComponentId::new("m".to_string()));
@@ -124,7 +125,7 @@ async fn undecodable_record_is_skipped_and_does_not_hide_valid_runs() {
 
 #[tokio::test]
 async fn runs_of_different_tenants_never_meet() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let alice = DriverStatusStore::new(Arc::clone(scoped(&storage, "alice").documents()));
     let bob = DriverStatusStore::new(Arc::clone(scoped(&storage, "bob").documents()));
     let mut status = HarnessRunStatus::new(RunId::new("run.shared"), ComponentId::new("m"));
@@ -163,7 +164,7 @@ async fn read_all(storage: &dyn StorageBackend, run_id: &str, from: u64) -> Vec<
 /// Journal persists, masks secrets and replays with stable ids.
 #[tokio::test]
 async fn journal_persists_masks_and_replays_run() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let run_id = mint_run_id();
     let journal: Arc<dyn HarnessEventJournal> =
         Arc::new(StoreEventJournal::new(journal_store(&storage)));
@@ -210,7 +211,7 @@ async fn journal_persists_masks_and_replays_run() {
 #[tokio::test]
 async fn journal_sink_handles_multibyte_utf8_payloads_at_every_padding() {
     for pad in 0..20usize {
-        let storage = MemoryStorage::new();
+        let storage = MemoryBackend::new();
         let run_id = mint_run_id();
         let journal: Arc<dyn HarnessEventJournal> =
             Arc::new(StoreEventJournal::new(journal_store(&storage)));
@@ -282,7 +283,7 @@ async fn a_journal_over_a_shared_append_store_handle_is_a_journal() {
 /// indexed projections beside it.
 #[tokio::test]
 async fn a_run_is_a_bare_snake_case_document_keyed_by_its_run_id() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let docs = Arc::clone(scoped(&storage, "local").documents());
     let store = DriverStatusStore::new(Arc::clone(&docs));
     let mut status = HarnessRunStatus::new(RunId::new("run.fixture"), ComponentId::new("m"))

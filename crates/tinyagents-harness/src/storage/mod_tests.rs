@@ -1,12 +1,15 @@
 use super::*;
 use serde_json::{Value, json};
 use tinyagents_storage_kit::{
-    Filter, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopedStorage,
-    StorageBackend, WriteOptions,
+    Filter, MigrateOptions, Precondition, Registry, Scope, ScopedStorage, StorageBackend,
+    WriteOptions,
 };
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn scoped() -> ScopedStorage {
-    MemoryStorage::new().for_scope(&Scope::local()).unwrap()
+    MemoryBackend::new()
+        .for_scope(&Scope::new("local").unwrap())
+        .unwrap()
 }
 
 async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value) {

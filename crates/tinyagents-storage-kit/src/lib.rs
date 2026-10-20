@@ -31,6 +31,9 @@ impl ScopedStorage {
     pub fn streams(&self) -> &std::sync::Arc<dyn StreamStore> {
         self.storage.streams()
     }
+    pub fn kv(&self) -> &std::sync::Arc<dyn KvStore> {
+        self.storage.kv()
+    }
     pub fn blobs(&self) -> &std::sync::Arc<dyn BlobStore> {
         self.storage.blobs()
     }
@@ -90,7 +93,9 @@ impl Key {
 pub use migrations::{MIGRATIONS_COLLECTION, Migrations};
 pub use primitives::{Leases, Repo};
 pub use schema::{
-    Expiry, Item, Owner, Schema, ScopeClass, SealPolicy, SealWhen, SourceRecord, Step, TargetRecord,
+    BlobOutput, BlobStepFn, ComposedRegistry, Expiry, Item, MigrateOptions, MigrationReport, Owner,
+    Registry, Schema, SchemaMetadata, ScopeClass, SealPolicy, SealWhen, SourceRecord, Step,
+    StepExecution, StepFn, StepMetadata, StepReport, StreamStepFn, TargetRecord,
 };
 pub use tinystoragedrivers_api::DocumentStoreExt;
 
@@ -98,8 +103,8 @@ pub use tinystoragedrivers_api::DocumentStoreExt;
 pub mod document {
     pub use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
     pub use tinystoragedrivers_types::{
-        CollectionSpec, Cursor, IndexSpec, Page, Precondition, Query, Version, Versioned,
-        WriteOptions, validate_collection, validate_doc, validate_id,
+        CollectionSpec, Cursor, IndexSpec, MAX_COLLECTION_LEN, Page, Precondition, Query, Version,
+        Versioned, WriteOptions, validate_collection, validate_doc, validate_id,
     };
 }
 pub mod error {
@@ -109,18 +114,39 @@ pub mod filter {
     pub use tinystoragedrivers_types::{Filter, ID_FIELD, SCHEMA_FIELD, Sort};
 }
 pub mod key {
-    pub use tinystoragedrivers_types::Key;
+    pub use crate::Key;
 }
 pub mod scope {
     pub use tinystoragedrivers_types::Scope;
 }
 pub mod stream {
     pub use tinystoragedrivers_api::StreamStore;
-    pub use tinystoragedrivers_types::{SealOutcome, StreamEntry, StreamInfo};
+    pub use tinystoragedrivers_types::{SEALED_BLOB_PREFIX, SealOutcome, StreamEntry, StreamInfo};
+
+    /// Validate a persisted stream name.
+    pub fn validate_stream(name: &str) -> crate::error::Result<()> {
+        tinystoragedrivers_types::validate_id(name)
+    }
 }
 pub mod blob {
     pub use tinystoragedrivers_api::{BlobReader, BlobStore, BlobStream};
     pub use tinystoragedrivers_types::{Blob, BlobMeta, TreeEntry, TreeFile};
+    pub const MAX_BLOB_KEY_LEN: usize = 1024;
+
+    /// Validate a user-owned blob key.
+    pub fn validate_user_blob_key(key: &str) -> crate::error::Result<()> {
+        if key.is_empty() || key.len() > MAX_BLOB_KEY_LEN || key.contains('\0') {
+            return Err(crate::error::StorageError::invalid_input(
+                "invalid blob key",
+            ));
+        }
+        if key.starts_with(tinystoragedrivers_types::SEALED_BLOB_PREFIX) {
+            return Err(crate::error::StorageError::invalid_input(
+                "reserved blob key",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Build the same reversible composite document id used by older TSD consumers.

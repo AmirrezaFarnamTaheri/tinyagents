@@ -1,12 +1,15 @@
 use super::*;
 use serde_json::{Value, json};
 use tinyagents_storage_kit::{
-    DocumentStoreExt, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopeClass,
-    ScopedStorage, StorageBackend,
+    DocumentStoreExt, MigrateOptions, Precondition, Registry, Scope, ScopeClass, ScopedStorage,
+    StorageBackend,
 };
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn scoped() -> ScopedStorage {
-    MemoryStorage::new().for_scope(&Scope::local()).unwrap()
+    MemoryBackend::new()
+        .for_scope(&Scope::new("local").unwrap())
+        .unwrap()
 }
 
 async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value) {
@@ -111,6 +114,31 @@ async fn v1_task_records_become_bare_snake_case_documents_under_key_ids() {
         .await
         .unwrap();
     assert_eq!(kept.len(), 1, "an undecodable record is dropped");
+}
+
+#[tokio::test]
+async fn opening_tasks_storage_runs_its_owner_migrations_before_returning() {
+    let backend = MemoryBackend::new();
+    let scope = Scope::new("local").unwrap();
+    let legacy = backend.for_scope(&scope).unwrap();
+    put_v1(
+        &legacy,
+        "orchestration_tasks",
+        "old-task",
+        json!({"taskId": "old-task", "record": v1_record("old-task", "completed")}),
+    )
+    .await;
+
+    let scoped = backend.for_scope(&scope).unwrap();
+    let opened = super::open_storage(scoped).await.unwrap();
+    let migrated = opened
+        .documents()
+        .get("tasks.records", "old-task")
+        .await
+        .unwrap()
+        .expect("the owner migration ran as part of open");
+    assert_eq!(migrated.doc["task_id"], "old-task");
+    assert_eq!(migrated.doc["status"], "completed");
 }
 
 #[tokio::test]

@@ -18,7 +18,7 @@ const RESERVED_OWNER: &str = "tsd";
 /// [`Owner::new`].
 ///
 /// ```
-/// use tinystoragedrivers_schema::Owner;
+/// use tinyagents_storage_kit::Owner;
 ///
 /// assert_eq!(Owner::new("cron").unwrap().as_str(), "cron");
 /// assert!(Owner::new("tsd").is_err());

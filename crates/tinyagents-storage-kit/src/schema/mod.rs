@@ -22,10 +22,9 @@
 //!
 //! ```
 //! use serde_json::json;
-//! use tinystoragedrivers_core::schema::{
-//!     MigrateOptions, Owner, Registry, Schema, ScopeClass, Step, TargetRecord,
-//! };
-//! use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+//! use tinyagents_storage_kit::schema::{MigrateOptions, Owner, Registry, Schema, ScopeClass, Step, TargetRecord};
+//! use tinyagents_storage_kit::{Scope, StorageBackend};
+//! use tinystoragedrivers_testkit::memory_backend;
 //!
 //! # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
 //! let schema = Schema::new(Owner::new("shop")?)
@@ -37,13 +36,13 @@
 //!             .collect())
 //!     }));
 //! let registry = Registry::compose([schema])?;
-//! let backend = MemoryStorage::new();
+//! let backend = memory_backend();
 //! registry.prepare(&backend).await?;
-//! let storage = backend.for_scope(&Scope::local())?;
+//! let storage = backend.for_scope(&Scope::new("local")?)?;
 //! assert!(registry.check_ready("shop.orders").is_err());
 //! registry.migrate(&storage, &MigrateOptions::new()).await?;
 //! registry.check_ready("shop.orders")?;
-//! # Ok::<_, tinystoragedrivers_core::StorageError>(())
+//! # Ok::<_, tinyagents_storage_kit::error::StorageError>(())
 //! # }).unwrap();
 //! ```
 //!
@@ -58,11 +57,29 @@
 //! the host, which records completion with [`Migrations::mark_done`].
 //! A stream's [`SealPolicy`](crate::SealPolicy) is applied by [`Registry::maintain`].
 
+mod compose;
 mod declaration;
+mod executor;
+mod metadata;
+mod migrations;
+mod prepared;
+mod runner;
+mod runner_blobs;
+mod runner_streams;
 mod seal;
+mod transform;
 mod types;
 
+pub use compose::{ComposedRegistry, Registry};
+pub use executor::TransformExecutor;
+pub use metadata::{SchemaMetadata, StepExecution, StepMetadata};
+pub use runner::{MigrateOptions, MigrationReport, StepReport};
 pub use seal::{SealPolicy, SealWhen};
+pub use transform::{
+    BlobTransformOutput, BlobTransformRequest, DocumentsTransformRequest, SchemaDeclaration,
+    StepDeclaration, StreamTransformOutput, StreamTransformRequest, TransformDescriptor,
+    TransformError, TransformErrorKind, TransformKind, TransformResult,
+};
 pub use types::{
     BlobOutput, BlobStepFn, Expiry, Item, Owner, Schema, ScopeClass, SourceRecord, Step, StepBody,
     StepFn, StreamStepFn, TargetRecord,

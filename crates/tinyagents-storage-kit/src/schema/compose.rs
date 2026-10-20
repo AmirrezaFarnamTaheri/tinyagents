@@ -17,8 +17,8 @@ use super::Step;
 use super::migrations::migrations_spec;
 use super::prepared::{PreparedBody as StepBody, PreparedSchema, PreparedStep};
 use super::types::{Item, Owner, Schema};
-use super::{MigrateOptions, MigrationReport, PolicyReport, SchemaDeclaration, TransformExecutor};
-use crate::backend::{MaintenanceBudget, ScopedStorage};
+use super::{MigrateOptions, MigrationReport, SchemaDeclaration, TransformExecutor};
+use crate::backend::ScopedStorage;
 
 /// The composed declarations of every owner in a process.
 ///
@@ -28,7 +28,7 @@ use crate::backend::{MaintenanceBudget, ScopedStorage};
 /// [`Registry::migrate`](Registry::migrate) keeps current.
 ///
 /// ```
-/// use tinystoragedrivers_core::schema::{Owner, Registry, Schema, ScopeClass};
+/// use tinyagents_storage_kit::schema::{Owner, Registry, Schema, ScopeClass};
 ///
 /// let cron = Schema::new(Owner::new("cron").unwrap())
 ///     .collection("cron.jobs", 1, ScopeClass::Tenant);
@@ -299,67 +299,6 @@ macro_rules! registry_api {
                     .migrate(storage, options, Some(executor))
                     .await
             }
-            /// Apply every declared stream policy to the streams in `storage`'s scope.
-            ///
-            /// For each `Item::Stream` family (the base stream `<base>` and every
-            /// `<base>/…`), at `now_ms` (epoch milliseconds):
-            ///
-            /// - a stream that is not sealed, under [`crate::SealWhen::Idle`]`(ms)`, whose
-            ///   last append is more than `ms` before `now_ms`, is sealed;
-            /// - a sealed stream under a policy with `retain_ms`, sealed more than
-            ///   `retain_ms` before `now_ms`, is deleted (`delete_sealed_stream`,
-            ///   which removes the sealed blob too, and only if the stream is still
-            ///   the one inspected: sealed at the same instant).
-            ///
-            /// [`crate::SealWhen::OnFinish`] streams are sealed by their owners and
-            /// [`crate::SealWhen::Never`] ones never, but retention applies to any sealed
-            /// stream whose policy states it. A stream whose driver recorded no time
-            /// (written before times existed) is left alone.
-            ///
-            /// `budget.max_streams` bounds the streams sealed or deleted in this
-            /// call; when it runs out the report says `exhausted` and the host calls
-            /// again later. A race (another writer sealed or deleted the stream
-            /// first, or deleted and recreated it so it is no longer the one
-            /// inspected) is counted in `conflicts`, not returned. An idle stream
-            /// appended to after inspection is still sealed: idleness was the
-            /// trigger, and `seal` keeps every entry.
-            ///
-            /// The policy applies to every scope class: the host chooses which scopes
-            /// to hand in. Run the backend's own
-            /// [`maintain`](crate::StorageBackend::maintain) afterwards to return the
-            /// freed space.
-            ///
-            /// # Errors
-            ///
-            /// `Unsupported(StreamSeal)` when the driver records no stream times and
-            /// some policy has work to do, or a backend error.
-            pub async fn maintain(
-                &self,
-                storage: &ScopedStorage,
-                now_ms: i64,
-                budget: MaintenanceBudget,
-            ) -> Result<PolicyReport> {
-                self.prepared.maintain(storage, now_ms, budget).await
-            }
-            /// [`maintain`](Self::maintain) over every scope `backend` holds records
-            /// for, sharing one budget across them.
-            ///
-            /// Needs [`Capability::ScopeEnumeration`](crate::Capability::ScopeEnumeration);
-            /// without it, enumerate the scopes yourself and call
-            /// [`maintain`](Self::maintain) for each.
-            ///
-            /// # Errors
-            ///
-            /// `Unsupported(ScopeEnumeration)` when the backend cannot list scopes,
-            /// otherwise as [`maintain`](Self::maintain).
-            pub async fn maintain_all(
-                &self,
-                backend: &dyn StorageBackend,
-                now_ms: i64,
-                budget: MaintenanceBudget,
-            ) -> Result<PolicyReport> {
-                self.prepared.maintain_all(backend, now_ms, budget).await
-            }
         }
     };
 }
@@ -435,7 +374,7 @@ impl PreparedRegistry {
     /// [`ErrorKind::Unsupported`](crate::ErrorKind::Unsupported) on an
     /// existing-schema backend.
     pub(super) async fn prepare(&self, backend: &dyn StorageBackend) -> Result<()> {
-        let storage = backend.for_scope(&Scope::local())?;
+        let storage = backend.for_scope(&Scope::new("local")?)?;
         storage
             .documents()
             .ensure_collection(&migrations_spec())

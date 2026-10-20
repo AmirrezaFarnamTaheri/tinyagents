@@ -5,7 +5,10 @@
 mod dto;
 mod steps;
 
-use tinyagents_storage_kit::{CollectionSpec, IndexSpec, Owner, Schema, ScopeClass};
+use tinyagents_storage_kit::{
+    CollectionSpec, DocumentStoreExt, IndexSpec, MigrateOptions, Owner, Registry, Schema,
+    ScopeClass, ScopedStorage,
+};
 
 pub(crate) use dto::{CompletionDoc, TaskDoc, history_id_key, task_id_key, to_ms};
 
@@ -76,6 +79,19 @@ pub fn storage_schema() -> Schema {
 #[must_use]
 pub fn collections() -> Vec<CollectionSpec> {
     storage_schema().collections()
+}
+
+/// Open tasks storage for one scope, declaring collections and applying the
+/// task-owned migrations before returning the scope-bound ports.
+pub async fn open_storage(
+    storage: ScopedStorage,
+) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
+    let registry = Registry::compose([storage_schema()])?;
+    for spec in collections() {
+        storage.documents().ensure_collection(&spec).await?;
+    }
+    registry.migrate(&storage, &MigrateOptions::new()).await?;
+    Ok(storage)
 }
 
 #[cfg(test)]

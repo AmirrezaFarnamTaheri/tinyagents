@@ -85,8 +85,9 @@ call `orchestration_tools` to build the full set, or call
   host-defined scope key to a lazily-opened `Arc<dyn TaskStore>`, so a
   multi-tenant host keeps exactly one store per scope. `get_or_open` /
   `get` / `values` / `len` / `is_empty` / `clear`.
-  `open_jsonl_task_store_or_memory(path)` is the standard opener: it degrades
-  to an `InMemoryTaskStore` if the durable log can't be created or read.
+  `open_driver_task_store(storage)` applies the tasks-owned migrations to a
+  host-bound storage handle before returning the durable store. In-memory
+  storage remains an explicit choice for tests or hosts that request it.
 
 ### Process-local runtime (`runtime.rs`)
 
@@ -232,7 +233,7 @@ README.
 | `types.rs` | `NoEquivalentStatus`, task kind/status/spec/result/record/filter types, `OrchestrationToolKind`, `OrchestrationControlOutcome`, and the `DetachedTaskRegistry` snapshot/error types. |
 | `tool.rs` | `OrchestrationTool`, `SteeringRegistry`, tool constructors and schemas. |
 | `store.rs` | `TaskStore` trait, `InMemoryTaskStore`, and the shared transition rules. |
-| `store_registry.rs` | `TaskStoreRegistry<K>`, `open_driver_task_store_or_memory`. |
+| `store_registry.rs` | `TaskStoreRegistry<K>`, `open_driver_task_store`. |
 | `runtime.rs` | `DetachedTaskRegistry<Metadata, Status>` — process-local executor handles keyed by task id. |
 | `reconcile.rs` | `reconcile_orphaned_tasks` and its report types, for settling orphans left by a dead executor. |
 | `recovery.rs` | `recovery_children` / `build_restart_recovery_note`: the parent-facing roster of interrupted children after a reconcile sweep (tests in `recovery_tests.rs`). |

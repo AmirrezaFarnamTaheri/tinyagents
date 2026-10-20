@@ -13,5 +13,9 @@ use tinystoragedrivers_sqlite::SqliteStorage;
 /// dropped and reopened models a process restart.
 pub(crate) fn ledger_in(dir: &Path) -> DriverRunLedger {
     let storage = SqliteStorage::open(dir.join("ledger.sqlite")).expect("open ledger database");
-    DriverRunLedger::new(storage.for_scope(&Scope::local()).expect("local scope"))
+    DriverRunLedger::new(
+        storage
+            .for_scope(&Scope::new("local").unwrap())
+            .expect("local scope"),
+    )
 }

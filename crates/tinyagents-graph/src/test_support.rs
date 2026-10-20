@@ -17,7 +17,7 @@ use crate::checkpoint::DriverCheckpointer;
 pub(crate) fn sqlite_checkpointer<State>(path: &Path) -> DriverCheckpointer<State> {
     let storage = SqliteStorage::open(path).expect("open sqlite checkpoint database");
     let scoped = storage
-        .for_scope(&Scope::local())
+        .for_scope(&Scope::new("local").unwrap())
         .expect("local scope on a single-operator database");
     DriverCheckpointer::new(Arc::clone(scoped.documents()))
 }
