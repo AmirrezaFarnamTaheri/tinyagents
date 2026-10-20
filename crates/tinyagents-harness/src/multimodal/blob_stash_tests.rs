@@ -120,10 +120,8 @@ async fn tenants_do_not_see_each_others_attachments() {
 
 #[tokio::test]
 async fn attachments_survive_a_reopened_driver_handle() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("stash.sqlite");
+    let storage = MemoryBackend::new();
     {
-        let storage = crate::test_support::shared_memory_backend(&path);
         stash_on(
             &scoped(&storage, "local"),
             u64::MAX,
@@ -133,7 +131,6 @@ async fn attachments_survive_a_reopened_driver_handle() {
         .await
         .unwrap();
     }
-    let storage = crate::test_support::shared_memory_backend(&path);
     let reopened = stash_on(
         &scoped(&storage, "local"),
         u64::MAX,
