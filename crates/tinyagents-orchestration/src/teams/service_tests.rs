@@ -7,8 +7,12 @@ use tinystoragedrivers_testkit::MemoryBackend;
 
 fn service(_dir: &TempDir) -> TeamService<SessionTeamLedger> {
     let ledger_backend = MemoryBackend::new();
+    service_with_backend(&ledger_backend)
+}
+
+fn service_with_backend(ledger_backend: &MemoryBackend) -> TeamService<SessionTeamLedger> {
     TeamService::new(
-        SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(&ledger_backend))).unwrap(),
+        SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(ledger_backend))).unwrap(),
     )
 }
 
@@ -121,8 +125,9 @@ async fn a_member_cannot_start_a_second_task_while_its_first_task_is_running() {
     let dir = TempDir::new().unwrap();
     // Independent handles prove the admission fence is durable and shared,
     // rather than a mutex local to one TeamService instance.
-    let first_service = service(&dir);
-    let second_service = service(&dir);
+    let ledger_backend = MemoryBackend::new();
+    let first_service = service_with_backend(&ledger_backend);
+    let second_service = service_with_backend(&ledger_backend);
     let team = first_service
         .create_team(
             "lead",
