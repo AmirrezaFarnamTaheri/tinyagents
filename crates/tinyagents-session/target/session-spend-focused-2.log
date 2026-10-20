@@ -1,0 +1,10 @@
+[ci-cancel-aware] exec: cargo test -p tinyagents-session --all-features transcript::spend::tests::compacted_transcript_keeps_pre_compaction_spend_and_counts_each_record_once -- --exact --nocapture 
+   Compiling tinyagents-session v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-session)
+warning: unused import: `TranscriptHistory`
+  --> crates/tinyagents-session/src/transcript/test_locator.rs:10:20
+   |
+10 |     DisplayRecord, TranscriptHistory, TranscriptLocator, TranscriptTurn, read_transcript_display,
+   |                    ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+

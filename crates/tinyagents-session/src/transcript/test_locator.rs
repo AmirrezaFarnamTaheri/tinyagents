@@ -6,7 +6,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::{TranscriptLocator, TranscriptTurn, read_transcript};
+use super::{
+    DisplayRecord, TranscriptHistory, TranscriptLocator, TranscriptTurn, read_transcript_display,
+};
 use crate::port::SessionStoreProvider;
 
 /// An empty driver-backed locator (the production store, over memory).
@@ -42,7 +44,7 @@ pub(crate) fn imported_locator(workspace: &Path) -> Arc<dyn TranscriptLocator> {
     }
     files.sort();
     for path in files {
-        let transcript = read_transcript(&path).expect("read transcript fixture");
+        let transcript = read_transcript_display(&path).expect("read transcript fixture");
         let Some(stem) = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -53,16 +55,36 @@ pub(crate) fn imported_locator(workspace: &Path) -> Arc<dyn TranscriptLocator> {
         let history = locator
             .open_stem(stem, transcript.meta.clone())
             .expect("open fixture transcript");
-        history
-            .append_turn(TranscriptTurn {
-                prev: &[],
-                next: &transcript.messages,
-                meta: &transcript.meta,
-                turn_usage: None,
-                request_id: None,
-                tools: transcript.tools.as_ref(),
-            })
-            .expect("seed fixture transcript");
+        let mut previous = Vec::new();
+        for record in transcript.records {
+            let (next, request_id) = match record {
+                DisplayRecord::Message(message) if message.interrupted => continue,
+                DisplayRecord::Message(message) => {
+                    let mut next = previous.clone();
+                    next.push(message.message);
+                    (next, message.request_id)
+                }
+                DisplayRecord::Compaction(marker) => (
+                    marker
+                        .replacement
+                        .into_iter()
+                        .map(|message| message.message)
+                        .collect(),
+                    marker.request_id,
+                ),
+            };
+            history
+                .append_turn(TranscriptTurn {
+                    prev: &previous,
+                    next: &next,
+                    meta: &transcript.meta,
+                    turn_usage: None,
+                    request_id: request_id.as_deref(),
+                    tools: None,
+                })
+                .expect("seed fixture transcript record");
+            previous = next;
+        }
     }
     locator
 }
