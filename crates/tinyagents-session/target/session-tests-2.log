@@ -2,3 +2,664 @@
    Compiling tinyagents-harness v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-harness)
    Compiling tinyagents-tasks v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-tasks)
    Compiling tinyagents-session v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-session)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 23s
+     Running unittests src/lib.rs (target/debug/deps/tinyagents_session-42f45447a4fec9ba)
+
+running 519 tests
+test entry_tree::test::legacy_compaction_entry_defaults_to_system_role ... ok
+test entry_tree::test::every_entry_kind_round_trips_through_serde ... ok
+test fts::tests::an_ascii_message_longer_than_the_cap_truncates_to_exactly_the_cap ... ok
+test port::drivers::actor_tests::arbitrary_provider_reports_actor_factory_absence_without_fallback ... ok
+test port::drivers::rebound::tests::registration_waits_for_rebind_snapshot_and_then_binds_to_the_new_backend ... FAILED
+test port::drivers::rebound::tests::concurrent_registration_and_rebind_leave_all_retained_handles_on_current_backend ... FAILED
+test port::drivers::rebound::tests::concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handles ... FAILED
+test fts::tests::a_long_multibyte_message_is_cut_on_a_character_boundary ... ok
+test entry_tree::test::fork_before_on_root_errors ... ok
+test fts::tests::the_cap_defaults_to_two_thousand_bytes ... ok
+test port::drivers::schema_tests::the_schema_names_what_the_session_crate_owns ... ok
+test entry_tree::test::labels_name_a_tip_and_list_as_branches ... ok
+test entry_tree::test::build_context_returns_full_chain_without_compaction ... ok
+test entry_tree::test::build_context_maps_custom_entries_to_message_custom ... ok
+test entry_tree::test::fork_before_targets_the_parent_and_drops_the_tip ... ok
+test port::drivers::tests::a_failed_recovery_fails_closed_and_is_retried ... FAILED
+test port::drivers::tests::bootstrap_manifest_contains_all_session_document_indexes ... ok
+test port::drivers::tests::an_unbindable_scope_fails_closed ... FAILED
+test port::drivers::schema_tests::turn_states_are_unwrapped_to_the_snake_case_storage_form ... ok
+test port::drivers::tests::an_agent_gets_the_same_stores_every_time ... FAILED
+test port::drivers::tests::checked_open_caches_success_but_actor_rebinding_has_independent_handles ... FAILED
+test port::drivers::tests::checked_open_preserves_native_recovery_declaration_refusal ... FAILED
+test port::drivers::tests::checked_open_preserves_native_scope_refusal_through_dyn_provider ... ok
+test port::drivers::tests::checked_open_preserves_native_recovery_query_refusal_and_retries ... FAILED
+test port::drivers::tests::data_survives_a_new_provider_on_the_same_backend ... FAILED
+test entry_tree::test::build_context_skips_labels_and_branch_summaries ... ok
+test entry_tree::test::branch_fork_shares_parent_pointer_without_copying ... ok
+test entry_tree::test::build_context_stops_at_newest_compaction_and_orders_chronologically ... ok
+test port::drivers::tests::host_bound_factory_keeps_agents_in_their_supplied_scopes ... ok
+test port::drivers::tests::recover_on_open_interrupts_turns_an_earlier_process_left ... FAILED
+test entry_tree::test::compaction_sink_persists_a_record_anchored_at_the_tip ... ok
+test port::drivers::tests::recover_marks_open_agents_turns_interrupted ... ok
+test port::drivers::tests::stores_work_outside_any_runtime ... ok
+test port::drivers::refused::tests::every_stream_call_reports_the_refusal ... ok
+test port::drivers::refused::tests::every_document_call_reports_the_refusal ... ok
+test port::drivers::refused::tests::trusted_bootstrap_preserves_a_native_declaration_refusal ... ok
+test port::drivers::tests::the_journal_lives_in_the_harness_journal_stream_family ... ok
+test entry_tree::test::compaction_sink_restores_a_pinned_user_message_after_the_summary ... ok
+test entry_tree::test::legacy_jsonl_messages_import_with_derived_linear_parents ... ok
+test port::drivers::transcripts::adoption::tests::nothing_to_fold_writes_nothing ... ok
+test port::drivers::transcripts::adoption::tests::a_root_missing_from_the_index_is_still_folded ... ok
+test entry_tree::test::compaction_sink_advances_its_tip_across_repeated_compactions ... ok
+test port::drivers::transcripts::adoption::tests::legacy_roots_are_folded_oldest_first_once ... ok
+test port::drivers::transcripts::display::tests::a_replace_after_the_first_write_is_a_compaction_and_a_clear_an_empty_one ... ok
+test port::drivers::transcripts::display::tests::an_unwritten_stem_has_no_display ... ok
+test port::drivers::transcripts::adoption::tests::pre_identity_roots_are_adopted_and_resume_the_folded_history ... ok
+test port::drivers::transcripts::display::tests::prefix_ranges_match_exactly_the_prefixed_stems ... ok
+test port::drivers::transcripts::display::tests::legacy_roots_are_dropped_once_an_unscoped_session_root_exists ... ok
+test port::drivers::transcripts::adoption::tests::session_identified_roots_and_other_agents_are_not_folded ... ok
+test port::drivers::transcripts::display::tests::pre_identity_roots_are_ordered_by_their_creation_time ... ok
+test port::drivers::transcripts::tests::a_display_read_repairs_an_index_a_write_could_not_refresh ... ok
+test port::drivers::transcripts::display::tests::legacy_roots_are_dropped_once_a_session_root_exists ... ok
+test port::drivers::transcripts::tests::a_generation_is_opened_once ... ok
+test port::drivers::transcripts::tests::a_handle_meets_the_transcript_history_contract ... ok
+test port::drivers::transcripts::display::tests::subagents_are_found_by_stem_prefix_and_unscoped_by_thread ... ok
+test port::drivers::transcripts::tests::a_listing_repairs_an_unindexed_subagent_of_an_indexed_root ... ok
+test port::drivers::tests::bootstrap_preparation_is_idempotent_and_preserves_native_session_data ... ok
+test port::drivers::transcripts::tests::a_partial_alone_makes_the_transcript_exist ... ok
+test port::drivers::transcripts::tests::a_long_stem_still_round_trips ... ok
+test port::drivers::transcripts::tests::a_listing_sees_and_repairs_a_root_whose_index_refresh_failed ... ok
+test port::drivers::tests::stores_work_from_a_multi_threaded_runtime ... ok
+test port::drivers::transcripts::tests::a_read_repairs_an_index_a_write_could_not_refresh ... ok
+test port::drivers::tests::prepared_restricted_actor_recovers_and_uses_memory_stores ... ok
+test port::drivers::transcripts::tests::a_thread_change_moves_the_transcript_in_the_index ... ok
+test port::drivers::transcripts::tests::a_stale_handle_never_rewinds_the_index ... ok
+test port::drivers::transcripts::tests::a_stale_turn_is_refused_instead_of_replacing_newer_rows ... ok
+test port::drivers::transcripts::tests::a_stale_baseline_fails_the_seal_and_frees_the_successor ... ok
+test port::drivers::transcripts::tests::a_sealed_generation_refuses_writes ... ok
+test port::drivers::transcripts::tests::a_turn_keeps_its_usage_and_request_id ... ok
+test port::drivers::transcripts::tests::an_unreadable_entry_is_an_error ... ok
+test port::drivers::transcripts::tests::handles_describe_themselves ... ok
+test port::drivers::transcripts::tests::ids_are_unambiguous_and_bounded ... ok
+test port::drivers::transcripts::tests::the_generation_limit_holds ... ok
+test port::drivers::transcripts::tests::a_taken_over_generation_refuses_its_stalled_owner ... ok
+test port::drivers::transcripts::tests::a_stale_reservation_is_taken_over ... ok
+test port::drivers::transcripts::tests::clearing_an_unwritten_successor_frees_the_generation ... ok
+test port::drivers::transcripts::tests::an_ordinary_turn_stores_only_its_new_rows ... ok
+test port::drivers::turn_states::tests::a_turn_whose_time_is_not_rfc3339_is_refused ... ok
+test port::drivers::transcripts::tests::partials_stay_out_of_the_replay_and_a_clear_drops_them ... ok
+test port::drivers::transcripts::tests::the_index_keeps_its_creation_time ... ok
+test port::drivers::turn_states::tests::a_turn_is_stored_as_a_bare_snake_case_document_with_epoch_ms ... ok
+test port::drivers::transcripts::tests::tools_and_meta_follow_the_latest_turn ... ok
+test port::drivers::turn_states::tests::an_unreadable_snapshot_is_an_error ... ok
+test port::drivers::transcripts::tests::two_handles_on_one_stem_never_lose_each_others_writes ... ok
+test port::drivers::turn_states::tests::ids_with_separators_do_not_collide ... ok
+test port::drivers::turn_states::tests::only_a_lost_race_counts_as_contention ... ok
+test port::drivers::turn_states::tests::list_answers_each_threads_newest_turn ... ok
+test port::drivers::turn_states::tests::deletes_report_whether_anything_went ... ok
+test port::drivers::turn_states::tests::nested_wire_fields_are_snake_case_in_storage_and_args_stay_verbatim ... ok
+test port::drivers::turn_states::tests::put_unless_completed_inserts_updates_and_then_holds ... ok
+test port::drivers::transcripts::tests::concurrent_writers_serialize_through_the_log ... ok
+test port::memory::tests::an_agent_gets_the_same_stores_every_time ... ok
+test port::drivers::turn_states::tests::roundtrips_subagent_interleaved_transcript_with_full_fidelity ... ok
+test port::memory::tests::clearing_in_memory_history_clears_display_partials ... ok
+test port::memory::tests::an_unwritten_successor_is_reserved_until_written_or_dropped ... ok
+test port::memory::tests::a_thread_lists_every_generation_and_sub_agent ... ok
+test port::memory::tests::completed_retention_uses_completion_time ... ok
+test port::memory::tests::in_memory_stores_keep_agents_apart ... ok
+test port::drivers::turn_states::tests::settling_needs_a_live_turn ... ok
+test port::memory::tests::recovery_interrupts_every_agents_turns_in_flight ... ok
+test port::memory::tests::probing_then_opening_a_session_replaces_placeholder_metadata ... ok
+test port::memory::tests::in_memory_stores_meet_the_session_store_contract ... ok
+test port::memory::tests::the_newest_root_wins_and_sub_agents_are_never_roots ... ok
+test port::memory::tests::the_display_read_shows_recorded_partials_where_they_were_written ... ok
+test port::tests::actor_factory_arc_forwarding_preserves_native_refusal_and_source ... ok
+test port::tests::checked_accessor_arc_forwards_native_refusal ... ok
+test port::tests::checked_accessor_keeps_legacy_provider_compatible ... ok
+test port::tests::explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error ... ok
+test port::tests::optional_conversation_provider_forwards_selected_handle_and_preserves_absence ... ok
+test port::tests::optional_conversation_provider_keeps_native_refusal_kind_and_source_through_arc ... ok
+test port::tests::optional_run_ledger_provider_preserves_handle_and_defaults_to_none ... ok
+test port::tests::the_in_memory_turn_states_serve_the_port ... ok
+test port::tests::shared_providers_explicitly_leave_actor_rebinding_unsupported ... ok
+test run_ledger::command_center::test::bucket_for_maps_every_status_to_its_group ... ok
+test run_ledger::command_center::test::build_view_always_emits_five_buckets_in_display_order ... ok
+test run_ledger::command_center::test::build_view_groups_runs_into_correct_buckets ... ok
+test run_ledger::command_center::test::continue_allowed_only_from_awaiting_user ... ok
+test run_ledger::command_center::test::build_view_preserves_input_order_within_a_bucket ... ok
+test port::tests::the_shared_in_memory_building_blocks_meet_the_session_store_contract ... ok
+test run_ledger::command_center::test::follow_up_keeps_status_from_any_state ... ok
+test port::memory::tests::completed_turns_are_kept_up_to_the_retention_limit ... ok
+test run_ledger::command_center::test::continue_without_message_is_rejected_before_touching_the_ledger ... ok
+test run_ledger::command_center::test::continue_resumes_an_awaiting_user_run ... ok
+test run_ledger::command_center::test::message_requirement_is_verb_specific ... ok
+test run_ledger::command_center::test::invalid_transition_is_rejected ... ok
+test run_ledger::command_center::test::parse_round_trips_known_verbs_and_rejects_unknown ... ok
+test run_ledger::command_center::test::project_row_defaults_telemetry_to_zero_when_absent ... ok
+test run_ledger::command_center::test::retry_allowed_only_from_error_terminals ... ok
+test run_ledger::command_center::test::follow_up_records_an_event_without_changing_status ... ok
+test run_ledger::command_center::test::stop_allowed_only_while_non_terminal ... ok
+test run_ledger::command_center::test::stale_transition_does_not_overwrite_a_status_another_writer_recorded ... ok
+test run_ledger::command_center::test::retry_requeues_a_failed_run_and_clears_error ... ok
+test run_ledger::command_center::test::list_agent_work_groups_the_ledgers_runs ... ok
+test run_ledger::command_center::test::unknown_run_is_not_found ... ok
+test port::drivers::turn_states::tests::concurrent_settles_and_sweeps_never_lose_a_turn ... ok
+test port::drivers::transcripts::tests::lookups_find_the_newest_written_root ... ok
+test run_ledger::command_center::test::stop_cancels_a_running_run_and_records_an_event ... ok
+test run_ledger::drivers::agent_tests::agent_and_event_receipts_survive_driver_reconstruction ... ok
+test run_ledger::drivers::agent_tests::competing_handles_commit_exactly_one_status_and_event ... ok
+test run_ledger::drivers::agent_tests::committed_status_and_event_survive_projection_refusal_and_process_reconstruction ... ok
+test run_ledger::drivers::agent_tests::fault_tests::agent_upsert_returns_its_commit_without_a_fallible_postcommit_telemetry_read ... ok
+test run_ledger::drivers::agent_tests::agent_queries_join_telemetry_and_exclusive_sweep_preserves_resumable_runs ... ok
+test run_ledger::drivers::agent_tests::independent_event_allocators_replay_without_duplicates_and_keep_cursor_order ... ok
+test run_ledger::drivers::agent_tests::independent_agent_handles_preserve_merge_and_isolate_profiles ... ok
+test run_ledger::drivers::agent_tests::native_status_compare_and_swap_records_only_the_winning_event ... ok
+test run_ledger::drivers::agent_tests::fault_tests::status_and_event_return_their_commit_without_a_fallible_postcommit_telemetry_read ... ok
+test run_ledger::drivers::agent_tests::native_command_center_controls_use_atomic_status_and_event_receipts ... ok
+test run_ledger::drivers::agent_tests::projection_refuses_an_existing_stream_that_disagrees_with_committed_receipts ... ok
+test run_ledger::drivers::agent_tests::projection_refuses_a_valid_receipt_that_skips_an_earlier_committed_event ... ok
+test run_ledger::drivers::entry_tree_tests::import_keeps_insertion_order_for_entries_sharing_an_ordinal ... ok
+test port::drivers::rebound::tests::retained_journal_handle_routes_later_appends_to_new_backend ... FAILED
+test port::drivers::rebound::tests::rebind_during_a_blocked_store_call_keeps_that_call_old_and_routes_the_next_new ... FAILED
+test port::drivers::rebound::tests::retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes ... FAILED
+test run_ledger::drivers::agent_tests::fault_tests::concurrent_telemetry_change_retries_before_agent_commit_and_returns_validated_rollup ... ok
+test port::drivers::tests::two_backends_never_share_a_destination ... ok
+test port::drivers::rebound::tests::host_supplied_scope_bindings_survive_rebind_without_crossing_scopes ... FAILED
+test run_ledger::drivers::entry_tree_tests::imported_cycle_and_native_ordinal_exhaustion_refuse_without_partial_entries ... ok
+test port::drivers::schema_tests::transcripts_move_to_key_of_ids_and_created_at_becomes_metadata ... ok
+test port::drivers::actor_tests::actor_factory_uses_host_bound_storage_and_keeps_handles_independent ... ok
+test entry_tree::test::compaction_sink_is_a_no_op_on_an_empty_session ... ok
+test entry_tree::test::compaction_sink_skips_an_out_of_range_index_rather_than_corrupting_the_tree ... ok
+test entry_tree::test::legacy_sqlite_messages_import_with_derived_linear_parents ... ok
+test port::drivers::schema_tests::migrated_records_are_what_the_provider_reads ... FAILED
+test port::drivers::tests::native_provider_returns_stable_bound_ledger_and_rebinds_actor_independently ... ok
+test run_ledger::drivers::event_bson_tests::last_signed_event_sequence_commits_with_bson_representable_head ... ok
+test port::drivers::tests::memory_backed_stores_keep_agents_apart ... ok
+test port::drivers::turn_states::tests::settling_prunes_too ... ok
+test run_ledger::drivers::entry_tree_tests::successful_tree_commit_never_performs_fallible_postcommit_reads ... ok
+test entry_tree::test::linear_append_defaults_parent_to_head ... ok
+test entry_tree::test::compaction_sink_restores_user_checkpoint_role ... ok
+test run_ledger::drivers::entry_tree_tests::compaction_and_pinned_context_project_summary_pinned_then_kept_rows ... ok
+test run_ledger::drivers::entry_tree_tests::terminal_entry_allocators_remain_representable_in_native_bson ... ok
+test run_ledger::drivers::entry_tree_tests::competing_entry_allocators_retry_without_losing_parent_or_ordinal ... ok
+test entry_tree::test::tree_fork_copies_the_ancestor_path ... ok
+test run_ledger::drivers::entry_tree_tests::tree_batch_refusal_preserves_entries_labels_head_and_native_source ... ok
+test run_ledger::drivers::event_query_tests::zero_limit_event_reads_still_require_native_admission ... ok
+test entry_tree::test::rebuild_index_matches_incremental_index ... ok
+test port::drivers::transcripts::adoption::tests::a_reserved_stem_reports_nothing_adopted ... ok
+test port::drivers::transcripts::adoption::tests::an_existing_session_is_left_alone ... ok
+test run_ledger::drivers::event_query_tests::event_pages_follow_native_cursors_with_the_requested_limit ... ok
+test run_ledger::drivers::retention_tests::empty_retention_still_requires_native_admission ... ok
+test run_ledger::drivers::legacy_state::tests::a_workflow_lease_is_a_tsd_lease_and_not_part_of_the_stored_run ... ok
+test run_ledger::drivers::history_tests::indexing_truncates_long_non_ascii_content_on_a_character_boundary ... ok
+test run_ledger::drivers::entry_tree_tests::import_and_parent_behavior_follow_the_classic_entry_tree_rules ... ok
+test run_ledger::drivers::retention_tests::reconstructed_memory_telemetry_retention_preserves_cutoff_and_other_scopes ... ok
+test run_ledger::drivers::history_tests::tool_call_and_event_pruning_respect_the_cutoff ... ok
+test run_ledger::drivers::history_tests::reindex_restores_missing_rows_and_drops_stale_ones ... ok
+test run_ledger::drivers::schema::tests::the_schemas_name_what_each_owner_declares ... ok
+test run_ledger::drivers::entry_tree_tests::reconstructed_memory_entry_tree_branches_forks_and_context ... ok
+test run_ledger::drivers::retention_tests::memory_telemetry_retention_preserves_cutoff_and_other_scopes ... ok
+test run_ledger::drivers::history_tests::apply_retention_reports_every_family_it_removed ... ok
+test run_ledger::drivers::legacy_state::tests::live_workflow_leases_and_history_counters_move_to_the_shared_primitives ... ok
+test run_ledger::drivers::history_tests::trim_keeps_the_newest_messages_and_their_index_rows ... ok
+test port::drivers::tests::memory_backed_stores_meet_the_session_store_contract ... ok
+test port::drivers::turn_states::tests::completed_turns_are_kept_up_to_the_retention_limit ... ok
+test run_ledger::drivers::team_tests::concurrent_claims_grant_exactly_one_member ... ok
+test run_ledger::drivers::history_tests::memory_history_records_and_answers_queries ... ok
+test run_ledger::drivers::history_tests::reconstructed_memory_prune_sessions_cascades_to_children_and_index ... ok
+test run_ledger::drivers::retention_tests::concurrent_telemetry_refresh_survives_retention_retry ... ok
+test run_ledger::drivers::team_tests::completion_gate_reports_regressed_dependencies_and_foreign_owners ... ok
+test run_ledger::drivers::team_tests::reconstructed_memory_team_claim_and_completion_follow_the_classic_lifecycle ... ok
+test run_ledger::drivers::team_tests::memory_team_claim_and_completion_follow_the_classic_lifecycle ... ok
+test run_ledger::drivers::retention_tests::native_retention_refusal_preserves_all_candidates_and_source ... ok
+test run_ledger::drivers::schema::tests::history_moves_to_ms_times_and_search_is_rebuilt ... ok
+test run_ledger::drivers::history_tests::memory_prune_sessions_cascades_to_children_and_index ... ok
+test run_ledger::drivers::entry_tree_tests::memory_entry_tree_branches_forks_and_context ... ok
+test run_ledger::error::tests::legacy_storage_error_keeps_original_type ... ok
+test run_ledger::drivers::tests::scoped_telemetry_rejects_lossy_nonfinite_cost_without_writes ... ok
+test run_ledger::drivers::tests::scoped_telemetry_upserts_merge_and_isolate_records ... ok
+test run_ledger::drivers::team_tests::team_operations_never_cross_scopes ... ok
+test run_ledger::drivers::tests::scoped_workflow_rejects_malformed_document_body ... ok
+test run_ledger::error::tests::native_driver_error_preserves_capability_and_kind ... ok
+test run_ledger::drivers::schema::tests::run_events_move_to_the_run_stream_and_sequences_continue ... ok
+test run_ledger::drivers::tests::scoped_workflow_expiry_boundary_uses_exact_supplied_timestamp ... ok
+test run_ledger::drivers::tests::scoped_workflow_documents_survive_driver_reconstruction ... ok
+test run_ledger::drivers::tests::scoped_tool_effects_preserve_restarts_settle_and_unresolved_filter ... ok
+test run_ledger::drivers::tests::scoped_ledger_collections_start_empty_and_entry_trees_need_no_writes ... ok
+test run_ledger::recovery::tests::a_call_the_ledger_never_saw_start_is_safe_to_resume ... ok
+test run_ledger::drivers::tests::scoped_workflow_revision_exhaustion_preserves_committed_record ... ok
+test run_ledger::drivers::tests::scoped_workflow_terminal_cas_preserves_started_at_and_clears_lease ... ok
+test run_ledger::drivers::tests::scoped_member_lifecycle_and_task_release_preserve_history ... ok
+test run_ledger::drivers::team_tests::shutdown_releases_held_tasks_and_stops_the_member ... ok
+test run_ledger::drivers::tests::scoped_workflow_claims_fence_stale_owners_and_lifecycle_revisions ... ok
+test run_ledger::drivers::history_tests::reconstructed_memory_history_records_and_answers_queries ... ok
+test run_ledger::drivers::tests::scoped_workflow_queries_preserve_filter_and_page_semantics ... ok
+test run_ledger::drivers::tests::scoped_team_records_preserve_merge_identity_order_and_unique_names ... ok
+test run_ledger::recovery::tests::a_call_that_only_started_needs_verification ... ok
+test run_ledger::drivers::schema::tests::ledger_records_move_to_snake_case_bodies_with_ms_times_and_key_ids ... ok
+test run_ledger::drivers::tests::scoped_workflow_upserts_preserve_revision_and_partial_fields ... ok
+test run_ledger::drivers::schema::tests::entry_trees_move_with_their_timestamps_in_ms ... ok
+test run_ledger::recovery::tests::a_missing_row_needs_verification_when_started_write_failures_may_continue ... ok
+test run_ledger::recovery::tests::a_settled_call_resumes_report_only ... ok
+test run_ledger::recovery::tests::a_deferred_call_awaits_its_answer_and_is_not_plain_resume ... ok
+test run_ledger::recovery::tests::each_call_is_classified_independently_in_tail_order ... ok
+test run_ledger::recovery::tests::effects_match_on_run_and_call_id_together ... ok
+test run_ledger::recovery::tests::equal_class_rows_pick_the_same_status_in_either_order ... ok
+test run_ledger::recovery::tests::no_dangling_calls_classify_to_nothing ... ok
+test run_ledger::recovery::tests::overall_recovery_is_the_most_cautious_class ... ok
+test run_ledger::recovery::tests::the_most_cautious_row_wins_when_several_match_one_call ... ok
+test run_ledger::status_map::tests::agent_run_status_golden_wire_round_trips ... ok
+test run_ledger::status_map::tests::run_task_run_only_loses_paused ... ok
+test run_ledger::status_map::tests::run_to_task_covers_every_run_status ... ok
+test run_ledger::status_map::tests::task_run_task_only_loses_timeout_and_cancel_request ... ok
+test run_ledger::status_map::tests::task_to_run_covers_every_task_status ... ok
+test run_ledger::status_map::tests::terminality_is_preserved_in_both_directions ... ok
+test run_ledger::drivers::tests::stale_team_execution_cleanup_preserves_successor_claim_and_run ... ok
+test run_ledger::drivers::tests::scoped_workflow_concurrent_native_claim_has_one_owner ... ok
+test testkit::tests::in_memory_transcript_starts_empty ... ok
+test run_ledger::test::run_ledger_tool_effects_implements_the_harness_ledger_trait ... ok
+test run_ledger::test::tool_effects_survive_store_reconstruction_and_stay_per_scope ... ok
+test threads::driver::append_tests::counterfeit_document_capabilities_do_not_reserve_when_actual_stream_probe_refuses ... ok
+test threads::driver::tests::configured_backend_refusal_preserves_native_source_without_selecting_classic_store ... ok
+test threads::driver::append_tests::cancellation_after_finalization_does_not_hide_committed_prefix_or_repeat_deterministic_message ... ok
+test threads::driver::append_tests::noncanonical_pending_record_refuses_without_appending_or_publishing_prefix ... ok
+test threads::driver::append_tests::unobserved_ordinary_reservation_returns_typed_uncertainty_with_original_native_source ... ok
+test threads::driver::append_tests::byte_identical_ordinary_competitor_cannot_prove_unobserved_reservation_ownership ... ok
+test threads::driver::append_tests::mismatching_actual_stream_row_cannot_publish_reserved_message_or_retire_pending ... ok
+test threads::driver::tests::corrupt_stored_identity_reports_serialization_instead_of_caller_input_error ... ok
+test threads::driver::append_tests::competing_same_id_reservations_force_cas_conflict_then_restart_original_dedup ... ok
+test run_ledger::drivers::schema::tests::migrating_twice_changes_nothing ... ok
+test threads::driver::append_tests::review_tests::missing_published_row_during_finalize_reconcile_preserves_corruption ... ok
+test threads::driver::append_tests::review_tests::lost_finalization_ack_keeps_success_after_concurrent_title_edit ... ok
+test threads::driver::append_tests::cold_helpers_publish_once_and_preserve_concurrent_title_and_duplicate_original ... ok
+test threads::driver::append_tests::review_tests::helping_foreign_uncertain_intent_keeps_callers_unreserved_outcome_retryable ... ok
+test threads::driver::append_tests::lost_native_acknowledgments_reconcile_exact_reserved_attempt_without_duplicates ... ok
+test threads::driver::append_tests::reconstructed_memory_prepared_append_reopens_and_preserves_classic_duplicate_semantics ... ok
+test threads::driver::tests::conflicting_metadata_edits_reread_version_and_preserve_both_fields ... ok
+test threads::driver::tests::independent_handles_share_metadata_but_other_scope_does_not ... ok
+test threads::driver::append_tests::memory_prepared_native_append_reopens_and_preserves_classic_duplicate_semantics ... ok
+test threads::dto::tests::a_legacy_time_that_is_not_rfc_3339_becomes_the_epoch ... ok
+test threads::dto::tests::a_message_body_is_snake_case_with_an_ms_time_and_no_wrapper ... ok
+test threads::dto::tests::a_message_body_without_extra_metadata_reads_as_null_like_the_wire_type ... ok
+test threads::dto::tests::a_thread_body_is_flat_snake_case_with_ms_times ... ok
+test threads::dto::tests::a_thread_body_reads_back_as_the_wire_thread_with_a_derived_count ... ok
+test threads::dto::tests::a_time_that_is_not_rfc_3339_is_invalid_input ... ok
+test threads::dto::tests::a_thread_body_refuses_fields_it_does_not_know ... ok
+test threads::dto::tests::times_round_trip_at_millisecond_precision ... ok
+test threads::driver::tests::unprepared_append_never_approximates_a_committed_message ... ok
+test threads::driver::tests::store_reconstruction_reads_same_committed_profile_fixture ... ok
+test threads::inverted_index::tests::arabic_harakat_stripped ... ok
+test threads::inverted_index::tests::intersect_sorted_with_btreeset_basic ... ok
+test threads::inverted_index::tests::intersect_sorted_with_btreeset_empty_other ... ok
+test threads::inverted_index::tests::duplicate_message_id_is_idempotent ... ok
+test threads::inverted_index::tests::excludes_active_thread ... ok
+test threads::inverted_index::tests::limit_zero_returns_empty ... ok
+test threads::driver::tests::tombstone_and_recreated_incarnation_hide_old_stream_and_search_rows ... ok
+test threads::inverted_index::tests::empty_query_returns_empty ... ok
+test threads::inverted_index::tests::intern_pool_dedupes_repeated_thread_id_and_role ... ok
+test threads::inverted_index::tests::japanese_bigram_match ... ok
+test threads::inverted_index::tests::polish_diacritics_normalized_both_sides ... ok
+test threads::inverted_index::tests::recency_tiebreak_compares_instants_across_rfc3339_offsets ... ok
+test threads::inverted_index::tests::ranks_by_score_then_recency_before_truncating ... ok
+test threads::labels::tests::default_labels_follow_the_thread_id_namespace ... ok
+test threads::inverted_index::tests::short_terms_only_returns_empty ... ok
+test threads::labels::tests::legacy_label_spellings_collapse_into_current_buckets_without_duplicates ... ok
+test threads::inverted_index::tests::substring_inside_word_matches ... ok
+test threads::inverted_index::tests::remove_thread_drops_all_messages ... ok
+test threads::inverted_index::tests::score_matches_legacy_semantics ... ok
+test threads::driver::append_tests::corruption_tests::pending_record_cannot_silently_normalize_missing_message_metadata ... ok
+test threads::persistence_tests::memory_store_refuses_authoritative_turn_claim_ ... ok
+test run_ledger::test::the_ledger_conformance_suite_passes_on_independent_memory_backends ... ok
+test threads::schema::tests::the_schema_names_what_the_conversations_owner_declares ... ok
+test threads::schema::tests::the_stream_step_ends_a_stream_at_its_first_unreadable_row ... ok
+test threads::persistence_tests::memory_store_preserves_channel_dedup_and_optional_upsert_fields ... ok
+test threads::driver::append_tests::canceled_memory_writers_keep_reserved_and_appended_rows_invisible_until_recovery ... ok
+test threads::driver::tests::invalid_ids_and_malformed_committed_records_keep_native_error_kinds ... ok
+test threads::persistence_tests::memory_store_preserves_title_labels_and_metadata_patch ... ok
+test threads::persistence_tests::memory_store_preserves_deterministic_append_and_missing_thread_behavior ... ok
+test threads::persistence_tests::a_rewrite_retires_a_stale_append_intent_instead_of_resurrecting_it ... ok
+test threads::persistence_tests::truncation_resets_counts_and_timestamps_and_the_search_index ... ok
+test threads::persistence_tests::update_message_rewrites_only_the_patched_message_and_keeps_appends_working ... ok
+test threads::persistence_tests::purge_removes_live_and_deleted_threads_and_counts_only_live_ones ... ok
+test threads::persistence_tests::memory_store_tail_delete_recreate_and_purge ... ok
+test threads::tokenize::tests::ngrams_emits_bigrams_for_cjk ... ok
+test threads::tokenize::tests::ngrams_emits_trigrams_for_latin ... ok
+test threads::tokenize::tests::ngrams_empty_input_returns_empty ... ok
+test threads::schema::tests::the_stream_step_is_pure_and_keeps_the_v1_thread_key_and_incarnation ... ok
+test threads::driver::append_tests::canceled_reconstructed_memory_writers_keep_reserved_and_appended_rows_invisible_until_recovery ... ok
+test threads::tokenize::tests::ngrams_mixed_script_splits_at_boundary ... ok
+test threads::tokenize::tests::ngrams_substring_inside_word_is_indexable ... ok
+test threads::tokenize::tests::ngrams_drops_runs_too_short ... ok
+test threads::tokenize::tests::normalize_composes_canonical_kana_voice_marks ... ok
+test threads::tokenize::tests::is_cjk_classifies_common_scripts ... ok
+test threads::schema::tests::the_stream_step_drops_a_stream_whose_name_is_not_v1 ... ok
+test threads::tokenize::tests::normalize_folds_fullwidth_ascii ... ok
+test threads::tokenize::tests::normalize_is_idempotent ... ok
+test threads::tokenize::tests::normalize_lowercases_ascii ... ok
+test threads::tokenize::tests::normalize_strips_arabic_harakat ... ok
+test threads::tokenize::tests::normalize_strips_polish_diacritics ... ok
+test threads::tokenize::tests::normalize_folds_non_decomposing_letters ... ok
+test threads::types::tests::client_generated_ids_are_not_deterministic ... ok
+test threads::tokenize::tests::normalize_unifies_cjk_halfwidth_fullwidth ... ok
+test threads::types::tests::conversation_message_patch_defaults_to_no_changes ... ok
+test threads::types::tests::conversation_thread_serde_uses_camel_case_and_defaults_labels ... ok
+test threads::schema::tests::a_v1_time_that_is_not_rfc_3339_migrates_as_the_epoch ... ok
+test threads::types::tests::create_thread_optional_fields_roundtrip ... ok
+test threads::types::tests::run_reply_id_is_deterministic_and_recognised_as_such ... ok
+test threads::schema::tests::v1_threads_appends_and_messages_move_to_the_v2_names_and_shapes ... ok
+test threads::driver::tests::prefix_reader_bounds_every_window_and_revalidates_recreated_thread ... ok
+test threads::schema::tests::migrating_twice_changes_nothing ... ok
+test transcript::display::tests::a_plain_row_has_no_background ... ok
+test transcript::display::tests::a_session_projects_one_record_per_message ... ok
+test threads::persistence_tests::memory_store_substring_and_cjk_search_find_expected_threads ... ok
+test transcript::display::tests::background_provenance_round_trips_through_row_metadata ... ok
+test transcript::display::tests::other_metadata_survives_the_lift ... ok
+test transcript::legacy::tests::preserves_host_image_markers_and_surrounding_text ... ok
+test transcript::legacy::tests::leaves_malformed_and_unknown_content_as_plain_text ... ok
+test transcript::legacy::tests::rejects_invalid_legacy_rows_instead_of_dropping_them ... ok
+test transcript::legacy::tests::writes_only_legacy_role_and_content_fields ... ok
+test transcript::legacy::tests::reads_known_legacy_rows_and_serializes_them_back_with_the_same_shape ... ok
+test threads::driver::tests::bounded_stream_windows_read_all_committed_rows_and_hide_uncommitted_tail ... ok
+test transcript::session::test::a_generation_knows_the_one_it_succeeded ... ok
+test transcript::background::tests::a_session_without_a_transcript_is_reported_and_not_created ... ok
+test transcript::session::test::a_literal_dot_in_a_key_no_longer_aliases_the_agent_separator ... ok
+test transcript::session::test::a_shallow_delegation_chain_is_unaffected_by_the_bound ... ok
+test transcript::session::test::a_literal_dot_in_a_key_no_longer_aliases_the_generation_suffix ... ok
+test transcript::session::test::a_deeply_nested_delegation_chain_stays_bounded ... ok
+test threads::driver::append_tests::corruption_tests::foreign_or_malformed_pending_identity_cannot_append_or_publish ... ok
+test transcript::display::tests::a_partial_is_an_interrupted_assistant_record ... ok
+test transcript::session::test::a_root_stem_never_contains_the_subagent_separator ... ok
+test transcript::display::tests::non_object_metadata_is_kept_under_value ... ok
+test transcript::session::test::a_scoped_session_with_a_blank_agent_id_is_still_distinct_from_an_unscoped_root ... ok
+test transcript::background::tests::an_attempt_against_a_sealed_head_writes_nothing_and_asks_to_re_resolve ... ok
+test threads::schema::tests::a_migrated_conversation_reads_recovers_its_intent_and_moves_to_canonical_streams ... ok
+test transcript::background::tests::an_appended_message_is_resumed_as_an_assistant_turn ... ok
+test transcript::session::test::a_stem_is_deterministic_and_carries_no_timestamp ... ok
+test transcript::session::test::a_subagent_stem_carries_the_separator_every_root_scan_filters_on ... ok
+test transcript::session::test::a_very_long_key_still_produces_a_filesystem_safe_stem ... ok
+test transcript::session::test::an_unscoped_root_is_just_the_key_plus_a_digest ... ok
+test transcript::session::test::collapsing_underscore_runs_no_longer_aliases_distinct_keys ... ok
+test transcript::session::test::generations_are_distinct_and_ordered_by_suffix ... ok
+test transcript::session::test::nested_delegation_records_the_whole_path_in_one_flat_stem ... ok
+test transcript::session::test::every_level_of_a_maximal_chain_stays_under_the_filesystem_limit ... ok
+test transcript::session::test::path_traversal_in_a_key_cannot_escape_the_transcript_directory ... ok
+test transcript::session::test::the_digest_algorithm_is_pinned_to_known_fnv1a64_outputs ... ok
+test transcript::session::test::two_agents_on_one_key_get_distinct_stems ... ok
+test transcript::spend::cost_tests::cost_split_keeps_stated_charges_apart_from_records_without_a_source ... ok
+test transcript::spend::cost_tests::cost_split_source_is_the_least_certain_of_its_records ... ok
+test transcript::session::test::two_long_keys_that_share_a_bounded_prefix_still_get_distinct_stems ... ok
+test transcript::background::tests::only_plain_assistant_messages_with_a_key_are_accepted ... ok
+test transcript::spend::cost_tests::cost_source_round_trips_and_is_omitted_when_unset ... ok
+test transcript::spend::tests::last_call_fields_round_trip_and_default_on_old_lines ... ok
+test transcript::background::tests::appends_through_one_unnamed_locator_are_serialised ... ok
+test transcript::background::tests::a_delivery_dropped_by_a_same_generation_compaction_is_appended_again ... ok
+test transcript::spend::tests::carried_from_compares_typed_structure ... ok
+test transcript::background::tests::a_delivery_kept_by_a_same_generation_compaction_is_still_a_duplicate ... ok
+test transcript::background::tests::a_stale_expected_generation_writes_nothing ... ok
+test transcript::background::tests::a_repeated_idempotency_key_is_a_duplicate_and_writes_nothing ... ok
+test transcript::spend::tests::subagent_chains_order_generations_numerically ... ok
+test transcript::background::tests::the_append_lands_in_the_head_generation ... ok
+test transcript::background::tests::a_delivery_carried_through_a_compaction_is_still_a_duplicate ... ok
+test transcript::background::tests::the_display_reader_shows_the_message_with_its_provenance ... ok
+test transcript::background::tests::a_background_append_waits_for_the_live_turn_and_keeps_both_in_order ... ok
+test run_ledger::drivers::event_query_tests::successful_projection_progress_does_not_exhaust_the_contention_budget ... ok
+test transcript::spend::tests::last_context_of_a_legacy_record_is_exact_for_one_call_and_averaged_for_many ... ok
+test transcript::spend::tests::retained_rows_in_a_successor_generation_are_not_counted_twice ... ok
+test transcript::spend::tests::reports_no_usage_for_an_unknown_or_spendless_thread ... ok
+test transcript::spend::tests::provenance_only_tool_round_records_are_not_counted_as_turns ... ok
+test transcript::spend::tests::last_context_is_the_final_calls_size_not_the_turns_summed_spend ... ok
+test transcript::test::role_constructors_build_bare_rows ... ok
+test transcript::spend::tests::compaction_turn_with_usage_identical_to_history_still_counts ... FAILED
+test transcript::spend::tests::ignores_the_dead_meta_rollup_on_legacy_transcripts ... ok
+test transcript::test::role_content_only_json_deserializes_to_a_bare_row ... ok
+test transcript::spend::tests::counts_a_grandchild_delegation_once ... ok
+test transcript::spend::tests::counts_each_transcript_once_regardless_of_the_parent_ledger ... ok
+test transcript::spend::tests::counts_subagents_whose_transcripts_carry_a_worker_thread_id ... ok
+test transcript::test::malformed_required_message_record_is_skipped_without_losing_valid_rows ... ok
+test transcript::turn_lock::tests::an_anonymous_locator_has_no_turn_lock ... ok
+test transcript::test::a_transcript_without_a_tools_record_reads_none ... ok
+test transcript::turn_lock::tests::a_held_turn_lock_blocks_the_same_session_until_released ... ok
+test transcript::turn_lock::tests::distinct_in_memory_locators_do_not_share_a_lock ... ok
+test transcript::turn_lock::tests::every_generation_and_every_locator_over_one_destination_share_the_lock ... ok
+test transcript::test::unknown_jsonl_records_are_ignored ... ok
+test transcript::test::a_turn_and_its_tools_are_serialized_in_one_append_buffer ... ok
+test transcript::test::session_identity_round_trips_through_the_jsonl_meta ... ok
+test transcript::test::the_latest_tools_record_is_the_sessions_tools_and_never_a_message ... ok
+test transcript::turn_lock::tests::other_sessions_and_other_destinations_are_independent ... ok
+test transcript::typed_rows_test::an_edited_lifted_row_does_not_serialize_its_superseded_text ... ok
+test transcript::typed_rows_test::display_and_legacy_text_of_typed_rows ... ok
+test transcript::typed_rows_test::a_lifted_rows_original_string_survives_a_serde_round_trip ... ok
+test transcript::typed_rows_test::a_future_version_or_part_kind_keeps_the_stored_content ... ok
+test transcript::test::write_transcript_if_absent_publishes_once_and_never_overwrites ... ok
+test transcript::typed_rows_test::legacy_and_lifted_rows_are_the_same_row ... ok
+test transcript::typed_rows_test::arbitrary_json_is_not_a_media_compatibility_envelope ... ok
+test transcript::typed_rows_test::legacy_content_keeps_the_string_form_of_typed_rows ... ok
+test transcript::typed_rows_test::an_unknown_shape_or_missing_fields_keep_the_stored_content ... ok
+test transcript::typed_rows_test::the_in_memory_history_returns_lifted_rows_like_the_file_backend ... ok
+test transcript::typed_rows_test::rows_lifted_from_different_legacy_envelopes_are_different_rows ... ok
+test transcript::typed_rows_test::rows_from_a_newer_version_are_not_normalized ... ok
+test transcript::view::ordering_tests::get_page_missing_thread_is_empty_not_error ... ok
+test transcript::typed_rows_test::durable_media_parts_round_trip_without_inline_bytes ... ok
+test transcript::typed_rows_test::legacy_envelope_rows_still_load_and_a_new_turn_appends_typed_rows ... ok
+test transcript::typed_rows_test::typed_rows_store_fields_and_read_back_equal ... ok
+test transcript::typed_rows_test::non_canonical_strings_stay_legacy_lines_and_load_normalized ... ok
+test transcript::typed_rows_test::typed_rows_project_to_the_same_display_items_as_their_legacy_strings ... ok
+test transcript::typed_rows_test::string_rows_and_typed_rows_write_identical_lines ... ok
+test transcript::spend::tests::identical_usage_on_separate_appends_counts_each_turn ... ok
+test transcript::view::ordering_tests::real_writer_turn_projects_steps_in_order ... ok
+test transcript::view::ordering_tests::real_writer_turn_with_aggregate_usage_calls_projects_each_call_once ... ok
+test transcript::view::resolve::tests::a_row_with_changed_typed_structure_is_not_a_retained_row ... ok
+test transcript::view::status_alias_tests::deprecated_subagent_status_alias_is_the_same_type ... ok
+test transcript::view::resolve::tests::an_identical_typed_row_is_still_retained ... ok
+test transcript::view::prompt_tools_tests::native_turn_projection_is_unchanged ... ok
+test transcript::view::status_alias_tests::transcript_subagent_status_wire_format_is_snake_case ... ok
+test transcript::view::status_map::tests::task_to_transcript_covers_every_task_status ... ok
+test transcript::view::prompt_tools_tests::prompt_guided_results_without_ids_pair_in_issue_order ... ok
+test transcript::view::prompt_tools_tests::prompt_guided_turn_projects_like_a_native_one ... ok
+test transcript::view::status_map::tests::transcript_round_trip_only_loses_incomplete_cause ... ok
+test transcript::view::status_map::tests::transcript_to_task_covers_every_variant ... ok
+test transcript::view::status_map::tests::transcript_status_golden_wire ... ok
+test transcript::view::ordering_tests::tool_output_that_is_not_the_replay_wrapper_is_kept_verbatim ... ok
+test transcript::view::ordering_tests::subagent_status_follows_a_legacy_incomplete_marker ... ok
+test transcript::view::tests::canonical_root_and_subagent_project_together ... ok
+test transcript::test::jsonl_round_trip_keeps_raw_tool_arguments_and_provider_extension ... ok
+test transcript::view::tests::legacy_file_without_version_or_request_id_projects ... ok
+test transcript::test::frozen_prefix_count_round_trips_in_meta ... ok
+test transcript::view::tests::failed_tool_line_projects_error_status_with_failure_payload ... ok
+test transcript::view::subagent_anchor_tests::subagent_anchors_to_parent_turn_by_spawn_timestamp ... ok
+test transcript::view::tests::projects_compaction_and_interrupted_partial ... ok
+test transcript::view::tests::get_page_paginates_newest_first_with_cursor ... ok
+test transcript::view::tests::recovers_tool_name_from_native_envelope_without_turn_usage ... ok
+test transcript::view::tests::reuses_synthetic_tool_call_ids_in_a_later_turn ... ok
+test transcript::view::tests::projects_turn_with_tools_reasoning_and_sanitization ... ok
+test transcript::view::tests::subagent_file_projects_as_nested_item ... ok
+test transcript::view::tests::subagent_tests::an_unwrapped_raw_spawn_payload_is_not_blanked_by_the_reader ... ok
+test transcript::view::tests::subagent_tests::a_spawn_payload_naming_another_call_is_not_trusted ... ok
+test transcript::view::tests::subagent_tests::a_job_query_result_does_not_steal_the_spawning_call ... ok
+test transcript::view::tests::subagent_tests::subagent_correlates_by_ledger_parent_call_id_over_the_heuristic ... ok
+test transcript::view::tests::subagent_tests::subagent_correlates_a_grandchild_thread_id_by_its_last_marker ... ok
+test transcript::view::tests::subagent_tests::root_thread_id_falls_back_to_a_later_root_when_the_first_has_none ... ok
+test transcript::view::tests::subagent_tests::subagent_anchors_to_parent_turn_by_spawn_timestamp ... ok
+test turn_state::mirror::caps::tests::transcript_text_is_capped_on_a_char_boundary_with_one_marker ... ok
+test transcript::view::tests::subagent_tests::subagent_correlates_by_run_id_embedded_in_the_child_thread_id ... ok
+test turn_state::mirror::caps::tests::transcript_text_marker_appears_when_deltas_land_exactly_on_the_cap ... ok
+test turn_state::mirror::caps::tests::output_cap_passes_small_drops_empty_and_truncates_large ... ok
+test turn_state::mirror::test::finish_after_completion_writes_no_partial ... ok
+test transcript::view::ordering_tests::subagent_status_follows_a_typed_incomplete_result ... ok
+test transcript::view::tests::subagent_tests::subagent_correlates_by_explicit_run_id_in_the_parent_tool_result ... ok
+test turn_state::mirror::test::finish_keeps_a_terminal_outcome_the_driver_already_recorded ... ok
+test turn_state::mirror::test::finish_appends_interrupted_partial_to_existing_transcript ... ok
+test turn_state::mirror::test::finish_marks_an_unfinished_turn_interrupted ... ok
+test turn_state::mirror::test::finish_leaves_an_unreadable_snapshot_alone_and_appends_no_partial ... ok
+test turn_state::mirror::test::late_boundary_flush_keeps_a_snapshot_the_driver_settled ... ok
+test turn_state::mirror::test::narration_coalesces_within_a_round_and_splits_across_rounds ... ok
+test transcript::view::tests::subagent_tests::root_thread_id_prefers_the_first_root_that_has_one ... ok
+test turn_state::mirror::caps::tests::args_cap_keeps_small_json_drops_null_and_degrades_large_to_a_string ... ok
+test turn_state::mirror::test::new_flushes_a_started_snapshot ... ok
+test turn_state::mirror::test::ordering_keys_are_monotonic_and_independent ... ok
+test transcript::view::tests::subagent_tests::subagent_without_explicit_ids_falls_back_to_the_heuristic ... ok
+test turn_state::mirror::test::subagent_prose_coalesces_per_kind_and_iteration ... ok
+test turn_state::mirror::test::thinking_coalesces_and_an_intervening_tool_starts_a_new_block ... ok
+test turn_state::mirror::test::tool_call_is_recorded_once_per_call_id ... ok
+test turn_state::shape_test::snapshot_written_before_optional_fields_still_loads ... ok
+test turn_state::shape_test::started_snapshot_serializes_to_the_documented_camel_case_shape ... ok
+test types::tests::session_search_params_defaults ... ok
+test types::tests::search_params_deserialize_from_camel_case_with_every_field_optional ... ok
+test types::tests::session_status_parse_unknown_defaults_to_running ... ok
+test types::tests::session_status_roundtrip ... ok
+test types::tests::session_status_serde_roundtrip ... ok
+test turn_state::mirror::test::finish_without_a_transcript_locator_keeps_the_partial_in_the_snapshot_only ... ok
+test threads::inverted_index::tests::repeated_thread_rebuilds_reuse_removed_document_slots ... ok
+test transcript::spend::tests::compacted_transcript_keeps_pre_compaction_spend_and_counts_each_record_once ... FAILED
+test transcript::spend::tests::a_compacted_subagent_is_one_run_counted_once ... ok
+test transcript::spend::tests::request_less_compaction_turn_still_counts ... FAILED
+test run_ledger::drivers::tests::scoped_workflow_paging_follows_native_cursors ... ok
+test transcript::spend::tests::totals_a_thread_with_no_subagents_from_its_turn_records ... ok
+test transcript::test::an_invalid_utf8_tail_does_not_block_cold_resume ... ok
+test transcript::spend::tests::request_less_compaction_with_usage_identical_to_history_still_counts ... FAILED
+test transcript::test::a_torn_append_does_not_swallow_the_next_turn ... ok
+test transcript::test::a_turn_stamps_iteration_and_ts_on_every_step_it_appends ... ok
+test threads::driver::tests::exhaustive_paged_search_matches_local_substrings_and_cjk_tied_groups ... ok
+test transcript::typed_rows_test::non_canonical_legacy_rows_survive_a_read_then_rewrite_byte_for_byte ... ok
+test transcript::view::ordering_tests::subagent_of_a_session_root_is_discovered_and_placed_after_its_spawning_call ... ok
+test transcript::spend::cost_tests::thread_spend_merges_cost_sources_across_roots_and_subagent_runs ... ok
+test transcript::view::ordering_tests::generation_chain_projects_in_order_without_duplicating_retained_rows ... ok
+test transcript::test::append_replays_delta_compaction_request_ids_and_interrupted_partials ... ok
+test transcript::view::tests::append_transcript_turn_projects_full_display_shape ... ok
+test transcript::spend::cost_tests::transcript_spend_preserves_mixed_cost_sources_after_a_durable_round_trip ... ok
+test threads::inverted_index::tests::pathological_query_short_circuits_to_recency ... ok
+
+failures:
+
+---- port::drivers::rebound::tests::registration_waits_for_rebind_snapshot_and_then_binds_to_the_new_backend stdout ----
+
+thread 'port::drivers::rebound::tests::registration_waits_for_rebind_snapshot_and_then_binds_to_the_new_backend' (3389337) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- port::drivers::rebound::tests::concurrent_registration_and_rebind_leave_all_retained_handles_on_current_backend stdout ----
+
+thread 'port::drivers::rebound::tests::concurrent_registration_and_rebind_leave_all_retained_handles_on_current_backend' (3389334) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- port::drivers::rebound::tests::concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handles stdout ----
+
+thread 'port::drivers::rebound::tests::concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handles' (3389333) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- port::drivers::tests::a_failed_recovery_fails_closed_and_is_retried stdout ----
+
+thread 'port::drivers::tests::a_failed_recovery_fails_closed_and_is_retried' (3389349) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- port::drivers::tests::an_unbindable_scope_fails_closed stdout ----
+
+thread 'port::drivers::tests::an_unbindable_scope_fails_closed' (3389352) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- port::drivers::tests::an_agent_gets_the_same_stores_every_time stdout ----
+
+thread 'port::drivers::tests::an_agent_gets_the_same_stores_every_time' (3389351) panicked at crates/tinyagents-session/src/port/drivers/mod_tests.rs:186:5:
+DriverSessionStores { agents: 2, recover_on_open: false, .. }
+
+---- port::drivers::tests::checked_open_caches_success_but_actor_rebinding_has_independent_handles stdout ----
+
+thread 'port::drivers::tests::checked_open_caches_success_but_actor_rebinding_has_independent_handles' (3389357) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- port::drivers::tests::checked_open_preserves_native_recovery_declaration_refusal stdout ----
+
+thread 'port::drivers::tests::checked_open_preserves_native_recovery_declaration_refusal' (3389358) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- port::drivers::tests::checked_open_preserves_native_recovery_query_refusal_and_retries stdout ----
+
+thread 'port::drivers::tests::checked_open_preserves_native_recovery_query_refusal_and_retries' (3389359) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- port::drivers::tests::data_survives_a_new_provider_on_the_same_backend stdout ----
+
+thread 'port::drivers::tests::data_survives_a_new_provider_on_the_same_backend' (3389362) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- port::drivers::tests::recover_on_open_interrupts_turns_an_earlier_process_left stdout ----
+
+thread 'port::drivers::tests::recover_on_open_interrupts_turns_an_earlier_process_left' (3389372) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- port::drivers::rebound::tests::retained_journal_handle_routes_later_appends_to_new_backend stdout ----
+
+thread 'port::drivers::rebound::tests::retained_journal_handle_routes_later_appends_to_new_backend' (3389339) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- port::drivers::rebound::tests::rebind_during_a_blocked_store_call_keeps_that_call_old_and_routes_the_next_new stdout ----
+
+thread 'port::drivers::rebound::tests::rebind_during_a_blocked_store_call_keeps_that_call_old_and_routes_the_next_new' (3389336) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- port::drivers::rebound::tests::retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes stdout ----
+
+thread 'port::drivers::rebound::tests::retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes' (3389338) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- port::drivers::rebound::tests::host_supplied_scope_bindings_survive_rebind_without_crossing_scopes stdout ----
+
+thread 'port::drivers::rebound::tests::host_supplied_scope_bindings_survive_rebind_without_crossing_scopes' (3389335) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- port::drivers::schema_tests::migrated_records_are_what_the_provider_reads stdout ----
+
+thread 'port::drivers::schema_tests::migrated_records_are_what_the_provider_reads' (3389344) panicked at crates/tinyagents-session/src/testkit/mod.rs:67:82:
+called `Result::unwrap()` on an `Err` value: StorageError { kind: InvalidInput, message: "scope must be 1 to 256 bytes without whitespace or control characters", source: None }
+
+---- transcript::spend::tests::compaction_turn_with_usage_identical_to_history_still_counts stdout ----
+
+thread 'transcript::spend::tests::compaction_turn_with_usage_identical_to_history_still_counts' (3389943) panicked at crates/tinyagents-session/src/transcript/spend_tests.rs:462:5:
+assertion `left == right` failed
+  left: 5000
+ right: 10000
+
+---- transcript::spend::tests::compacted_transcript_keeps_pre_compaction_spend_and_counts_each_record_once stdout ----
+
+thread 'transcript::spend::tests::compacted_transcript_keeps_pre_compaction_spend_and_counts_each_record_once' (3389942) panicked at crates/tinyagents-session/src/transcript/spend_tests.rs:410:5:
+assertion `left == right` failed
+  left: 50000
+ right: 60000
+
+---- transcript::spend::tests::request_less_compaction_turn_still_counts stdout ----
+
+thread 'transcript::spend::tests::request_less_compaction_turn_still_counts' (3389955) panicked at crates/tinyagents-session/src/transcript/spend_tests.rs:494:5:
+assertion `left == right` failed
+  left: 7000
+ right: 12000
+
+---- transcript::spend::tests::request_less_compaction_with_usage_identical_to_history_still_counts stdout ----
+
+thread 'transcript::spend::tests::request_less_compaction_with_usage_identical_to_history_still_counts' (3389956) panicked at crates/tinyagents-session/src/transcript/spend_tests.rs:527:5:
+assertion `left == right` failed
+  left: 5000
+ right: 10000
+
+
+failures:
+    port::drivers::rebound::tests::concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handles
+    port::drivers::rebound::tests::concurrent_registration_and_rebind_leave_all_retained_handles_on_current_backend
+    port::drivers::rebound::tests::host_supplied_scope_bindings_survive_rebind_without_crossing_scopes
+    port::drivers::rebound::tests::rebind_during_a_blocked_store_call_keeps_that_call_old_and_routes_the_next_new
+    port::drivers::rebound::tests::registration_waits_for_rebind_snapshot_and_then_binds_to_the_new_backend
+    port::drivers::rebound::tests::retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes
+    port::drivers::rebound::tests::retained_journal_handle_routes_later_appends_to_new_backend
+    port::drivers::schema_tests::migrated_records_are_what_the_provider_reads
+    port::drivers::tests::a_failed_recovery_fails_closed_and_is_retried
+    port::drivers::tests::an_agent_gets_the_same_stores_every_time
+    port::drivers::tests::an_unbindable_scope_fails_closed
+    port::drivers::tests::checked_open_caches_success_but_actor_rebinding_has_independent_handles
+    port::drivers::tests::checked_open_preserves_native_recovery_declaration_refusal
+    port::drivers::tests::checked_open_preserves_native_recovery_query_refusal_and_retries
+    port::drivers::tests::data_survives_a_new_provider_on_the_same_backend
+    port::drivers::tests::recover_on_open_interrupts_turns_an_earlier_process_left
+    transcript::spend::tests::compacted_transcript_keeps_pre_compaction_spend_and_counts_each_record_once
+    transcript::spend::tests::compaction_turn_with_usage_identical_to_history_still_counts
+    transcript::spend::tests::request_less_compaction_turn_still_counts
+    transcript::spend::tests::request_less_compaction_with_usage_identical_to_history_still_counts
+
+test result: FAILED. 499 passed; 20 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+error: test failed, to rerun pass `-p tinyagents-session --lib`
