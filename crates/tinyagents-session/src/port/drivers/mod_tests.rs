@@ -462,6 +462,13 @@ impl tinystoragedrivers_api::DocumentStore for FlakyDocs {
     async fn drop_collection(&self, collection: &str) -> Result<(), StorageError> {
         self.inner.drop_collection(collection).await
     }
+    async fn atomic_batch_checked(
+        &self,
+        checks: Vec<tinystoragedrivers_types::ReadCheck>,
+        writes: Vec<tinystoragedrivers_types::WriteOp>,
+    ) -> Result<Vec<tinystoragedrivers_types::WriteResult>, StorageError> {
+        self.inner.atomic_batch_checked(checks, writes).await
+    }
 }
 
 impl StorageBackend for Flaky {
