@@ -14,6 +14,7 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { version = "1", features = ["derive"], optional = true }
 tinyagents-tasks = { path = "../tinyagents-tasks", version = "2.1.4", default-features = false }
 tinyagents-harness = { path = "../tinyagents-harness", version = "2.1.4", default-features = false, features = [
     "langfuse",
@@ -37,6 +38,9 @@ storage-drivers = []
 # dependency above). This feature is retained as a no-op so downstream
 # feature forwards keep compiling.
 tracing = ["tinyagents-harness/tracing"]
+# Exposes JSON Schema for the graph-owned thread goal and todo records without
+# making schema generation a default dependency of graph consumers.
+json-schema = ["dep:schemars", "tinyagents-harness/json-schema"]
 
 [dev-dependencies]
 tinystoragedrivers-sqlite = { workspace = true }
