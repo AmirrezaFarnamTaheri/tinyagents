@@ -726,10 +726,19 @@ async fn rejection_after_middleware_restores_request_model_and_reports_once() {
 
 #[tokio::test]
 async fn switch_wins_over_a_model_chosen_by_before_model_middleware() {
-    let (mut harness, _, b) = two_models(
-        ScriptedModel::replies(vec!["from a"]),
-        ScriptedModel::replies(vec!["from b"]),
-    );
+    let a = Arc::new(ScriptedModel::replies(vec!["from a"]));
+    let b = Arc::new(ScriptedModel::replies(vec!["from b"]));
+    let c = Arc::new(ScriptedModel::replies(vec!["from c"]));
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        a.clone(),
+        [
+            ("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>),
+            ("c".to_string(), c.clone() as Arc<dyn ChatModel<()>>),
+        ],
+    ).with_primary_name("a");
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_model_resolver(Arc::new(resolver));
+    harness.register_tool(Arc::new(FakeTool::returning("lookup", "ok")));
     harness.push_middleware(Arc::new(Tweak {
         model: Some("c"),
         tool_calling: false,
@@ -746,6 +755,7 @@ async fn switch_wins_over_a_model_chosen_by_before_model_middleware() {
     assert_eq!(run.text(), Some("from b".to_string()));
     assert_eq!(model_started(&recorder), vec!["b"]);
     assert_eq!(b.requests().len(), 1);
+    assert!(c.requests().is_empty(), "the switch wins over the available middleware route");
 }
 
 #[tokio::test]
