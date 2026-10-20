@@ -33,6 +33,30 @@ async fn put(storage: &ScopedStorage, collection: &str, id: &str, body: Value) {
     .unwrap();
 }
 
+async fn put_fixture_row(storage: &ScopedStorage, collection: &str, row: &Value) {
+    let docs = storage.documents();
+    let meta = &row["meta"];
+    let mut options = WriteOptions::new()
+        .schema(meta["schema"].as_u64().unwrap() as u32)
+        .created_ms(meta["created_ms"].as_i64().unwrap());
+    if let Some(expires_ms) = meta["expires_ms"].as_i64() {
+        options = options.expires_ms(expires_ms);
+    }
+    let id = row["id"].as_str().unwrap();
+    docs.ensure_collection(&CollectionSpec::new(collection))
+        .await
+        .unwrap();
+    docs.put_with(
+        collection,
+        id,
+        row["doc"].clone(),
+        Precondition::None,
+        options,
+    )
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn live_workflow_leases_and_history_counters_move_to_the_shared_primitives() {
     let storage = scoped();
@@ -186,15 +210,10 @@ async fn archived_public_writer_rows_open_through_current_typed_owners() {
         "ledger.workflow_runs",
         "history.sessions",
         "history.messages",
+        "tsd.counters",
     ] {
         for row in fixture[collection].as_array().unwrap() {
-            put(
-                &storage,
-                collection,
-                row["id"].as_str().unwrap(),
-                row["doc"].clone(),
-            )
-            .await;
+            put_fixture_row(&storage, collection, row).await;
         }
     }
     put(
@@ -251,4 +270,28 @@ async fn archived_public_writer_rows_open_through_current_typed_owners() {
         .unwrap();
     assert_eq!(session.agent_definition_id, "fixture-agent");
     assert_eq!(session.agent_definition_name, "Archived fixture");
+    let messages = ledger.list_messages("fixture-session", None).await.unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, 1);
+    assert_eq!(messages[0].content, "session writer compatibility fixture");
+    let next = ledger
+        .record_message(NewSessionMessage {
+            session_id: "fixture-session".into(),
+            role: "assistant".into(),
+            content: "new writer after opening archived data".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(next, 2);
+    assert_eq!(
+        ledger
+            .list_messages("fixture-session", None)
+            .await
+            .unwrap()
+            .iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
 }

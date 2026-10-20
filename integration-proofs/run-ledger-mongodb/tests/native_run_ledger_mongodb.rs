@@ -76,6 +76,9 @@ async fn terminal_event_append_persists_bson_representable_boundary() {
     let (url, database, storage) = backend(&scope).await;
     let documents = storage.documents().clone();
     let ledger = DriverRunLedger::new(storage);
+    DriverRunLedger::prepare_schema(documents.as_ref())
+        .await
+        .unwrap();
 
     // Seed the public v2 allocation head at the last signed BSON sequence.
     // Appending writes both this nullable terminal head and the event through
