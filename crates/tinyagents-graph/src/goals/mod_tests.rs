@@ -10,7 +10,8 @@ fn schema_string_values(root: &serde_json::Value, mut schema: &serde_json::Value
         schema = root.pointer(pointer).expect("schema reference resolves");
     }
 
-    let mut values = if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array) {
+    let mut values = if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array)
+    {
         values
             .iter()
             .map(|value| value.as_str().expect("string enum value").to_owned())
@@ -89,10 +90,7 @@ fn public_goal_schema_uses_the_serialized_camel_case_record() {
         "complete".to_owned(),
     ];
     expected_status_values.sort();
-    assert_eq!(
-        status_values,
-        expected_status_values
-    );
+    assert_eq!(status_values, expected_status_values);
     for (status, serialized) in [
         (ThreadGoalStatus::Active, "active"),
         (ThreadGoalStatus::Paused, "paused"),
