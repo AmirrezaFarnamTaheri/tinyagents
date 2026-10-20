@@ -471,8 +471,7 @@ async fn chat_model_trait_consumer_observes_admission_refusal() {
 #[tokio::test]
 async fn outer_budget_refunds_before_controlled_acquisition_refusal() {
     let counts = Arc::new(Counts::default());
-    let admission =
-        ScriptedAdmission::new([Step::Immediate(Err(DispatchRefusalReason::Deadline))]);
+    let admission = ScriptedAdmission::new([Step::Immediate(Err(DispatchRefusalReason::Deadline))]);
     let controlled = ControlledChatModel::new(
         model(&counts, ModelBehavior::Succeed),
         options(Some(admission.clone()), None, &counts),
