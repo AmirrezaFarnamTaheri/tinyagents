@@ -6,10 +6,14 @@ and `record_message` APIs at TinyAgents commit
 `31cc57180f67b2f539a3c98d03388251084f0da0`. Its checked-in lock resolves the
 TSD port implementation to version `1.0.0` at
 `141fd9ed0ad5d14a8fb5a1b3e837a719e81ac08d`. The fixture contains already-current
-owner documents; the compatibility test opens the owners, runs their
-self-migration and registry declarations, then reads workflow and session rows
-through the current typed APIs. It does not claim the old writer emitted the
-separate historical rows used by `live_workflow_leases_and_history_counters_move_to_the_shared_primitives`.
+workflow and history owner documents plus the message counter written by the
+old APIs; the compatibility test opens the owners, runs their self-migration
+and registry declarations, then reads the rows through current typed APIs and
+appends the next message id. The fixture records each row's schema, creation
+time, and expiry where present; the test backend assigns new opaque write
+versions and update times. It does not claim the old writer emitted the
+separate historical rows used by
+`live_workflow_leases_and_history_counters_move_to_the_shared_primitives`.
 
 To regenerate from the archived checkout (the generator source is copied in;
 the archived checkout remains at the recorded source revision):
