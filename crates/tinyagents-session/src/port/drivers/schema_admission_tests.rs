@@ -125,10 +125,7 @@ impl StorageBackend for ProbeBackend {
     fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
-    fn for_scope(
-        &self,
-        scope: &Scope,
-    ) -> Result<tinyagents_storage_kit::Storage, StorageError> {
+    fn for_scope(&self, scope: &Scope) -> Result<tinyagents_storage_kit::Storage, StorageError> {
         let scoped = self.inner.for_scope(scope)?;
         Ok(tinyagents_storage_kit::Storage::new(
             Arc::new(ProbeDocs {

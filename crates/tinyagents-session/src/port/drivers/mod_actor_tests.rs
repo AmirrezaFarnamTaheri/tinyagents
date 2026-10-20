@@ -39,7 +39,12 @@ fn arbitrary_provider_reports_actor_factory_absence_without_fallback() {
     let provider = crate::port::InMemorySessionStores::default();
     let scope = Scope::new("host-bound-test").unwrap();
     let storage = MemoryStorage::new().for_scope(&scope).unwrap();
-    assert!(provider.bind_actor(factory(storage.clone())).unwrap().is_none());
+    assert!(
+        provider
+            .bind_actor(factory(storage.clone()))
+            .unwrap()
+            .is_none()
+    );
 
     let shared: Arc<dyn SessionStoreProvider> = Arc::new(provider);
     assert!(shared.bind_actor(factory(storage)).unwrap().is_none());

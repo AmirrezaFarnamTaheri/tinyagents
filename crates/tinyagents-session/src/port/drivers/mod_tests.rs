@@ -151,8 +151,14 @@ fn stores_work_outside_any_runtime() {
 fn host_bound_factory_keeps_agents_in_their_supplied_scopes() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let bindings = [
-        ("agent-a".to_owned(), Scope::new("host-selected-alpha").unwrap()),
-        ("agent-b".to_owned(), Scope::new("host-selected-beta").unwrap()),
+        (
+            "agent-a".to_owned(),
+            Scope::new("host-selected-alpha").unwrap(),
+        ),
+        (
+            "agent-b".to_owned(),
+            Scope::new("host-selected-beta").unwrap(),
+        ),
     ]
     .into_iter()
     .collect();
@@ -298,10 +304,7 @@ impl StorageBackend for Unbindable {
         tinystoragedrivers_types::Capabilities::default()
     }
 
-    fn for_scope(
-        &self,
-        _scope: &Scope,
-    ) -> Result<tinyagents_storage_kit::Storage, StorageError> {
+    fn for_scope(&self, _scope: &Scope) -> Result<tinyagents_storage_kit::Storage, StorageError> {
         Err(StorageError::unavailable("database is down"))
     }
 }
@@ -477,10 +480,7 @@ impl StorageBackend for Flaky {
     fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.storage.capabilities()
     }
-    fn for_scope(
-        &self,
-        scope: &Scope,
-    ) -> Result<tinyagents_storage_kit::Storage, StorageError> {
+    fn for_scope(&self, scope: &Scope) -> Result<tinyagents_storage_kit::Storage, StorageError> {
         let inner = self.storage.for_scope(scope)?;
         Ok(tinyagents_storage_kit::Storage::new(
             Arc::new(FlakyDocs {

@@ -2,7 +2,12 @@ use super::*;
 use crate::testkit::MemoryStorage;
 use crate::testkit::conformance::session_store_conformance;
 use tinyagents_harness::store::{InMemoryAppendStore, InMemoryStore};
-use tinystoragedrivers_api::StorageBackend;
+
+fn host_factory() -> AgentStorageFactory {
+    let scope = tinyagents_storage_kit::Scope::new("host-bound-test").unwrap();
+    let storage = MemoryStorage::new().for_scope(&scope).unwrap();
+    Arc::new(move |_| Ok(storage.clone()))
+}
 
 /// A provider that shares one in-memory transcript locator between every
 /// agent (with in-memory turn-state, key-value and journal stores), the way a
@@ -61,12 +66,7 @@ fn the_in_memory_turn_states_serve_the_port() {
 #[test]
 fn shared_providers_explicitly_leave_actor_rebinding_unsupported() {
     let provider = SharedStores::default();
-    assert!(
-        provider
-            .bind_actor(Arc::new(MemoryStorage::new()))
-            .unwrap()
-            .is_none()
-    );
+    assert!(provider.bind_actor(host_factory()).unwrap().is_none());
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
         }
         fn bind_actor(
             &self,
-            _: Arc<dyn tinystoragedrivers_api::StorageBackend>,
+            _: AgentStorageFactory,
         ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError>
         {
             Err(
@@ -92,7 +92,7 @@ fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
     }
     let provider: Arc<dyn SessionStoreProvider> = Arc::new(RefusingProvider);
     let error = provider
-        .bind_actor(Arc::new(MemoryStorage::new()))
+        .bind_actor(host_factory())
         .err()
         .expect("configured refusal must remain an error");
     assert_eq!(error.kind(), tinystoragedrivers_types::ErrorKind::Fenced);
@@ -206,7 +206,7 @@ fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
         }
         fn bind_actor(
             &self,
-            _: Arc<dyn tinystoragedrivers_api::StorageBackend>,
+            _: AgentStorageFactory,
         ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError>
         {
             Err(tinystoragedrivers_types::StorageError::fenced(
@@ -215,15 +215,14 @@ fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
         }
     }
     let provider: Arc<dyn SessionStoreProvider> = Arc::new(LegacyFactory);
-    let backend: Arc<dyn tinystoragedrivers_api::StorageBackend> = Arc::new(MemoryStorage::new());
     assert!(
         provider
-            .bind_actor_with_schema_admission(backend.clone(), SchemaAdmission::ValidateOnly)
+            .bind_actor_with_schema_admission(host_factory(), SchemaAdmission::ValidateOnly)
             .unwrap()
             .is_none()
     );
     let error = provider
-        .bind_actor_with_schema_admission(backend, SchemaAdmission::Declare)
+        .bind_actor_with_schema_admission(host_factory(), SchemaAdmission::Declare)
         .err()
         .unwrap();
     assert_eq!(error.kind(), tinystoragedrivers_types::ErrorKind::Fenced);
