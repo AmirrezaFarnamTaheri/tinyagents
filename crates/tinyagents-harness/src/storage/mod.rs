@@ -110,6 +110,10 @@ pub async fn open_storage(
     for spec in collections() {
         storage.documents().ensure_collection(&spec).await?;
     }
+    storage
+        .documents()
+        .ensure_collection(&tinyagents_storage_kit::primitives::collection_specs()[1])
+        .await?;
     registry.migrate(&storage, &MigrateOptions::new()).await?;
     for (collection, kind) in [
         ("harness_store", LegacyKv::Flat),

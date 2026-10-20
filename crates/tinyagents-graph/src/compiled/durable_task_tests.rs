@@ -235,7 +235,6 @@ async fn durable_task_memo_is_shared_by_in_process_node_retries() {
 #[tokio::test]
 async fn durable_task_memo_survives_reopening_the_checkpointer() {
     let checkpoint_backend = MemoryBackend::new();
-    let dir = tempfile::tempdir().unwrap();
     let effects = Arc::new(AtomicUsize::new(0));
     {
         let cp: Arc<dyn Checkpointer<i32>> = Arc::new(

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 use serde_json::Value;
 use tinyagents_harness::Result as HarnessResult;
 use tinyagents_harness::store::{AppendStore, Store};
-use tinyagents_storage_kit::StorageBackend;
+use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_types::{Scope, StorageError};
 
 use super::{AgentStores, SessionStoreProvider};

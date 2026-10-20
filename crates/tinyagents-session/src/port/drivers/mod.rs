@@ -44,9 +44,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission};
-use tinyagents_storage_kit::{Blocking, Scope, ScopedStorage, StorageBackend};
-use tinystoragedrivers_api::DocumentStore;
-use tinyagents_storage_kit::{CollectionSpec, StorageError};
+use tinyagents_storage_kit::{Blocking, ScopedStorage};
+use tinystoragedrivers_api::{DocumentStore, StorageBackend};
+use tinystoragedrivers_types::{CollectionSpec, Scope, StorageError};
 
 use super::{AgentStores, SessionStoreProvider};
 
@@ -221,7 +221,7 @@ impl DriverSessionStores {
         &self,
         agent_id: &str,
     ) -> Result<crate::run_ledger::DriverRunLedger, StorageError> {
-        let scoped = self.backend.for_scope(&self.scope_for(agent_id)?)?;
+        let scoped = self.scoped_storage(agent_id)?;
         Ok(match self.schema_admission {
             SchemaAdmission::Declare => crate::run_ledger::DriverRunLedger::new(scoped),
             SchemaAdmission::ValidateOnly => {
@@ -235,7 +235,7 @@ impl DriverSessionStores {
     /// legacy import marker in `tsd.migrations`) that sits beside the session
     /// collections.
     pub(crate) fn scoped_for(&self, agent_id: &str) -> Result<(ScopedStorage, bool), StorageError> {
-        let scoped = self.backend.for_scope(&self.scope_for(agent_id)?)?;
+        let scoped = self.scoped_storage(agent_id)?;
         Ok((scoped, self.schema_admission == SchemaAdmission::Declare))
     }
 
@@ -253,6 +253,12 @@ impl DriverSessionStores {
         super::agent_scope(&self.tenant, agent_id)
     }
 
+    fn scoped_storage(&self, agent_id: &str) -> Result<ScopedStorage, StorageError> {
+        let scope = self.scope_for(agent_id)?;
+        let storage = self.backend.for_scope(&scope)?;
+        Ok(ScopedStorage::new(storage, scope))
+    }
+
     /// The stores of `agent_id`, or the error that kept the backend from
     /// binding its scope.
     ///
@@ -268,7 +274,7 @@ impl DriverSessionStores {
         {
             return Ok(stores.clone());
         }
-        let scoped = self.backend.for_scope(&self.scope_for(agent_id)?)?;
+        let scoped = self.scoped_storage(agent_id)?;
         if self.schema_admission == SchemaAdmission::ValidateOnly {
             let documents = Arc::clone(scoped.documents());
             self.bridge.run(async move {
@@ -386,7 +392,7 @@ impl SessionStoreProvider for DriverSessionStores {
         if let Some(ledger) = ledgers.get(agent_id) {
             return Ok(Some(ledger.clone()));
         }
-        let scoped = self.backend.for_scope(&self.scope_for(agent_id)?)?;
+        let scoped = self.scoped_storage(agent_id)?;
         let ledger: Arc<dyn crate::run_ledger::RunLedgerStore> =
             Arc::new(match self.schema_admission {
                 SchemaAdmission::Declare => crate::run_ledger::DriverRunLedger::new(scoped),

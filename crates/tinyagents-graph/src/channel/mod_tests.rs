@@ -514,7 +514,6 @@ async fn channel_state_graph_round_trips_through_a_durable_checkpointer() {
         .with_channel("total", BinaryAggregate::named("sum").unwrap())
         .with_channel("log", Topic);
 
-    let dir = tempfile::tempdir().unwrap();
     {
         let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(
             crate::test_support::dir_checkpointer::<ChannelState>(&checkpoint_backend),
