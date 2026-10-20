@@ -1,3 +1,0 @@
-[ci-cancel-aware] exec: cargo check -p tinyagents-session --all-features 
-    Checking tinyagents-session v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-session)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.88s

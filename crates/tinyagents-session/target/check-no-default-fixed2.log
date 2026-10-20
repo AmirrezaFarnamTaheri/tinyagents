@@ -1,2 +1,0 @@
-[ci-cancel-aware] exec: cargo check -p tinyagents-session --no-default-features 
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.29s

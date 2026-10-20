@@ -1,5 +1,0 @@
-[ci-cancel-aware] exec: cargo check -p tinyagents-session --all-features 
-    Checking tinyagents-harness v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-harness)
-    Checking tinyagents-tasks v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-tasks)
-    Checking tinyagents-session v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-session)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.83s
