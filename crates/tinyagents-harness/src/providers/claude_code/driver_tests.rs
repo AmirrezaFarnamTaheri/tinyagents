@@ -165,9 +165,7 @@ fn ephemeral_calls_disable_session_persistence_and_durable_calls_keep_resume_arg
 
 #[test]
 fn child_path_prepends_cli_dir_and_keeps_inherited_entries() {
-    let _env = super::super::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env = super::super::ENV_TEST_LOCK.blocking_lock();
     struct PathRestore(Option<std::ffi::OsString>);
     impl Drop for PathRestore {
         fn drop(&mut self) {
@@ -291,9 +289,7 @@ fn openhuman_internal_root_walks_up_to_dotopenhuman() {
 #[cfg(target_os = "macos")]
 #[test]
 fn seatbelt_available_honors_opt_out() {
-    let _env = super::super::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env = super::super::ENV_TEST_LOCK.blocking_lock();
     let prev = std::env::var("OPENHUMAN_CLAUDE_CODE_SANDBOX").ok();
     super::super::test_set_env("OPENHUMAN_CLAUDE_CODE_SANDBOX", "0");
     assert!(
@@ -308,9 +304,7 @@ fn seatbelt_available_honors_opt_out() {
 
 #[tokio::test]
 async fn full_access_defaults_off_and_opts_in_via_env() {
-    let _env = super::super::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env = super::super::ENV_TEST_LOCK.lock().await;
     // Empty workspace (no persisted toggle) → file layer resolves to OFF.
     let (_storage, _sessions, settings_store) = storage_pair("driver-settings-env");
     let key = "OPENHUMAN_CLAUDE_CODE_PERMISSION_MODE";
@@ -339,9 +333,7 @@ async fn full_access_defaults_off_and_opts_in_via_env() {
 #[tokio::test]
 async fn full_access_reads_persisted_toggle_when_env_unset() {
     use super::super::settings::{self, ClaudeCodeSettings};
-    let _env = super::super::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env = super::super::ENV_TEST_LOCK.lock().await;
     let (_storage, _sessions, settings_store) = storage_pair("driver-settings-persisted");
     let key = "OPENHUMAN_CLAUDE_CODE_PERMISSION_MODE";
     let prev = std::env::var(key).ok();
