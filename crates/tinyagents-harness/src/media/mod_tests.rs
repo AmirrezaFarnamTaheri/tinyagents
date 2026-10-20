@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use tinyagents_storage_kit::Scope;
 use tinystoragedrivers_testkit::memory_storage;
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn media_output(root: impl Into<std::path::PathBuf>) -> MediaOutput {
     let scope = Scope::new("local").expect("valid scope");
