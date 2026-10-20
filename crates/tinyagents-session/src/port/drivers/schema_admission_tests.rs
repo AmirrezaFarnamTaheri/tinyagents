@@ -222,9 +222,12 @@ async fn validation_only_refusals_keep_native_sources_and_retry_without_caching(
 async fn explicit_actor_factory_selects_validation_without_changing_original_provider() {
     let (backend, observed) = prepared().await;
     let original = Arc::new(
-        DriverSessionStores::new(crate::testkit::fixed_scope_factory(backend.clone(), "local"))
-            .unwrap()
-            .recover_on_open(true),
+        DriverSessionStores::new(crate::testkit::fixed_scope_factory(
+            backend.clone(),
+            "local",
+        ))
+        .unwrap()
+        .recover_on_open(true),
     );
     let provider: Arc<dyn SessionStoreProvider> = original.clone();
     let actor = provider

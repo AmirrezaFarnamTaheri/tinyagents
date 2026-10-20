@@ -102,8 +102,7 @@ async fn memory_telemetry_retention_preserves_cutoff_and_other_scopes() {
 #[tokio::test]
 async fn sqlite_telemetry_retention_preserves_cutoff_and_other_scopes() {
     let root = tempfile::tempdir().unwrap();
-    let backend =
-        MemoryStorage::new();
+    let backend = MemoryStorage::new();
     prunes_only_old_telemetry(&backend).await;
 }
 
@@ -295,4 +294,3 @@ async fn empty_retention_still_requires_native_admission() {
     );
     assert_eq!(boundary.calls.load(Ordering::SeqCst), 1);
 }
-

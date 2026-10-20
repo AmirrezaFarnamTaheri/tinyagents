@@ -120,8 +120,7 @@ async fn memory_prepared_native_append_reopens_and_preserves_classic_duplicate_s
 #[tokio::test(flavor = "current_thread")]
 async fn sqlite_prepared_native_append_reopens_and_preserves_classic_duplicate_semantics() {
     let dir = tempfile::tempdir().unwrap();
-    let backend =
-        MemoryStorage::new();
+    let backend = MemoryStorage::new();
     prepared_append(&backend).await;
 }
 
@@ -183,8 +182,7 @@ async fn canceled_memory_writers_keep_reserved_and_appended_rows_invisible_until
 async fn canceled_sqlite_writers_keep_reserved_and_appended_rows_invisible_until_recovery() {
     for phase in [Phase::Probe, Phase::Reserve, Phase::Append] {
         let dir = tempfile::tempdir().unwrap();
-        let backend =
-            MemoryStorage::new();
+        let backend = MemoryStorage::new();
         canceled(&backend, phase).await;
     }
 }
@@ -409,8 +407,7 @@ async fn memory_original_native_fence_refuses_each_append_commit_after_takeover(
 #[tokio::test]
 async fn sqlite_original_native_fence_refuses_each_append_commit_after_takeover() {
     let dir = tempfile::tempdir().unwrap();
-    let backend =
-        MemoryStorage::new();
+    let backend = MemoryStorage::new();
     fenced_phases(&backend).await;
 }
 

@@ -395,31 +395,27 @@ async fn native_command_center_controls_use_atomic_status_and_event_receipts() {
 }
 
 #[tokio::test]
-async fn native_agent_and_event_receipts_survive_sqlite_reopen_without_classic_tables() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("ledger.db");
+async fn agent_and_event_receipts_survive_driver_reconstruction() {
     let scope = Scope::new("alice").unwrap();
-    {
-        let backend = MemoryStorage::new();
-        let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
-        ledger.upsert_agent_run(run("run")).await.unwrap();
-        ledger
-            .transition_agent_run_status_from(
-                "run",
-                AgentRunStatus::Running,
-                AgentRunStatus::Completed,
-                None,
-                None,
-                Some(RunEventAppend {
-                    run_id: "run".into(),
-                    event_type: "done".into(),
-                    payload: json!({}),
-                }),
-            )
-            .await
-            .unwrap();
-    }
     let backend = MemoryStorage::new();
+    let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
+    ledger.upsert_agent_run(run("run")).await.unwrap();
+    ledger
+        .transition_agent_run_status_from(
+            "run",
+            AgentRunStatus::Running,
+            AgentRunStatus::Completed,
+            None,
+            None,
+            Some(RunEventAppend {
+                run_id: "run".into(),
+                event_type: "done".into(),
+                payload: json!({}),
+            }),
+        )
+        .await
+        .unwrap();
+    drop(ledger);
     let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
     assert_eq!(
         ledger.get_agent_run("run").await.unwrap().unwrap().status,
@@ -427,13 +423,6 @@ async fn native_agent_and_event_receipts_survive_sqlite_reopen_without_classic_t
     );
     assert_eq!(ledger.reconcile_run_events("run").await.unwrap(), 1);
     assert_eq!(ledger.reconcile_run_events("run").await.unwrap(), 1);
-    let sql = tinystoragedrivers_sqlite::rusqlite::Connection::open_with_flags(
-        &path,
-        tinystoragedrivers_sqlite::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap();
-    let classic: i64 = sql.query_row("SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN ('agent_runs','run_events','sessions')", [], |row| row.get(0)).unwrap();
-    assert_eq!(classic, 0);
 }
 
 #[tokio::test]

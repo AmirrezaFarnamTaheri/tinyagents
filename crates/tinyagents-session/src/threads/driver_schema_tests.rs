@@ -89,8 +89,7 @@ async fn memory_explicit_admission_refuses_missing_declaration_before_read() {
 #[tokio::test(flavor = "current_thread")]
 async fn sqlite_explicit_admission_refuses_missing_declaration_before_read() {
     let dir = tempfile::tempdir().unwrap();
-    let backend =
-        MemoryStorage::new();
+    let backend = MemoryStorage::new();
     missing_declaration(&backend).await;
 }
 #[tokio::test(flavor = "current_thread")]
@@ -100,8 +99,7 @@ async fn memory_prepared_actor_retains_original_native_fence_and_scope() {
 #[tokio::test(flavor = "current_thread")]
 async fn sqlite_prepared_actor_retains_original_native_fence_and_scope() {
     let dir = tempfile::tempdir().unwrap();
-    let backend =
-        MemoryStorage::new();
+    let backend = MemoryStorage::new();
     prepared_fenced(&backend).await;
 }
 

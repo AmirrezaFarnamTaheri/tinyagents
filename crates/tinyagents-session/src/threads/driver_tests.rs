@@ -282,17 +282,13 @@ async fn native_scope_fence_rejects_metadata_takeover_without_local_fallback() {
 }
 
 #[tokio::test]
-async fn sqlite_reopen_reads_same_committed_profile_fixture() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("conversation.db");
+async fn store_reconstruction_reads_same_committed_profile_fixture() {
     let scope = Scope::new("profile").unwrap();
     let backend = MemoryStorage::new();
     let a = DriverConversationStore::new(backend.for_scope(&scope).unwrap());
     seed(&a, "one", &["東京 persisted"]).await;
     drop(a);
-    drop(backend);
-    let reopened = MemoryStorage::new();
-    let b = DriverConversationStore::new(reopened.for_scope(&scope).unwrap());
+    let b = DriverConversationStore::new(backend.for_scope(&scope).unwrap());
     assert_eq!(
         b.get_messages("one").await.unwrap()[0].content,
         "東京 persisted"

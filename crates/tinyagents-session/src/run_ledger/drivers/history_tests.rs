@@ -236,8 +236,7 @@ async fn memory_history_records_and_answers_queries() {
 #[tokio::test]
 async fn sqlite_history_records_and_answers_queries() {
     let root = tempfile::tempdir().unwrap();
-    let backend =
-        MemoryStorage::new();
+    let backend = MemoryStorage::new();
     records_and_queries(&backend).await;
 }
 
@@ -318,8 +317,7 @@ async fn memory_prune_sessions_cascades_to_children_and_index() {
 #[tokio::test]
 async fn sqlite_prune_sessions_cascades_to_children_and_index() {
     let root = tempfile::tempdir().unwrap();
-    let backend =
-        MemoryStorage::new();
+    let backend = MemoryStorage::new();
     retention_removes_only_what_is_stale(&backend).await;
 }
 

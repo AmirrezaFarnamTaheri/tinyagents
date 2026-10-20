@@ -145,12 +145,10 @@ async fn opening_tasks_storage_runs_its_owner_migrations_before_returning() {
 async fn public_store_reads_documents_written_by_pre_migration_31cc_release() {
     use crate::{DriverTaskStore, TaskId, TaskStore};
 
-    let fixture: Value = serde_json::from_str(include_str!("fixtures/legacy-31cc-tasks.json"))
-        .unwrap();
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/legacy-31cc-tasks.json")).unwrap();
     let backend = MemoryBackend::new();
-    let storage = backend
-        .for_scope(&Scope::new("local").unwrap())
-        .unwrap();
+    let storage = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
 
     for spec in collections() {
         storage.documents().ensure_collection(&spec).await.unwrap();
@@ -175,11 +173,24 @@ async fn public_store_reads_documents_written_by_pre_migration_31cc_release() {
     let id = TaskId::new("legacy-task-31cc");
     let record = store.get(&id).unwrap().expect("record survives owner open");
     assert_eq!(record.status, crate::OrchestrationTaskStatus::Completed);
-    assert_eq!(record.spec.thread_id.as_deref(), Some("thread-fixture"));
-    assert_eq!(record.spec.metadata.get("source").map(String::as_str), Some("31cc-public-writer"));
-    assert_eq!(record.result.unwrap().text.as_deref(), Some("fixture completed"));
     assert_eq!(
-        store.history(&id).iter().map(|row| row.status).collect::<Vec<_>>(),
+        record.spec.thread_id.as_ref().map(|id| id.as_str()),
+        Some("thread-fixture")
+    );
+    assert_eq!(
+        record.spec.metadata.get("source").map(String::as_str),
+        Some("31cc-public-writer")
+    );
+    assert_eq!(
+        record.result.unwrap().text.as_deref(),
+        Some("fixture completed")
+    );
+    assert_eq!(
+        store
+            .history(&id)
+            .iter()
+            .map(|row| row.status)
+            .collect::<Vec<_>>(),
         [
             crate::OrchestrationTaskStatus::Pending,
             crate::OrchestrationTaskStatus::Running,
