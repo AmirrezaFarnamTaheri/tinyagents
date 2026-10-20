@@ -150,7 +150,7 @@ async fn failed_session_removal_keeps_the_mapping_and_delivered_turns() {
         .await
         .unwrap();
 
-    faults.fail_operation_nth("documents.put", 1, ErrorKind::Backend);
+    faults.fail_operation_nth("documents.put_with", 1, ErrorKind::Backend);
     assert!(store.remove_if("thread", "session-a").await.is_err());
     faults.clear();
 
@@ -176,7 +176,7 @@ async fn failed_delivery_write_releases_the_reservation_for_retry() {
     let (already, claim) = store.claim_delivered("thread", &fingerprint).await.unwrap();
     assert!(already.is_empty());
 
-    faults.fail_operation_nth("documents.put", 1, ErrorKind::Backend);
+    faults.fail_operation_nth("documents.put_with", 1, ErrorKind::Backend);
     assert!(
         store
             .record_delivered("thread", &fingerprint)
