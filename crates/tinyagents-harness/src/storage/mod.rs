@@ -106,23 +106,27 @@ pub fn collections() -> Vec<CollectionSpec> {
 pub async fn open_storage(
     storage: ScopedStorage,
 ) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
-    let registry = Registry::compose([storage_schema()])?;
-    for spec in collections() {
-        storage.documents().ensure_collection(&spec).await?;
-    }
-    storage
-        .documents()
-        .ensure_collection(&tinyagents_storage_kit::primitives::kv_collection_spec())
-        .await?;
-    registry.migrate(&storage, &MigrateOptions::new()).await?;
-    for (collection, kind) in [
-        ("harness_store", LegacyKv::Flat),
-        ("harness_namespaced_store", LegacyKv::Namespaced),
-        ("harness_response_cache", LegacyKv::ResponseCache),
-    ] {
-        import_legacy_kv(&storage, "harness", collection, kind).await?;
-    }
-    Ok(storage)
+    tinyagents_storage_kit::with_migration_lease(&storage, "harness", |lease| async move {
+        let registry = Registry::compose([storage_schema()])?;
+        for spec in collections() {
+            storage.documents().ensure_collection(&spec).await?;
+        }
+        storage
+            .documents()
+            .ensure_collection(&tinyagents_storage_kit::primitives::kv_collection_spec())
+            .await?;
+        registry.migrate(&storage, &MigrateOptions::new()).await?;
+        lease.renew().await?;
+        for (collection, kind) in [
+            ("harness_store", LegacyKv::Flat),
+            ("harness_namespaced_store", LegacyKv::Namespaced),
+            ("harness_response_cache", LegacyKv::ResponseCache),
+        ] {
+            import_legacy_kv_with_lease(&storage, "harness", collection, kind, &lease).await?;
+        }
+        Ok(storage)
+    })
+    .await
 }
 
 const BLOB_STEP_IDS: [&str; 5] = [
