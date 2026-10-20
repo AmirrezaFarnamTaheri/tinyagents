@@ -124,10 +124,10 @@ pub trait SessionStoreProvider: Send + Sync {
     ///
     /// Defaults to absent so existing providers retain their behavior. Absence
     /// is not permission to create a local database: hosts decide whether and
-    /// how to supply a classic `SqliteRunLedger` or another implementation.
+    /// how to supply a driver-backed implementation.
     /// Multi-tenant providers must resolve identity before returning the handle
     /// and must not derive scope from ledger payloads. This seam alone neither
-    /// routes existing workspace-based callers nor migrates session tables.
+    /// routes existing workspace-based callers nor imports workspace data.
     ///
     /// Scope/admission or backend errors must be returned as errors, distinct
     /// from an unsupported ledger (`Ok(None)`), so callers can fail closed.
