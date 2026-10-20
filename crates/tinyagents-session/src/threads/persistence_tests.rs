@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::json;
-use tinystoragedrivers_core::ErrorKind;
+use tinystoragedrivers_core::{ErrorKind, StorageBackend};
 
 fn thread(id: &str) -> CreateConversationThread {
     CreateConversationThread {
@@ -59,24 +59,57 @@ async fn memory_store_preserves_deterministic_append_and_missing_thread_behavior
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn concurrent_user_request_id_appends_are_idempotent() {
-    let store = DriverConversationStore::in_memory().await;
-    store.ensure_thread(thread("one")).await.unwrap();
-    let user = ThreadMessage {
-        sender: "user".into(),
-        ..message("user:request-1", "queued prompt")
-    };
-
-    let (first, retry) = tokio::join!(
-        store.append_message("one", user.clone()),
-        store.append_message("one", user),
-    );
-    let (first, retry) = (first.unwrap(), retry.unwrap());
-    assert_eq!(first, retry);
-    let messages = store.get_messages("one").await.unwrap();
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].id, "user:request-1");
+    let dir = tempfile::tempdir().unwrap();
+    let backend =
+        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("concurrent.db")).unwrap();
+    backend.prepare_schema().await.unwrap();
+    let scoped = backend
+        .for_scope(&tinystoragedrivers_core::Scope::new("alice").unwrap())
+        .unwrap();
+    DriverConversationStore::prepare_schema(scoped.documents().as_ref())
+        .await
+        .unwrap();
+    DriverConversationStore::prepare_append_schema(scoped.documents().as_ref())
+        .await
+        .unwrap();
+    let store = DriverConversationStore::new_validate_only(scoped);
+    for round in 0..32 {
+        let thread_id = format!("thread-{round}");
+        store.ensure_thread(thread(&thread_id)).await.unwrap();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(8));
+        let mut writers = Vec::new();
+        for _ in 0..8 {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            let thread_id = thread_id.clone();
+            writers.push(tokio::spawn(async move {
+                barrier.wait().await;
+                store
+                    .append_message(
+                        &thread_id,
+                        ThreadMessage {
+                            sender: "user".into(),
+                            ..message("user:request-1", "queued prompt")
+                        },
+                    )
+                    .await
+            }));
+        }
+        let mut result = None;
+        for writer in writers {
+            let row = writer.await.unwrap().unwrap();
+            assert_eq!(row.id, "user:request-1");
+            assert_eq!(row.content, "queued prompt");
+            assert_eq!(result.get_or_insert(row.clone()), &row);
+        }
+        let messages = store.get_messages(&thread_id).await.unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, "user:request-1");
+        assert_eq!(messages[0].content, "queued prompt");
+        assert_eq!(messages[0].sender, "user");
+    }
 }
 
 #[tokio::test]

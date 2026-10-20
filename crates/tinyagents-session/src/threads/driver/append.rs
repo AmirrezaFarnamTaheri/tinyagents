@@ -160,6 +160,11 @@ impl DriverConversationStore {
             }
             let stream = thread.stream()?;
             if thread.visible_end != offset {
+                // A concurrent retry with the same idempotency key may have
+                // committed this exact intent after the check above.
+                if self.committed(intent).await? {
+                    return intent.message();
+                }
                 return Err(StorageError::serialization(
                     "conversation append prefix is inconsistent",
                 )
