@@ -24,7 +24,7 @@ use std::task::Poll;
 use tinyinference_llm::model::budget::{Budget, CallBudget, SpendLimits};
 use tinyinference_llm::model::{
     ChatModel, DeferredHandle, DeferredStatus, InputModality, InputSource, ModelProfile,
-    ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
+    ModelRequest, ModelResponse, ModelStream, ModelStreamItem, ResponseFormat,
 };
 use tinyinference_llm::usage::Usage;
 
@@ -35,7 +35,6 @@ struct PermitState {
     active: AtomicUsize,
     refuse_commit: std::sync::atomic::AtomicBool,
     refuse_recheck: std::sync::atomic::AtomicBool,
-    stream_constructed: std::sync::atomic::AtomicBool,
 }
 
 struct TestPermit {
@@ -129,7 +128,6 @@ impl ScriptedAdmission {
                 active: AtomicUsize::new(0),
                 refuse_commit: std::sync::atomic::AtomicBool::new(false),
                 refuse_recheck: std::sync::atomic::AtomicBool::new(false),
-                stream_constructed: std::sync::atomic::AtomicBool::new(false),
             }),
         })
     }
@@ -313,19 +311,13 @@ impl ChatModel<()> for ArmLateRefusalAfterStreamConstruction {
     async fn stream(
         &self,
         state: &(),
-        request: ModelRequest,
+        mut request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelStream> {
-        let stream = self.inner.stream(state, request).await?;
-        // Arm only after the actual OpenAI adapter has returned its lazy
-        // stream. This makes the first-poll check, rather than stream setup,
-        // the only point where the test can observe the refusal.
-        self.permit_state
-            .stream_constructed
-            .store(true, Ordering::SeqCst);
-        self.permit_state
-            .refuse_recheck
-            .store(true, Ordering::SeqCst);
-        Ok(stream)
+        // OpenAI's stream call sends eagerly. Force its real one-shot
+        // response-format degradation retry so the test can revoke admission
+        // after the first physical send and before the next one.
+        request.response_format = Some(ResponseFormat::JsonObject);
+        self.inner.stream(state, request).await
     }
 }
 
@@ -554,21 +546,24 @@ async fn streaming_agent_turn_preserves_typed_admission_refusal() {
 }
 
 #[tokio::test]
-async fn lazy_stream_rechecks_committed_admission_before_local_http_dispatch() {
-    assert_lazy_stream_rechecks_committed_admission(false).await;
+async fn openai_retry_rechecks_committed_admission_without_money_budget() {
+    assert_openai_retry_rechecks_committed_admission(false).await;
 }
 
 #[tokio::test]
-async fn lazy_stream_rechecks_budgeted_admission_before_local_http_dispatch() {
-    assert_lazy_stream_rechecks_committed_admission(true).await;
+async fn openai_retry_rechecks_committed_admission_with_money_budget() {
+    assert_openai_retry_rechecks_committed_admission(true).await;
 }
 
-async fn assert_lazy_stream_rechecks_committed_admission(with_money_budget: bool) {
+async fn assert_openai_retry_rechecks_committed_admission(with_money_budget: bool) {
     use tinyinference_llm::providers::openai::OpenAiModel;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind local fake provider");
+    let listener = Arc::new(
+        tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind local fake provider"),
+    );
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     let counts = Arc::new(Counts::default());
     let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
@@ -592,12 +587,40 @@ async fn assert_lazy_stream_rechecks_committed_admission(with_money_budget: bool
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("controlled", Arc::new(controlled));
+    let server_permit_state = admission.permits.clone();
+    let server_listener = listener.clone();
+    let mut server = tokio::spawn(async move {
+        let (mut socket, _) = server_listener
+            .accept()
+            .await
+            .expect("first OpenAI request");
+        let mut request = vec![0; 8192];
+        let _ = socket.read(&mut request).await.expect("read first request");
+        server_permit_state
+            .refuse_recheck
+            .store(true, Ordering::SeqCst);
+        let body = br#"{"error":{"message":"response_format json_object unsupported"}}"#;
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("write retryable response headers");
+        socket
+            .write_all(body)
+            .await
+            .expect("write retryable response body");
+    });
     let mut turn = tokio::spawn(async move {
         harness
             .invoke_streaming(
                 &(),
                 (),
-                RunConfig::new("lazy-local-http-dispatch"),
+                RunConfig::new("openai-retry-dispatch"),
                 vec![tinyinference_llm::message::Message::user("hello")],
             )
             .await
@@ -612,16 +635,16 @@ async fn assert_lazy_stream_rechecks_committed_admission(with_money_budget: bool
                     if refusal.reason() == DispatchRefusalReason::Deadline
             ));
         }
-        connection = listener.accept() => {
+        connection = tokio::time::timeout(std::time::Duration::from_secs(2), listener.accept()) => {
             turn.abort();
-            panic!("local provider received a connection after late deadline refusal: {connection:?}");
+            panic!("local provider received a retry connection after late deadline refusal: {connection:?}");
         }
         _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
             turn.abort();
             panic!("turn hung instead of returning the typed late admission refusal");
         }
     }
-    assert!(admission.permits.stream_constructed.load(Ordering::SeqCst));
+    server.abort();
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
     assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
     assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
