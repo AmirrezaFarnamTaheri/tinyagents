@@ -174,7 +174,7 @@ fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
         }
     }
     let ledger: Arc<dyn RunLedgerStore> = Arc::new(DriverRunLedger::new(
-        MemoryStorage::new().for_scope(&Scope::local()).unwrap(),
+        MemoryStorage::new().for_scope(&Scope::new("local").unwrap()).unwrap(),
     ));
     let provider = Arc::new(LedgerProvider {
         sessions: InMemorySessionStores::new(),

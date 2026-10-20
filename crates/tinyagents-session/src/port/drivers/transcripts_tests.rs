@@ -19,7 +19,7 @@ fn message(role: &str, content: &str) -> TranscriptMessage {
 
 fn docs() -> Arc<dyn DocumentStore> {
     let storage = MemoryStorage::new();
-    Arc::clone(storage.for_scope(&Scope::local()).unwrap().documents())
+    Arc::clone(storage.for_scope(&Scope::new("local").unwrap()).unwrap().documents())
 }
 
 fn locator(docs: &Arc<dyn DocumentStore>) -> DriverTranscriptLocator {

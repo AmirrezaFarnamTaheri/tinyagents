@@ -17,7 +17,7 @@ use tinyagents_storage_kit::{
 
 fn agent_storage(backend: &Arc<dyn StorageBackend>) -> ScopedStorage {
     backend
-        .for_scope(&Scope::local().agent("planner").unwrap())
+        .for_scope(&Scope::new("local/agent:planner").unwrap())
         .unwrap()
 }
 

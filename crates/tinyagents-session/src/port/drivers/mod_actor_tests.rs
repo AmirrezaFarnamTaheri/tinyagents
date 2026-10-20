@@ -9,7 +9,7 @@ fn actor_factory_uses_supplied_backend_with_independent_stable_agent_cache() {
     let original_backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let admitted_backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let original =
-        DriverSessionStores::new(original_backend, tinystoragedrivers_types::Scope::local())
+        DriverSessionStores::new(original_backend, Scope::new("local").unwrap())
             .unwrap();
     let old = original.for_agent("alice~planner");
     old.turn_states
@@ -92,7 +92,7 @@ fn fresh_actor_after_native_takeover_preserves_namespace_and_refuses_retained_ol
     set_epoch(&inner, 1);
     let original = DriverSessionStores::new(
         admitted(&inner, 1),
-        tinystoragedrivers_types::Scope::local(),
+        Scope::new("local").unwrap(),
     )
     .unwrap();
     let old = original.for_agent("alice~planner");

@@ -49,6 +49,7 @@
 
 mod drivers;
 mod memory;
+mod scope;
 mod types;
 
 use std::sync::Arc;
@@ -58,6 +59,7 @@ pub use drivers::{
     RebindableSessionStores, SessionStoreRegistry, storage_schema,
 };
 pub use memory::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
+pub use scope::{agent_scope, local_scope, user_scope};
 pub use types::AgentStores;
 
 pub use tinyagents_harness::store::{AppendStore, Store};

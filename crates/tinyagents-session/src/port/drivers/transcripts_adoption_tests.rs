@@ -11,7 +11,7 @@ const THREAD: &str = "t";
 fn locator() -> DriverTranscriptLocator {
     let storage = MemoryStorage::new();
     let docs: Arc<dyn DocumentStore> =
-        Arc::clone(storage.for_scope(&Scope::local()).unwrap().documents());
+        Arc::clone(storage.for_scope(&Scope::new("local").unwrap()).unwrap().documents());
     DriverTranscriptLocator::new(docs, Blocking::new().unwrap(), "memory://adoption")
 }
 

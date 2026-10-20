@@ -11,7 +11,7 @@ use tinyagents_storage_kit::{
 
 fn agent_storage(backend: &Arc<dyn StorageBackend>) -> ScopedStorage {
     backend
-        .for_scope(&Scope::local().agent("planner").unwrap())
+        .for_scope(&Scope::new("local/agent:planner").unwrap())
         .unwrap()
 }
 
@@ -236,7 +236,7 @@ fn migrated_records_are_what_the_provider_reads() {
         })
         .unwrap();
 
-    let provider = DriverSessionStores::new(backend, Scope::local()).unwrap();
+    let provider = DriverSessionStores::new(backend, Scope::new("local").unwrap()).unwrap();
     let stores = provider.for_agent("planner");
     let root = stores.transcripts.root_for_thread("t").expect("indexed");
     let session = root.read_session().unwrap().expect("written");

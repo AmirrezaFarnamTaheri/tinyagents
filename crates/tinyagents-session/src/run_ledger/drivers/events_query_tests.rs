@@ -169,7 +169,7 @@ fn event() -> RunEventAppend {
 #[tokio::test]
 async fn event_pages_follow_native_cursors_with_the_requested_limit() {
     let backend = MemoryStorage::new();
-    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let scoped = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let native = DriverRunLedger::new(scoped.clone());
     for _ in 0..5 {
         native.append_run_event(event()).await.unwrap();
@@ -206,7 +206,7 @@ async fn event_pages_follow_native_cursors_with_the_requested_limit() {
 #[tokio::test]
 async fn zero_limit_event_reads_still_require_native_admission() {
     let backend = MemoryStorage::new();
-    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let scoped = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let documents = Arc::new(BoundedQueries {
         inner: scoped.documents().clone(),
         limits: Default::default(),
@@ -234,7 +234,7 @@ async fn zero_limit_event_reads_still_require_native_admission() {
 #[tokio::test]
 async fn successful_projection_progress_does_not_exhaust_the_contention_budget() {
     let backend = MemoryStorage::new();
-    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let scoped = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let receipts = DriverRunLedger::new(scoped.clone());
     receipts.append_run_event(event()).await.unwrap();
     let streams = Arc::new(ArrivingReceipts {

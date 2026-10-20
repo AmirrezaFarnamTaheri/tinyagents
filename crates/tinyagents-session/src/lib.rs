@@ -65,7 +65,7 @@ use crate::testkit::MemoryStorage;
 //! use tinyagents_storage_kit::{Scope, StorageBackend};
 //!
 //! # tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
-//! let storage = MemoryStorage::new().for_scope(&Scope::local())?;
+//! let storage = MemoryStorage::new().for_scope(&Scope::new("local").unwrap())?;
 //! let ledger = DriverRunLedger::new(storage);
 //!
 //! ledger

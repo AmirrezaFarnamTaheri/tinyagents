@@ -8,7 +8,7 @@ use tinystoragedrivers_types::MemoryStorage;
 fn memory() -> DriverSessionStores {
     DriverSessionStores::new(
         Arc::new(MemoryStorage::new()),
-        tinystoragedrivers_types::Scope::local(),
+        Scope::new("local").unwrap(),
     )
     .unwrap()
 }
@@ -57,7 +57,7 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
         Arc::new(SqliteStorage::open(directory.path().join("prepared.db")).unwrap()),
     ];
     for backend in backends {
-        let scoped = backend.for_scope(&Scope::local()).unwrap();
+        let scoped = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
         DriverSessionStores::prepare_schema(scoped.documents().as_ref())
             .await
             .unwrap();
@@ -85,7 +85,7 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
             "retained"
         );
         let provider =
-            DriverSessionStores::new(backend, tinystoragedrivers_types::Scope::local()).unwrap();
+            DriverSessionStores::new(backend, Scope::new("local").unwrap()).unwrap();
         session_store_conformance(&provider).await;
         session_store_isolation_conformance(&provider).await;
     }
@@ -93,7 +93,7 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
 
 fn sqlite(dir: &tempfile::TempDir) -> DriverSessionStores {
     let storage = SqliteStorage::open(dir.path().join("sessions.db")).unwrap();
-    DriverSessionStores::new(Arc::new(storage), tinystoragedrivers_types::Scope::local()).unwrap()
+    DriverSessionStores::new(Arc::new(storage), Scope::new("local").unwrap()).unwrap()
 }
 
 #[tokio::test]
@@ -134,12 +134,12 @@ fn stores_work_outside_any_runtime() {
 #[test]
 fn an_agent_is_stored_under_its_principal_of_the_tenant() {
     let provider = memory();
-    assert_eq!(provider.tenant(), &Scope::local());
+    assert_eq!(provider.tenant(), &Scope::new("local").unwrap());
     assert_eq!(
         provider.scope_for("agent-7").unwrap().as_str(),
         "local/agent:agent-7"
     );
-    let tenant = Scope::tenant("alice").unwrap();
+    let tenant = Scope::new("u:alice").unwrap();
     let provider =
         DriverSessionStores::new(Arc::new(MemoryStorage::new()), tenant.clone()).unwrap();
     assert_eq!(
@@ -167,7 +167,7 @@ fn an_agent_id_outside_the_segment_grammar_is_hashed_under_its_tenant() {
             .as_str()
             .starts_with("local/agent:~")
     );
-    assert_eq!(spaced.tenant_scope(), Some(Scope::local()));
+    assert_eq!(spaced.tenant_scope(), Some(Scope::new("local").unwrap()));
 }
 
 #[test]
@@ -179,7 +179,7 @@ fn an_empty_agent_id_has_no_scope() {
 
 #[test]
 fn a_provider_needs_a_tenant_scope() {
-    for scope in [Scope::cluster(), Scope::local().agent("someone").unwrap()] {
+    for scope in [Scope::new("cluster").unwrap(), Scope::new("local/agent:someone").unwrap()] {
         let error =
             DriverSessionStores::new(Arc::new(MemoryStorage::new()), scope.clone()).unwrap_err();
         assert_eq!(
@@ -192,10 +192,10 @@ fn a_provider_needs_a_tenant_scope() {
 #[test]
 fn two_tenants_on_one_backend_never_see_each_others_agents() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let alice = DriverSessionStores::new(Arc::clone(&backend), Scope::tenant("alice").unwrap())
+    let alice = DriverSessionStores::new(Arc::clone(&backend), Scope::new("u:alice").unwrap())
         .unwrap()
         .for_agent("a");
-    let bob = DriverSessionStores::new(backend, Scope::tenant("bob").unwrap())
+    let bob = DriverSessionStores::new(backend, Scope::new("u:bob").unwrap())
         .unwrap()
         .for_agent("a");
     alice
@@ -246,14 +246,14 @@ fn data_survives_a_new_provider_on_the_same_backend() {
     let turn = TurnState::started("t", "r", 8, "2026-01-01T00:00:00Z");
     DriverSessionStores::new(
         Arc::clone(&backend),
-        tinystoragedrivers_types::Scope::local(),
+        Scope::new("local").unwrap(),
     )
     .unwrap()
     .for_agent("a")
     .turn_states
     .put(&turn)
     .unwrap();
-    let reopened = DriverSessionStores::new(backend, tinystoragedrivers_types::Scope::local())
+    let reopened = DriverSessionStores::new(backend, Scope::new("local").unwrap())
         .unwrap()
         .for_agent("a");
     assert_eq!(reopened.turn_states.get("t").unwrap(), Some(turn));
@@ -279,7 +279,7 @@ fn recover_on_open_interrupts_turns_an_earlier_process_left() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let earlier = DriverSessionStores::new(
         Arc::clone(&backend),
-        tinystoragedrivers_types::Scope::local(),
+        Scope::new("local").unwrap(),
     )
     .unwrap();
     earlier
@@ -290,7 +290,7 @@ fn recover_on_open_interrupts_turns_an_earlier_process_left() {
 
     let plain = DriverSessionStores::new(
         Arc::clone(&backend),
-        tinystoragedrivers_types::Scope::local(),
+        Scope::new("local").unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -305,7 +305,7 @@ fn recover_on_open_interrupts_turns_an_earlier_process_left() {
         "without the option nothing is touched"
     );
 
-    let recovering = DriverSessionStores::new(backend, tinystoragedrivers_types::Scope::local())
+    let recovering = DriverSessionStores::new(backend, Scope::new("local").unwrap())
         .unwrap()
         .recover_on_open(true);
     assert!(format!("{recovering:?}").contains("recover_on_open: true"));
@@ -355,7 +355,7 @@ impl StorageBackend for Unbindable {
 async fn an_unbindable_scope_fails_closed() {
     let provider = DriverSessionStores::new(
         Arc::new(Unbindable),
-        tinystoragedrivers_types::Scope::local(),
+        Scope::new("local").unwrap(),
     )
     .unwrap();
     assert!(provider.try_for_agent("a").is_err());
@@ -553,7 +553,7 @@ fn a_failed_recovery_fails_closed_and_is_retried() {
             down: Arc::clone(&down),
             reject_declaration: false,
         }),
-        tinystoragedrivers_types::Scope::local(),
+        Scope::new("local").unwrap(),
     )
     .unwrap()
     .recover_on_open(true);
@@ -628,7 +628,7 @@ fn checked_open_preserves_native_scope_refusal_through_dyn_provider() {
             Arc::new(NativeRefusal {
                 marker: marker.clone(),
             }),
-            tinystoragedrivers_types::Scope::local(),
+            Scope::new("local").unwrap(),
         )
         .unwrap(),
     );
@@ -656,7 +656,7 @@ fn checked_open_preserves_native_recovery_query_refusal_and_retries() {
             down: down.clone(),
             reject_declaration: false,
         }),
-        tinystoragedrivers_types::Scope::local(),
+        Scope::new("local").unwrap(),
     )
     .unwrap()
     .recover_on_open(true);
@@ -686,7 +686,7 @@ fn checked_open_preserves_native_recovery_declaration_refusal() {
             down: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             reject_declaration: true,
         }),
-        tinystoragedrivers_types::Scope::local(),
+        Scope::new("local").unwrap(),
     )
     .unwrap()
     .recover_on_open(true);
@@ -707,7 +707,7 @@ fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
     use std::error::Error;
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let provider: Arc<dyn SessionStoreProvider> = Arc::new(
-        DriverSessionStores::new(backend.clone(), tinystoragedrivers_types::Scope::local())
+        DriverSessionStores::new(backend.clone(), Scope::new("local").unwrap())
             .unwrap(),
     );
     let first = provider.try_for_agent("agent").unwrap();
@@ -757,7 +757,7 @@ fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
 async fn native_provider_returns_stable_bound_ledger_and_rebinds_actor_independently() {
     let backend = Arc::new(MemoryStorage::new());
     let provider =
-        DriverSessionStores::new(backend, tinystoragedrivers_types::Scope::local()).unwrap();
+        DriverSessionStores::new(backend, Scope::new("local").unwrap()).unwrap();
     let one = provider.run_ledger_for_agent("alice").unwrap().unwrap();
     let same = provider.run_ledger_for_agent("alice").unwrap().unwrap();
     assert!(Arc::ptr_eq(&one, &same));
@@ -800,14 +800,14 @@ async fn native_provider_returns_stable_bound_ledger_and_rebinds_actor_independe
 
 async fn prepared_restricted_actor_contract(backend: Arc<dyn StorageBackend>) {
     backend.prepare_schema().await.unwrap();
-    let bootstrap = backend.for_scope(&Scope::local()).unwrap();
+    let bootstrap = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     DriverSessionStores::prepare_schema(bootstrap.documents().as_ref())
         .await
         .unwrap();
     let restricted = backend.existing_schema().unwrap();
     let actor = DriverSessionStores::new_with_schema_admission(
         restricted,
-        tinystoragedrivers_types::Scope::local(),
+        Scope::new("local").unwrap(),
         SchemaAdmission::ValidateOnly,
     )
     .unwrap()
@@ -840,7 +840,7 @@ async fn prepared_restricted_actor_recovers_and_uses_sqlite_stores() {
 async fn the_journal_lives_in_the_harness_journal_stream_family() {
     let backend = Arc::new(MemoryStorage::new());
     let provider =
-        DriverSessionStores::new(backend.clone(), tinystoragedrivers_types::Scope::local())
+        DriverSessionStores::new(backend.clone(), Scope::new("local").unwrap())
             .unwrap();
     let stores = provider.for_agent("agent-1");
     stores

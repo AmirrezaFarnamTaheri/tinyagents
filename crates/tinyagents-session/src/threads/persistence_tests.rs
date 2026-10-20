@@ -5,7 +5,7 @@ use tinyagents_storage_kit::{Scope, StorageBackend};
 
 async fn memory_store() -> DriverConversationStore {
     let backend = tinystoragedrivers_testkit::memory_backend();
-    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let scoped = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     DriverConversationStore::prepare_append_schema(scoped.documents())
         .await
         .unwrap();

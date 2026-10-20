@@ -117,7 +117,7 @@ pub(super) fn wrap(native: ScopedStorage) -> DriverRunLedger {
 #[tokio::test]
 async fn last_signed_event_sequence_commits_with_bson_representable_head() {
     let backend = MemoryStorage::new();
-    let native = backend.for_scope(&Scope::local()).unwrap();
+    let native = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let ledger = wrap(native.clone());
     ledger.declare().await.unwrap();
     native

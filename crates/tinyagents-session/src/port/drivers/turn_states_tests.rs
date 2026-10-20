@@ -10,7 +10,7 @@ use tinyagents_storage_kit::{Scope, StorageBackend};
 
 fn store() -> (DriverTurnStates, Arc<dyn DocumentStore>) {
     let storage = MemoryStorage::new();
-    let docs = Arc::clone(storage.for_scope(&Scope::local()).unwrap().documents());
+    let docs = Arc::clone(storage.for_scope(&Scope::new("local").unwrap()).unwrap().documents());
     (
         DriverTurnStates::new(Arc::clone(&docs), Blocking::new().unwrap()),
         docs,

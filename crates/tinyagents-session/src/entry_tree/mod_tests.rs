@@ -34,7 +34,7 @@ impl EntryTree {
     fn new(_workspace: &Workspace, session: &str) -> Self {
         let ledger = Arc::new(DriverRunLedger::new(
             MemoryStorage::new()
-                .for_scope(&Scope::local())
+                .for_scope(&Scope::new("local").unwrap())
                 .expect("local scope"),
         ));
         Self {

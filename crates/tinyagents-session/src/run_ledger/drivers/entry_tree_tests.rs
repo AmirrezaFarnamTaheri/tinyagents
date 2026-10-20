@@ -136,7 +136,7 @@ async fn sqlite_entry_tree_branches_forks_and_context() {
 #[tokio::test]
 async fn import_and_parent_behavior_follow_the_classic_entry_tree_rules() {
     let backend = MemoryStorage::new();
-    let native = DriverRunLedger::new(backend.for_scope(&Scope::local()).unwrap());
+    let native = DriverRunLedger::new(backend.for_scope(&Scope::new("local").unwrap()).unwrap());
     let at = |ordinal| EntryId::derive("s", ordinal);
     // A second root is allowed: `None` is not restricted to the first entry.
     let first = native.entry_append("s", None, kind("root")).await.unwrap();
@@ -229,7 +229,7 @@ async fn compaction_and_pinned_context_project_summary_pinned_then_kept_rows() {
     use crate::entry_tree::CompactionEntry;
     use tinyagents_harness::summarization::SummaryPlacement;
     let backend = MemoryStorage::new();
-    let native = DriverRunLedger::new(backend.for_scope(&Scope::local()).unwrap());
+    let native = DriverRunLedger::new(backend.for_scope(&Scope::new("local").unwrap()).unwrap());
     let mut ids = Vec::new();
     for text in ["old", "pinned", "kept"] {
         ids.push(native.entry_append_to_head("s", kind(text)).await.unwrap());
@@ -417,7 +417,7 @@ fn boundary(
 #[tokio::test]
 async fn competing_entry_allocators_retry_without_losing_parent_or_ordinal() {
     let backend = MemoryStorage::new();
-    let native = backend.for_scope(&Scope::local()).unwrap();
+    let native = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let wrapped = boundary(&native, true, false, false);
     let a = DriverRunLedger::new(wrapped.clone());
     let b = DriverRunLedger::new(wrapped);
@@ -441,7 +441,7 @@ async fn competing_entry_allocators_retry_without_losing_parent_or_ordinal() {
 async fn tree_batch_refusal_preserves_entries_labels_head_and_native_source() {
     use tinystoragedrivers_types::ErrorKind;
     let backend = MemoryStorage::new();
-    let native = backend.for_scope(&Scope::local()).unwrap();
+    let native = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let reader = DriverRunLedger::new(native.clone());
     let root = reader
         .entry_append_to_head("s", kind("root"))
@@ -478,7 +478,7 @@ async fn tree_batch_refusal_preserves_entries_labels_head_and_native_source() {
 #[tokio::test]
 async fn successful_tree_commit_never_performs_fallible_postcommit_reads() {
     let backend = MemoryStorage::new();
-    let native = backend.for_scope(&Scope::local()).unwrap();
+    let native = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let bound = DriverRunLedger::new(boundary(&native, false, false, true));
     let id = bound
         .entry_append_to_head("s", kind("committed"))
@@ -491,7 +491,7 @@ async fn successful_tree_commit_never_performs_fallible_postcommit_reads() {
 #[tokio::test]
 async fn import_keeps_insertion_order_for_entries_sharing_an_ordinal() {
     let backend = MemoryStorage::new();
-    let native = DriverRunLedger::new(backend.for_scope(&Scope::local()).unwrap());
+    let native = DriverRunLedger::new(backend.for_scope(&Scope::new("local").unwrap()).unwrap());
     let entries: Vec<_> = ["z-first", "a-last"]
         .into_iter()
         .map(|id| Entry {
@@ -519,7 +519,7 @@ async fn import_keeps_insertion_order_for_entries_sharing_an_ordinal() {
 async fn existing_schema_entry_tree_requires_trusted_preparation_and_never_ensures() {
     use tinystoragedrivers_types::ErrorKind;
     let backend = MemoryStorage::new();
-    let scope = Scope::local();
+    let scope = Scope::new("local").unwrap();
     let restricted = backend.existing_schema().unwrap();
     let denied = DriverRunLedger::new_existing_schema(restricted.for_scope(&scope).unwrap());
     assert!(
@@ -554,7 +554,7 @@ async fn existing_schema_entry_tree_requires_trusted_preparation_and_never_ensur
 async fn imported_cycle_and_native_ordinal_exhaustion_refuse_without_partial_entries() {
     use tinystoragedrivers_types::ErrorKind;
     let backend = MemoryStorage::new();
-    let native = DriverRunLedger::new(backend.for_scope(&Scope::local()).unwrap());
+    let native = DriverRunLedger::new(backend.for_scope(&Scope::new("local").unwrap()).unwrap());
     let cycle = Entry {
         id: EntryId::from("cycle"),
         parent_id: Some(EntryId::from("cycle")),
@@ -593,7 +593,7 @@ async fn imported_cycle_and_native_ordinal_exhaustion_refuse_without_partial_ent
 #[tokio::test]
 async fn terminal_entry_allocators_remain_representable_in_native_bson() {
     let backend = MemoryStorage::new();
-    let native = super::event_bson_tests::wrap(backend.for_scope(&Scope::local()).unwrap());
+    let native = super::event_bson_tests::wrap(backend.for_scope(&Scope::new("local").unwrap()).unwrap());
     native.declare().await.unwrap();
     native
         .scoped

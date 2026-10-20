@@ -44,7 +44,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission};
-use tinyagents_storage_kit::{Blocking, DocumentStoreExt, Scope, ScopedStorage, StorageBackend};
+use tinyagents_storage_kit::{Blocking, Scope, ScopedStorage, StorageBackend};
 use tinystoragedrivers_api::DocumentStore;
 use tinyagents_storage_kit::{CollectionSpec, StorageError};
 
@@ -79,7 +79,6 @@ impl std::fmt::Debug for DriverSessionStores {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let agents = self.agents.lock().unwrap_or_else(PoisonError::into_inner);
         f.debug_struct("DriverSessionStores")
-            .field("driver", &self.backend.driver())
             .field("tenant", &self.tenant.as_str())
             .field("agents", &agents.len())
             .field("recover_on_open", &self.recover_on_open)
@@ -251,7 +250,7 @@ impl DriverSessionStores {
     ///
     /// `InvalidInput` for an empty id, or an unusable tenant.
     pub fn scope_for(&self, agent_id: &str) -> Result<Scope, StorageError> {
-        self.tenant.agent(agent_id)
+        super::agent_scope(&self.tenant, agent_id)
     }
 
     /// The stores of `agent_id`, or the error that kept the backend from
@@ -348,7 +347,7 @@ impl DriverSessionStores {
         // The provider's own id keeps two providers with the same driver and
         // scope from claiming one destination; unlike an address, it is
         // never reused.
-        let label = format!("{}://{}/{}", scoped.driver(), self.id, scoped.scope());
+        let label = format!("storage://{}/{}", self.id, scoped.scope());
         let turn_states = Arc::new(DriverTurnStates::new_with_schema_admission(
             Arc::clone(&docs),
             self.bridge.clone(),
@@ -375,7 +374,7 @@ impl DriverSessionStores {
 
 /// A provider's tenant must be a tenant scope without a principal.
 fn check_tenant(tenant: &Scope) -> Result<(), StorageError> {
-    tenant.agent("probe").map(drop)
+    super::agent_scope(tenant, "probe").map(drop)
 }
 
 impl SessionStoreProvider for DriverSessionStores {
@@ -467,7 +466,7 @@ impl SessionStoreProvider for DriverSessionStores {
     }
 
     fn destination_key(&self) -> Option<String> {
-        Some(format!("{}://{}", self.backend.driver(), self.id))
+        Some(format!("storage://{}", self.id))
     }
 }
 

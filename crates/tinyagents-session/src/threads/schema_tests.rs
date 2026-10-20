@@ -18,7 +18,7 @@ const TOKEN: &str = "0b4e8d6c-3c0e-4f5e-9d3f-1d2c3b4a5f60";
 
 fn storage() -> ScopedStorage {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    backend.for_scope(&Scope::local()).unwrap()
+    backend.for_scope(&Scope::new("local").unwrap()).unwrap()
 }
 
 /// The v1 document id of a thread: the hex SHA-256 of its id.

@@ -144,7 +144,7 @@ fn project_row_defaults_telemetry_to_zero_when_absent() {
 fn ledger() -> DriverRunLedger {
     DriverRunLedger::new(
         MemoryStorage::new()
-            .for_scope(&Scope::local())
+            .for_scope(&Scope::new("local").unwrap())
             .expect("local scope"),
     )
 }

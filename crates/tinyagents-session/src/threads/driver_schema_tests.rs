@@ -194,14 +194,14 @@ async fn native_required_feature_validation_accepts_compatible_superset_declarat
 #[tokio::test(flavor = "current_thread")]
 async fn schema_preparation_is_explicit_and_restricted_native_handles_refuse_it() {
     let backend = MemoryStorage::new();
-    let raw = backend.for_scope(&Scope::local()).unwrap();
+    let raw = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     DriverConversationStore::prepare_schema(raw.documents().as_ref())
         .await
         .unwrap();
     let actor = backend
         .existing_schema()
         .unwrap()
-        .for_scope(&Scope::local())
+        .for_scope(&Scope::new("local").unwrap())
         .unwrap();
     let error = DriverConversationStore::prepare_schema(actor.documents().as_ref())
         .await

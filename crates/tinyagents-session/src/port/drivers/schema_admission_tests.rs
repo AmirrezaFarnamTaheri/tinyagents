@@ -147,7 +147,7 @@ async fn prepared() -> (Arc<dyn StorageBackend>, Arc<Observations>) {
     storage.prepare_schema().await.unwrap();
     DriverSessionStores::prepare_schema(
         storage
-            .for_scope(&Scope::local())
+            .for_scope(&Scope::new("local").unwrap())
             .unwrap()
             .documents()
             .as_ref(),
@@ -169,7 +169,7 @@ async fn validation_only_conformance_never_attempts_schema_declaration() {
     let (backend, observed) = prepared().await;
     let provider = DriverSessionStores::new_with_schema_admission(
         backend,
-        tinystoragedrivers_types::Scope::local(),
+        Scope::new("local").unwrap(),
         SchemaAdmission::ValidateOnly,
     )
     .unwrap()
@@ -192,7 +192,7 @@ async fn validation_only_refusals_keep_native_sources_and_retry_without_caching(
     let (backend, observed) = prepared().await;
     let provider = DriverSessionStores::new_with_schema_admission(
         backend,
-        tinystoragedrivers_types::Scope::local(),
+        Scope::new("local").unwrap(),
         SchemaAdmission::ValidateOnly,
     )
     .unwrap();
@@ -223,7 +223,7 @@ async fn validation_only_refusals_keep_native_sources_and_retry_without_caching(
 async fn explicit_actor_factory_selects_validation_without_changing_original_provider() {
     let (backend, observed) = prepared().await;
     let original = Arc::new(
-        DriverSessionStores::new(backend.clone(), tinystoragedrivers_types::Scope::local())
+        DriverSessionStores::new(backend.clone(), Scope::new("local").unwrap())
             .unwrap()
             .recover_on_open(true),
     );
@@ -248,7 +248,7 @@ async fn validation_only_missing_or_incompatible_schema_refuses_before_recovery_
     for incompatible in [false, true] {
         let storage: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
         storage.prepare_schema().await.unwrap();
-        let scoped = storage.for_scope(&Scope::local()).unwrap();
+        let scoped = storage.for_scope(&Scope::new("local").unwrap()).unwrap();
         let mut specs = DriverSessionStores::collection_specs();
         let at = specs.iter().position(|spec| spec.name == "tsd.kv").unwrap();
         let required = specs.remove(at);
@@ -262,7 +262,7 @@ async fn validation_only_missing_or_incompatible_schema_refuses_before_recovery_
         }
         let provider = DriverSessionStores::new_with_schema_admission(
             storage.existing_schema().unwrap(),
-            tinystoragedrivers_types::Scope::local(),
+            Scope::new("local").unwrap(),
             SchemaAdmission::ValidateOnly,
         )
         .unwrap()
@@ -298,7 +298,7 @@ async fn legacy_actor_factory_inherits_validation_policy_without_declaring_schem
     let original: Arc<dyn SessionStoreProvider> = Arc::new(
         DriverSessionStores::new_with_schema_admission(
             backend.clone(),
-            tinystoragedrivers_types::Scope::local(),
+            Scope::new("local").unwrap(),
             SchemaAdmission::ValidateOnly,
         )
         .unwrap()
@@ -318,7 +318,7 @@ async fn validation_only_provider_ledger_uses_prepared_schema_without_declaratio
     storage.prepare_schema().await.unwrap();
     crate::run_ledger::DriverRunLedger::prepare_schema(
         storage
-            .for_scope(&Scope::local())
+            .for_scope(&Scope::new("local").unwrap())
             .unwrap()
             .documents()
             .as_ref(),
@@ -332,7 +332,7 @@ async fn validation_only_provider_ledger_uses_prepared_schema_without_declaratio
     });
     let provider = DriverSessionStores::new_with_schema_admission(
         backend,
-        tinystoragedrivers_types::Scope::local(),
+        Scope::new("local").unwrap(),
         SchemaAdmission::ValidateOnly,
     )
     .unwrap();

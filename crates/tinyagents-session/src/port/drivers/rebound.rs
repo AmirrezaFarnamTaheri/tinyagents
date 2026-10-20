@@ -11,10 +11,12 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 use serde_json::Value;
 use tinyagents_harness::Result as HarnessResult;
 use tinyagents_harness::store::{AppendStore, Store};
-use tinyagents_storage_kit::{Scope, StorageBackend, StorageError};
+use tinyagents_storage_kit::StorageBackend;
+use tinystoragedrivers_types::{Scope, StorageError};
 
 use super::{AgentStores, SessionStoreProvider};
 use crate::DriverSessionStores;
+use crate::port::local_scope;
 use crate::port::{TurnState, TurnStates};
 use crate::transcript::{
     SessionAdoption, SessionRef, ThreadTranscripts, TranscriptHistory, TranscriptLocator,
@@ -72,7 +74,7 @@ impl RebindableSessionStores {
         backend: Arc<dyn StorageBackend>,
         recover_on_open: bool,
     ) -> std::result::Result<Arc<Self>, StorageError> {
-        Self::new_for_tenant(backend, Scope::local(), recover_on_open)
+        Self::new_for_tenant(backend, local_scope(), recover_on_open)
     }
 
     /// Creates a process-registered provider whose agents remain under `tenant`.
@@ -92,7 +94,7 @@ impl RebindableSessionStores {
         backend: Arc<dyn StorageBackend>,
         recover_on_open: bool,
     ) -> std::result::Result<Arc<Self>, StorageError> {
-        Self::new_in_tenant(registry, backend, Scope::local(), recover_on_open)
+        Self::new_in_tenant(registry, backend, local_scope(), recover_on_open)
     }
 
     /// Creates a registry-local provider whose tenant survives backend rebinds.
