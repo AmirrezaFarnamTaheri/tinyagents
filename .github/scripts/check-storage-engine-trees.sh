@@ -10,25 +10,26 @@ has_blocked_dependency() {
 
 self_test() {
   local benign
-  local forbidden
+  local engine
   benign=$(printf '%s\n' \
     'tinyagents-storage-kit v2.2.0' \
     'tinystoragedrivers-api v2.0.0' \
     'tinystoragedrivers-types v2.0.0' \
     'tinystoragedrivers-testkit v2.0.0')
-  forbidden=$(printf '%s\n' \
-    'rusqlite v0.31.0' \
-    'tinystoragedrivers v2.0.0' \
-    'tinystoragedrivers-mongodb v1.0.0' \
-    'tinystoragedrivers-document v2.0.0')
   if has_blocked_dependency <<<"$benign" >/dev/null; then
     echo 'storage-engine dependency check rejected a port or testkit crate' >&2
     return 1
   fi
-  if ! has_blocked_dependency <<<"$forbidden" >/dev/null; then
-    echo 'storage-engine dependency check did not reject a backend crate' >&2
-    return 1
-  fi
+  for engine in \
+    'rusqlite v0.31.0' \
+    'tinystoragedrivers v2.0.0' \
+    'tinystoragedrivers-mongodb v1.0.0' \
+    'tinystoragedrivers-document v2.0.0'; do
+    if ! has_blocked_dependency <<<"$engine" >/dev/null; then
+      printf 'storage-engine dependency check did not reject %s\n' "$engine" >&2
+      return 1
+    fi
+  done
 }
 
 self_test
