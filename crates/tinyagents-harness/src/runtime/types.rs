@@ -25,7 +25,7 @@ use crate::cache::ResponseCache;
 use crate::host::HostCapabilities;
 use crate::limits::RunLimits;
 use crate::middleware::MiddlewareStack;
-use crate::model_registry::ModelRegistry;
+use crate::host::ModelResolver;
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::run_queue::QueueMode;
 use crate::tool::{ToolRegistry, ToolTimeoutSettings};
@@ -735,8 +735,8 @@ impl Default for RunPolicy {
 /// assert_eq!(harness.models().default_name(), Some("mock"));
 /// ```
 pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
-    /// Name-keyed registry of chat models with an optional default.
-    pub(crate) models: ModelRegistry<State>,
+    /// Host-supplied resolver for local SDK turns.
+    pub(crate) model_resolver: Option<Arc<dyn ModelResolver<State>>>,
     /// Name-keyed registry of tools exposed to the model.
     pub(crate) tools: ToolRegistry<State, Ctx>,
     /// Ordered middleware stack wrapping agent, model, and tool execution.
