@@ -334,6 +334,11 @@ impl SessionStoreProvider for DriverSessionStores {
             return Ok(Some(ledger.clone()));
         }
         let scoped = self.scoped_storage(agent_id)?;
+        if self.schema_admission == SchemaAdmission::Declare {
+            let for_open = scoped.clone();
+            self.bridge
+                .run(async move { open_agent_storage(&for_open).await })??;
+        }
         let ledger: Arc<dyn crate::run_ledger::RunLedgerStore> =
             Arc::new(match self.schema_admission {
                 SchemaAdmission::Declare => crate::run_ledger::DriverRunLedger::new(scoped),
@@ -410,6 +415,27 @@ impl SessionStoreProvider for DriverSessionStores {
     fn destination_key(&self) -> Option<String> {
         Some(format!("storage://{}", self.id))
     }
+}
+
+/// Runs the session crate's in-storage migrations on an already-bound scope.
+///
+/// The host supplies the authorized ports; this owner-local open path imports
+/// ledger state that cannot be moved by document steps, then migrates every
+/// session-owned schema before any stores are returned to callers.
+///
+/// # Errors
+/// Returns the first storage or migration error. Migration leases preserve
+/// resumability if an earlier step has already completed.
+pub async fn open_agent_storage(storage: &ScopedStorage) -> Result<(), StorageError> {
+    crate::run_ledger::import_legacy_ledger(storage).await?;
+    let registry = Registry::compose([
+        schema::storage_schema(),
+        crate::run_ledger::ledger_storage_schema(),
+        crate::run_ledger::history_storage_schema(),
+        crate::threads::conversations_storage_schema(),
+    ])?;
+    registry.migrate(storage, &MigrateOptions::new()).await?;
+    Ok(())
 }
 
 #[cfg(test)]
