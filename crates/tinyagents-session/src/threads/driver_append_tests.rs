@@ -129,7 +129,7 @@ async fn sqlite_prepared_native_append_reopens_and_preserves_classic_duplicate_s
 mod fixtures;
 use fixtures::{Action, Fault, Phase, actor, faulted};
 
-async fn canceled(backend: &dyn phase: Phase) {
+async fn canceled(backend: &dyn StorageBackend, phase: Phase) {
     let store = actor(backend).await;
     let fault = Fault::new(phase, Action::Pause);
     let interrupted = faulted(&store, fault.clone());

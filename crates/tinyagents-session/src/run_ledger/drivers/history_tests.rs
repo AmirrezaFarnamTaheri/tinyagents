@@ -11,7 +11,7 @@ use crate::types::{SessionSearchParams, SessionStatus};
 use chrono::Duration;
 use tinyagents_storage_kit::{Precondition};
 
-fn ledger_on(backend: &dyn scope: &str) -> DriverRunLedger {
+fn ledger_on(backend: &dyn StorageBackend, scope: &str) -> DriverRunLedger {
     DriverRunLedger::new(backend.for_scope(&Scope::new(scope).unwrap()).unwrap())
 }
 

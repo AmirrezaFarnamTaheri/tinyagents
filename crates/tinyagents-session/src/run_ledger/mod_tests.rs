@@ -9,7 +9,7 @@ use tinyagents_storage_kit::{Scope};
 
 use super::*;
 
-fn ledger_on(backend: &dyn scope: &str) -> Arc<dyn RunLedgerStore> {
+fn ledger_on(backend: &dyn StorageBackend, scope: &str) -> Arc<dyn RunLedgerStore> {
     Arc::new(DriverRunLedger::new(
         backend.for_scope(&Scope::new(scope).unwrap()).unwrap(),
     ))
