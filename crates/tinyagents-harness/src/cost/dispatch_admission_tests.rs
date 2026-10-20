@@ -658,7 +658,10 @@ async fn assert_openai_retry_rechecks_committed_admission(with_money_budget: boo
     assert_eq!(counts.observer_start.load(Ordering::SeqCst), 1);
 }
 
-struct LazyTypedRefusalModel(DispatchRefusalReason);
+struct LazyTypedRefusalModel {
+    reason: DispatchRefusalReason,
+    barrier: Option<Arc<tokio::sync::Barrier>>,
+}
 
 #[async_trait]
 impl ChatModel<()> for LazyTypedRefusalModel {
@@ -667,7 +670,10 @@ impl ChatModel<()> for LazyTypedRefusalModel {
     }
 
     async fn stream(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelStream> {
-        let reason = self.0;
+        if let Some(barrier) = &self.barrier {
+            barrier.wait().await;
+        }
+        let reason = self.reason;
         let mut recorded = false;
         let stream = futures::stream::poll_fn(move |_| {
             if !recorded {
@@ -689,7 +695,10 @@ async fn turn_keeps_typed_dispatch_outcome_scope_through_lazy_stream_poll() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model(
         "controlled",
-        Arc::new(LazyTypedRefusalModel(DispatchRefusalReason::CallLimit)),
+        Arc::new(LazyTypedRefusalModel {
+            reason: DispatchRefusalReason::CallLimit,
+            barrier: None,
+        }),
     );
 
     let error = harness
@@ -706,6 +715,67 @@ async fn turn_keeps_typed_dispatch_outcome_scope_through_lazy_stream_poll() {
         error,
         TinyAgentsError::PhysicalDispatchAdmission(refusal)
             if refusal.reason() == DispatchRefusalReason::CallLimit
+    ));
+}
+
+#[tokio::test]
+async fn concurrent_lazy_turns_keep_distinct_typed_refusals_call_local() {
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let mut first_harness: AgentHarness<()> = AgentHarness::new();
+    first_harness.register_model(
+        "controlled",
+        Arc::new(LazyTypedRefusalModel {
+            reason: DispatchRefusalReason::CallLimit,
+            barrier: Some(barrier.clone()),
+        }),
+    );
+    let mut second_harness: AgentHarness<()> = AgentHarness::new();
+    second_harness.register_model(
+        "controlled",
+        Arc::new(LazyTypedRefusalModel {
+            reason: DispatchRefusalReason::Cancelled,
+            barrier: Some(barrier),
+        }),
+    );
+
+    let first = tokio::spawn(async move {
+        first_harness
+            .invoke_streaming(
+                &(),
+                (),
+                RunConfig::new("lazy-call-limit-refusal"),
+                vec![tinyinference_llm::message::Message::user("first")],
+            )
+            .await
+    });
+    let second = tokio::spawn(async move {
+        second_harness
+            .invoke_streaming(
+                &(),
+                (),
+                RunConfig::new("lazy-cancel-refusal"),
+                vec![tinyinference_llm::message::Message::user("second")],
+            )
+            .await
+    });
+
+    let first = first
+        .await
+        .expect("first turn task")
+        .expect_err("first refusal reaches its own turn");
+    let second = second
+        .await
+        .expect("second turn task")
+        .expect_err("second refusal reaches its own turn");
+    assert!(matches!(
+        first,
+        TinyAgentsError::PhysicalDispatchAdmission(refusal)
+            if refusal.reason() == DispatchRefusalReason::CallLimit
+    ));
+    assert!(matches!(
+        second,
+        TinyAgentsError::PhysicalDispatchAdmission(refusal)
+            if refusal.reason() == DispatchRefusalReason::Cancelled
     ));
 }
 
