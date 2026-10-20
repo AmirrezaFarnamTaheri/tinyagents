@@ -31,16 +31,19 @@ original TinyMemory `tinymemory-conversations` crate (`ThreadMessage` and
 
 ## Layout in the driver
 
-Metadata lives in the `conversation_threads_v1` collection (one document per
-thread, keyed by the SHA-256 of the thread id). Committed messages live in an
-immutable stream per incarnation, `conversation_messages_v1:<key>:<incarnation>`.
-Recreating a deleted thread, editing a message and cutting a tail each open a
-fresh UUID incarnation.
+Metadata lives in the `conversations.threads` collection (one document per
+thread, id `Key::of([thread_id])`, a flat snake_case body with `*_ms` times).
+Committed messages live in an immutable stream per incarnation,
+`conversations.messages/<thread>/<incarnation>`. Recreating a deleted thread,
+editing a message and cutting a tail each open a fresh UUID incarnation. The
+stored form is separate from the camelCase wire types; see
+[the schema doc](../../../../docs/modules/session/conversations-storage-schema.md)
+for the v1 -> v2 mapping and `conversations_storage_schema()` for the steps.
 
 ### Explicit schema preparation and actor admission
 
-`DriverConversationStore::collection_specs()` publishes the existing bare
-`conversation_threads_v1` declaration. Trusted bootstrap calls
+`DriverConversationStore::collection_specs()` publishes the bare
+`conversations.threads` declaration. Trusted bootstrap calls
 `DriverConversationStore::prepare_schema(documents)` on its raw native document
 port. Native internal stream/database preparation remains a separate host step.
 Restricted native handles refuse this declaration helper.
@@ -57,12 +60,11 @@ scope authority. Default turn-claim refusals perform no native operation.
 The existing `new(scoped)` remains deliberately compatible and does not declare
 or validate schema. It must not be advertised as actor schema safety. Neither
 constructor selects a provider automatically, opens host files or enables imports.
-Plain append requires the additional preparation below; metadata/stream encoding
-remains schema1.
+Plain append requires the additional preparation below.
 
 ### Native plain append and recovery
 
-`append_collection_specs()` adds `conversation_appends_v1` to the existing
+`append_collection_specs()` adds `conversations.appends` to the existing
 metadata declaration. Explicit trusted `prepare_append_schema(documents)`
 prepares both; metadata-only readers retain their previous schema requirements.
 Every append validates both declarations without actor DDL. It requires native
@@ -73,8 +75,8 @@ never selects file persistence.
 
 Reservation atomically checks the observed thread revision and absent pending
 intent. The intent holds an immutable attempt token, incarnation, expected
-stream offset and complete serialized message. All envelope fields are strings;
-compatible numeric TTL declarations cannot expire these fields. Writer-only
+stream offset and the complete message as an object (the stream row it will
+become). Writer-only
 recovery appends or verifies the exact row, then atomically publishes the next
 committed prefix and removes that exact intent version. Readers never recover
 pending work or expose an uncommitted row. Metadata count/last activity follow
@@ -116,6 +118,8 @@ cache.
   `in_memory`, `collection_specs`, `append_collection_specs`,
   `prepare_schema`, `prepare_append_schema`) implementing
   `ConversationPersistence`, plus `ConversationPurgeStats`.
+- **Schema:** `conversations_storage_schema()` (owner `conversations`, scope
+  class Tenant) for the host's `Registry::compose`.
 - **Types:** `ConversationThread`, `ThreadMessage`,
   `CreateConversationThread`, `ThreadMessagePatch`, `CrossThreadHit`.
 - **Deterministic ids:** `DETERMINISTIC_MESSAGE_ID_PREFIX`,
@@ -134,11 +138,14 @@ ambiguity.
 | `persistence.rs` | async contract, typed failures, purge stats, unsupported turn claims |
 | `driver.rs` | metadata CAS, schema policies, in-memory constructor |
 | `driver/append.rs` | writer-only conditional append and checked publication |
-| `driver/pending.rs` | all-string attempt intent and strict pending-record validation |
+| `driver/pending.rs` | attempt intent and strict pending-record validation |
 | `driver/reader.rs` | committed-prefix readers |
 | `driver/rewrite.rs` | message edit, tail cut and purge |
 | `labels.rs` | label canonicalisation |
 | `types.rs` | wire types and deterministic message ids |
+| `dto.rs` | stored (v2) bodies of threads, messages and append intents; time conversion |
+| `schema.rs` | `conversations_storage_schema()`, names and the stream-name rule |
+| `schema_steps.rs` | the v1 -> v2 migration steps |
 | `tokenize.rs` | normalization and n-gram tokenizer |
 | `inverted_index.rs` | in-memory search index |
 | `*_tests.rs` | unit tests |

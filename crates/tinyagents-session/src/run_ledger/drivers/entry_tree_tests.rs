@@ -599,11 +599,11 @@ async fn terminal_entry_allocators_remain_representable_in_native_bson() {
         .documents()
         .put(
             super::entry_tree::HEADS,
-            &super::storage::key(&["append"]),
-            serde_json::json!({"schemaVersion": 1, "record": {
-                "sessionId": "append", "nextOrdinal": i64::MAX,
-                "nextInsertion": 0, "tip": null
-            }}),
+            &super::storage::key(&["append"]).unwrap(),
+            serde_json::json!({
+                "session_id": "append", "next_ordinal": i64::MAX,
+                "next_insertion": 0, "tip": null
+            }),
             tinystoragedrivers_core::Precondition::Absent,
         )
         .await
@@ -636,11 +636,14 @@ async fn terminal_entry_allocators_remain_representable_in_native_bson() {
         let row = native
             .scoped
             .documents()
-            .get(super::entry_tree::HEADS, &super::storage::key(&[session]))
+            .get(
+                super::entry_tree::HEADS,
+                &super::storage::key(&[session]).unwrap(),
+            )
             .await
             .unwrap()
             .unwrap();
-        assert!(row.doc["record"]["nextOrdinal"].is_null());
+        assert!(row.doc["next_ordinal"].is_null());
         assert!(
             matches!(native.entry_append_to_head(session, kind("overflow")).await.unwrap_err(), super::super::LedgerError::Driver(error) if error.kind() == tinystoragedrivers_core::ErrorKind::InvalidInput)
         );

@@ -107,7 +107,7 @@ fn kinds_map_to_the_documented_directories() {
 #[test]
 fn resolves_under_the_convention_namespace() {
     let key = resolve_artifact_key(None, ArtifactKind::Output, "report.md").expect("resolve");
-    assert_eq!(key, "outputs/report.md");
+    assert_eq!(key, "harness/outputs/report.md");
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn scratch_resolves_under_its_own_namespace_not_the_internal_root() {
     let policy = TestPolicy::rooted_at(PathBuf::from("internal/workspace"));
     let key =
         resolve_artifact_key(Some(&policy), ArtifactKind::Scratch, "notes.md").expect("resolve");
-    assert_eq!(key, "workspace/notes.md");
+    assert_eq!(key, "harness/workspace/notes.md");
 }
 
 #[test]
@@ -169,12 +169,12 @@ fn accepts_leading_current_dir_segments_and_collapses_empty_ones() {
     // `./report.md` is how a model commonly writes a relative path; refusing it
     // would reject a correct request on a formatting technicality.
     let key = resolve_artifact_key(None, ArtifactKind::Output, "./a//report.md").expect("resolve");
-    assert_eq!(key, "outputs/a/report.md");
+    assert_eq!(key, "harness/outputs/a/report.md");
 }
 
 #[test]
 fn rejects_keys_inside_the_internal_root_fail_closed() {
-    let policy = TestPolicy::rooted_at(PathBuf::from("outputs/internal"));
+    let policy = TestPolicy::rooted_at(PathBuf::from("harness/outputs/internal"));
     let err = resolve_artifact_key(Some(&policy), ArtifactKind::Output, "internal/leak.md")
         .expect_err("internal root must be refused");
     assert!(
@@ -372,7 +372,7 @@ async fn write_stores_under_outputs_and_reports_the_key() {
         .await
         .expect("write");
 
-    assert_eq!(artifact.relative_path, "outputs/report.md");
+    assert_eq!(artifact.relative_path, "harness/outputs/report.md");
     assert_eq!(artifact.stored_bytes, 5);
     assert_eq!(artifact.original_bytes, 5);
     assert!(!artifact.redacted);
@@ -465,18 +465,47 @@ async fn scratch_and_outputs_are_separate_namespaces() {
         .expect("write scratch");
 
     assert_eq!(
-        offload.read("outputs/a.md").await.expect("read"),
+        offload.read("harness/outputs/a.md").await.expect("read"),
         Some("out".to_string())
     );
     assert_eq!(
-        offload.read("workspace/a.md").await.expect("read"),
+        offload.read("harness/workspace/a.md").await.expect("read"),
         Some("scratch".to_string())
+    );
+}
+
+/// A path a transcript quoted before the keys moved under `harness/` still reads
+/// the (migrated) artifact.
+#[tokio::test]
+async fn read_accepts_the_pre_v2_directory_names() {
+    let offload = offload();
+    offload
+        .write(ArtifactKind::Output, "a.md", "out")
+        .await
+        .expect("write output");
+    offload
+        .write(ArtifactKind::Scratch, "b.md", "scratch")
+        .await
+        .expect("write scratch");
+    assert_eq!(
+        offload.read("outputs/a.md").await.unwrap().as_deref(),
+        Some("out")
+    );
+    assert_eq!(
+        offload.read("workspace/b.md").await.unwrap().as_deref(),
+        Some("scratch")
     );
 }
 
 #[tokio::test]
 async fn read_returns_none_for_a_missing_artifact() {
-    assert_eq!(offload().read("outputs/nope.md").await.expect("read"), None);
+    assert_eq!(
+        offload()
+            .read("harness/outputs/nope.md")
+            .await
+            .expect("read"),
+        None
+    );
 }
 
 #[tokio::test]
@@ -486,7 +515,7 @@ async fn read_refuses_keys_outside_the_two_namespaces() {
         "internal/state",
         "etc/passwd",
         "outputs",
-        "outputs/../workspace/x",
+        "harness/outputs/../workspace/x",
     ] {
         let err = offload.read(key).await.expect_err("must be refused");
         assert!(
@@ -512,7 +541,7 @@ async fn artifacts_land_on_a_host_supplied_blob_store() {
         .expect("write");
 
     let blob = blobs
-        .get("outputs/report.md")
+        .get("harness/outputs/report.md")
         .await
         .expect("get")
         .expect("present on the host store");

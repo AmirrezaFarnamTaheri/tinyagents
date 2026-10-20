@@ -25,6 +25,13 @@ surface and operational constraints.
   - `StoreEventJournal<A: AppendStore>` — store-backed implementation; the
     stream key is the run id, so a `harness::store::AppendStore` (e.g. a
     JSONL file or Sqlite-backed store) durably persists observations per run.
+    Stored entries omit what the stream already says (`run_id`, `root_run_id`
+    unless it differs, and the `{run_id}-evt-{offset}` event id); readers
+    rebuild the `AgentObservation` wire type unchanged. `seal_run(run_id)`
+    closes a finished run's journal (the host calls it when a run ends;
+    `reap_orphaned_runs_and_seal` does it for orphans) without changing any
+    read; with `DriverAppendStore::journal` the stream is
+    `harness.journal/<run id>`, sealed on finish and kept 30 days.
 - `HarnessStatusStore` (trait) — a compact "what is running now?" surface
   (phase, counters, last-updated) distinct from the full journal.
   - `InMemoryStatusStore` — in-process implementation.

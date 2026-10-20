@@ -5,6 +5,8 @@
 //! individual writes or switch to a local SQLite database.
 
 mod agents;
+mod dto;
+mod dto_history;
 mod effects;
 mod entry_tree;
 mod events;
@@ -14,7 +16,11 @@ mod history_retention;
 mod import;
 #[cfg(feature = "legacy-import")]
 mod legacy_import;
+mod legacy_state;
 mod retention;
+mod schema;
+mod steps;
+mod steps_history;
 mod storage;
 mod team;
 #[cfg(feature = "legacy-import")]
@@ -24,9 +30,14 @@ pub use import::AgentImportReport;
 #[cfg(feature = "legacy-import")]
 pub use legacy_import::{ImportCounts, LegacyDatabaseReport};
 
+pub use legacy_state::{LegacyLedgerImport, import_legacy_ledger};
+pub use schema::{history_storage_schema, ledger_storage_schema};
 use std::sync::Arc;
-use storage::{MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank};
-use tinystoragedrivers_core::{Filter, Query, Scope, ScopedStorage, Sort, StorageError};
+use storage::{
+    LEDGER_OWNER, MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank, now, trunc,
+    workflow_lease_key,
+};
+use tinystoragedrivers_core::{Filter, Leases, Query, Scope, ScopedStorage, Sort, StorageError};
 use tokio::sync::OnceCell;
 
 use super::LedgerResult as Result;
@@ -87,7 +98,12 @@ impl DriverRunLedger {
     pub async fn prepare_schema(
         documents: &dyn tinystoragedrivers_core::DocumentStore,
     ) -> std::result::Result<(), StorageError> {
-        for spec in Self::collection_specs() {
+        // The shared `tsd.*` collections (leases, counters, migrations) are
+        // declared with them: the ledger reads and writes those too.
+        for spec in Self::collection_specs()
+            .into_iter()
+            .chain(storage::primitive_specs())
+        {
             documents.ensure_collection(&spec).await?;
         }
         Ok(())
@@ -100,7 +116,43 @@ impl DriverRunLedger {
 }
 
 impl DriverRunLedger {
+    /// Driver leases (`tsd.leases`) timed at `now`, so expiry is tested without sleeps.
+    fn leases_at(&self, now: DateTime<Utc>) -> Leases {
+        let ms = u64::try_from(now.timestamp_millis()).unwrap_or(0);
+        Leases::new(self.scoped.documents()).with_clock(Arc::new(move || ms))
+    }
+
+    /// `row` with the live driver lease of its run, if one is held.
+    async fn with_lease(&self, mut row: WorkflowRun, now: DateTime<Utc>) -> Result<WorkflowRun> {
+        let lease = self
+            .leases_at(now)
+            .current(LEDGER_OWNER, &workflow_lease_key(&row.id)?)
+            .await?;
+        if let Some(lease) = lease {
+            row.lease_owner = Some(lease.holder);
+            row.lease_expires_at = Some(dto::from_ms(lease.expires_ms)?);
+        }
+        Ok(row)
+    }
+
+    /// End the live lease of `run_id`, whoever holds it. Nothing happens when none is held.
+    async fn release_workflow_lease(&self, run_id: &str, now: DateTime<Utc>) -> Result<()> {
+        let leases = self.leases_at(now);
+        let lease_key = workflow_lease_key(run_id)?;
+        if let Some(lease) = leases.current(LEDGER_OWNER, &lease_key).await? {
+            leases
+                .release(LEDGER_OWNER, &lease_key, &lease.holder, lease.epoch)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// The timestamp is explicit internally so the expiry boundary is tested without sleeps.
+    ///
+    /// The lease is a `tsd.leases` record; the run record only gets its revision
+    /// bumped, in a second write, so a claim is no longer one atomic document
+    /// change. A crash between the two leaves the lease held and the revision
+    /// unchanged, which the next claim after expiry resolves.
     async fn claim_workflow_at(
         &self,
         id: &str,
@@ -108,24 +160,44 @@ impl DriverRunLedger {
         lease_for: chrono::Duration,
         now: DateTime<Utc>,
     ) -> Result<WorkflowLeaseClaim> {
-        self.change(WORKFLOWS, id, |previous: Option<WorkflowRun>| {
-            let Some(mut row) = previous else {
-                return Ok((None, WorkflowLeaseClaim::Missing));
-            };
-            if row.lease_owner.is_some()
-                && row.lease_owner.as_deref() != Some(owner)
-                && row.lease_expires_at.is_some_and(|expires| expires > now)
-            {
-                return Ok((None, WorkflowLeaseClaim::Busy(row)));
-            }
-            row.lease_owner = Some(owner.into());
-            row.lease_expires_at = Some(now + lease_for);
-            row.updated_at = now;
-            row.revision = next_revision(row.revision)?;
-            Ok((Some(row.clone()), WorkflowLeaseClaim::Acquired(row)))
-        })
-        .await
-        .map_err(Into::into)
+        let Some(found) = self.read::<WorkflowRun>(WORKFLOWS, id).await? else {
+            return Ok(WorkflowLeaseClaim::Missing);
+        };
+        let lease_key = workflow_lease_key(id)?;
+        let ttl_ms = lease_for.num_milliseconds();
+        let leases = self.leases_at(now);
+        let Some(mut lease) = leases
+            .acquire(LEDGER_OWNER, &lease_key, owner, ttl_ms.max(1))
+            .await?
+        else {
+            return Ok(WorkflowLeaseClaim::Busy(
+                self.with_lease(found.doc, now).await?,
+            ));
+        };
+        if ttl_ms <= 0 {
+            // A lease that is already over (the classic claim accepted any
+            // duration): take the holder's tenure, then end it at once.
+            leases
+                .release(LEDGER_OWNER, &lease_key, owner, lease.epoch)
+                .await?;
+            lease.expires_ms = now.timestamp_millis() + ttl_ms;
+        }
+        let bumped = self
+            .change(WORKFLOWS, id, |previous: Option<WorkflowRun>| {
+                let Some(mut row) = previous else {
+                    return Ok((None, None));
+                };
+                row.updated_at = now;
+                row.revision = next_revision(row.revision)?;
+                Ok((Some(row.clone()), Some(row)))
+            })
+            .await?;
+        let Some(mut row) = bumped else {
+            return Ok(WorkflowLeaseClaim::Missing);
+        };
+        row.lease_owner = Some(lease.holder);
+        row.lease_expires_at = Some(dto::from_ms(lease.expires_ms)?);
+        Ok(WorkflowLeaseClaim::Acquired(row))
     }
 
     /// Renewal changes the native version, but preserves the workflow lifecycle revision.
@@ -136,18 +208,29 @@ impl DriverRunLedger {
         lease_for: chrono::Duration,
         now: DateTime<Utc>,
     ) -> Result<bool> {
+        let leases = self.leases_at(now);
+        let lease_key = workflow_lease_key(id)?;
+        let Some(current) = leases.current(LEDGER_OWNER, &lease_key).await? else {
+            return Ok(false);
+        };
+        if current.holder != owner {
+            return Ok(false);
+        }
+        let ttl_ms = lease_for.num_milliseconds().max(1);
+        let renewed = leases
+            .renew(LEDGER_OWNER, &lease_key, owner, current.epoch, ttl_ms)
+            .await?;
+        if renewed.is_none() {
+            return Ok(false);
+        }
         self.change(WORKFLOWS, id, |previous: Option<WorkflowRun>| {
-            let Some(mut row) = previous else {
-                return Ok((None, false));
-            };
-            if row.lease_owner.as_deref() != Some(owner)
-                || row.lease_expires_at.is_none_or(|expires| expires <= now)
-            {
-                return Ok((None, false));
-            }
-            row.lease_expires_at = Some(now + lease_for);
-            row.updated_at = now;
-            Ok((Some(row), true))
+            Ok(match previous {
+                Some(mut row) => {
+                    row.updated_at = now;
+                    (Some(row), true)
+                }
+                None => (None, false),
+            })
         })
         .await
         .map_err(Into::into)
@@ -181,7 +264,7 @@ fn apply_workflow(
     row.status = upsert.status;
     row.summary = upsert.summary.clone().or(row.summary.take());
     row.updated_at = now;
-    row.completed_at = upsert.completed_at.or(row.completed_at);
+    row.completed_at = upsert.completed_at.map(trunc).or(row.completed_at);
     row.revision = next_revision(row.revision)?;
     Ok(())
 }
@@ -195,45 +278,46 @@ impl RunLedgerStore for DriverRunLedger {
 
     /// Implement [`RunLedgerStore::upsert_workflow_run`] without a weaker fallback.
     async fn upsert_workflow_run(&self, upsert: WorkflowRunUpsert) -> Result<WorkflowRun> {
-        let now = Utc::now();
-        self.change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
-            let first = previous.is_none();
-            let mut row = previous.unwrap_or(WorkflowRun {
-                id: upsert.id.clone(),
-                definition_id: upsert.definition_id.clone(),
-                parent_thread_id: None,
-                input: upsert.input.clone(),
-                phase_states: upsert.phase_states.clone(),
-                child_run_ids: upsert.child_run_ids.clone(),
-                status: upsert.status,
-                summary: None,
-                started_at: upsert.started_at.unwrap_or(now),
-                updated_at: now,
-                completed_at: None,
-                revision: 0,
-                lease_owner: None,
-                lease_expires_at: None,
-            });
-            row.definition_id = upsert.definition_id.clone();
-            row.parent_thread_id = upsert.parent_thread_id.clone().or(row.parent_thread_id);
-            row.input = upsert.input.clone();
-            row.phase_states = upsert.phase_states.clone();
-            row.child_run_ids = upsert.child_run_ids.clone();
-            row.status = upsert.status;
-            row.summary = upsert.summary.clone().or(row.summary);
-            row.updated_at = now;
-            row.completed_at = upsert.completed_at.or(row.completed_at);
-            if !first {
-                row.revision = next_revision(row.revision)?;
-            }
-            if row.status.is_terminal() {
-                row.lease_owner = None;
-                row.lease_expires_at = None;
-            }
-            Ok((Some(row.clone()), row))
-        })
-        .await
-        .map_err(Into::into)
+        let now = now();
+        let row = self
+            .change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
+                let first = previous.is_none();
+                let mut row = previous.unwrap_or(WorkflowRun {
+                    id: upsert.id.clone(),
+                    definition_id: upsert.definition_id.clone(),
+                    parent_thread_id: None,
+                    input: upsert.input.clone(),
+                    phase_states: upsert.phase_states.clone(),
+                    child_run_ids: upsert.child_run_ids.clone(),
+                    status: upsert.status,
+                    summary: None,
+                    started_at: upsert.started_at.map(trunc).unwrap_or(now),
+                    updated_at: now,
+                    completed_at: None,
+                    revision: 0,
+                    lease_owner: None,
+                    lease_expires_at: None,
+                });
+                row.definition_id = upsert.definition_id.clone();
+                row.parent_thread_id = upsert.parent_thread_id.clone().or(row.parent_thread_id);
+                row.input = upsert.input.clone();
+                row.phase_states = upsert.phase_states.clone();
+                row.child_run_ids = upsert.child_run_ids.clone();
+                row.status = upsert.status;
+                row.summary = upsert.summary.clone().or(row.summary);
+                row.updated_at = now;
+                row.completed_at = upsert.completed_at.map(trunc).or(row.completed_at);
+                if !first {
+                    row.revision = next_revision(row.revision)?;
+                }
+                Ok((Some(row.clone()), row))
+            })
+            .await?;
+        if row.status.is_terminal() {
+            self.release_workflow_lease(&row.id, now).await?;
+            return Ok(row);
+        }
+        self.with_lease(row, now).await
     }
 
     async fn try_claim_workflow_run(
@@ -242,10 +326,12 @@ impl RunLedgerStore for DriverRunLedger {
         owner: &str,
         lease_for: chrono::Duration,
     ) -> Result<WorkflowLeaseClaim> {
-        self.claim_workflow_at(id, owner, lease_for, Utc::now())
-            .await
+        self.claim_workflow_at(id, owner, lease_for, now()).await
     }
 
+    /// The lease is checked first and renewed (or ended, for a terminal status)
+    /// after the revision-fenced record write; the two are separate documents,
+    /// so a lease that lapses in between does not undo the write.
     async fn compare_and_swap_workflow_run(
         &self,
         upsert: WorkflowRunUpsert,
@@ -253,28 +339,46 @@ impl RunLedgerStore for DriverRunLedger {
         owner: &str,
         lease_for: chrono::Duration,
     ) -> Result<Option<WorkflowRun>> {
-        let now = Utc::now();
-        self.change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
-            let Some(mut row) = previous else {
-                return Ok((None, None));
-            };
-            if row.revision != expected_revision
-                || row.lease_owner.as_deref() != Some(owner)
-                || row.lease_expires_at.is_none_or(|expires| expires <= now)
+        let now = now();
+        let leases = self.leases_at(now);
+        let lease_key = workflow_lease_key(&upsert.id)?;
+        let Some(held) = leases
+            .current(LEDGER_OWNER, &lease_key)
+            .await?
+            .filter(|lease| lease.holder == owner)
+        else {
+            return Ok(None);
+        };
+        let written = self
+            .change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
+                let Some(mut row) = previous else {
+                    return Ok((None, None));
+                };
+                if row.revision != expected_revision {
+                    return Ok((None, None));
+                }
+                apply_workflow(&mut row, &upsert, now)?;
+                Ok((Some(row.clone()), Some(row)))
+            })
+            .await?;
+        let Some(mut row) = written else {
+            return Ok(None);
+        };
+        if row.status.is_terminal() {
+            leases
+                .release(LEDGER_OWNER, &lease_key, owner, held.epoch)
+                .await?;
+        } else {
+            let ttl_ms = lease_for.num_milliseconds().max(1);
+            if let Some(lease) = leases
+                .renew(LEDGER_OWNER, &lease_key, owner, held.epoch, ttl_ms)
+                .await?
             {
-                return Ok((None, None));
+                row.lease_owner = Some(lease.holder);
+                row.lease_expires_at = Some(dto::from_ms(lease.expires_ms)?);
             }
-            apply_workflow(&mut row, &upsert, now)?;
-            if row.status.is_terminal() {
-                row.lease_owner = None;
-                row.lease_expires_at = None;
-            } else {
-                row.lease_expires_at = Some(now + lease_for);
-            }
-            Ok((Some(row.clone()), Some(row)))
-        })
-        .await
-        .map_err(Into::into)
+        }
+        Ok(Some(row))
     }
 
     async fn renew_workflow_run_lease(
@@ -283,8 +387,7 @@ impl RunLedgerStore for DriverRunLedger {
         owner: &str,
         lease_for: chrono::Duration,
     ) -> Result<bool> {
-        self.renew_workflow_at(id, owner, lease_for, Utc::now())
-            .await
+        self.renew_workflow_at(id, owner, lease_for, now()).await
     }
 
     async fn compare_and_swap_workflow_run_lifecycle(
@@ -292,21 +395,23 @@ impl RunLedgerStore for DriverRunLedger {
         upsert: WorkflowRunUpsert,
         expected_revision: u64,
     ) -> Result<Option<WorkflowRun>> {
-        let now = Utc::now();
-        self.change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
-            let Some(mut row) = previous else {
-                return Ok((None, None));
-            };
-            if row.revision != expected_revision {
-                return Ok((None, None));
-            }
-            apply_workflow(&mut row, &upsert, now)?;
-            row.lease_owner = None;
-            row.lease_expires_at = None;
-            Ok((Some(row.clone()), Some(row)))
-        })
-        .await
-        .map_err(Into::into)
+        let now = now();
+        let written = self
+            .change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
+                let Some(mut row) = previous else {
+                    return Ok((None, None));
+                };
+                if row.revision != expected_revision {
+                    return Ok((None, None));
+                }
+                apply_workflow(&mut row, &upsert, now)?;
+                Ok((Some(row.clone()), Some(row)))
+            })
+            .await?;
+        if let Some(row) = &written {
+            self.release_workflow_lease(&row.id, now).await?;
+        }
+        Ok(written)
     }
 
     /// Implement [`RunLedgerStore::append_run_event`] without a weaker fallback.
@@ -316,7 +421,7 @@ impl RunLedgerStore for DriverRunLedger {
 
     /// Implement [`RunLedgerStore::upsert_run_telemetry`] without a weaker fallback.
     async fn upsert_run_telemetry(&self, upsert: RunTelemetryUpsert) -> Result<RunTelemetry> {
-        let now = Utc::now();
+        let now = now();
         self.merge(
             TELEMETRY,
             &upsert.run_id,
@@ -408,10 +513,10 @@ impl RunLedgerStore for DriverRunLedger {
 
     /// Implement [`RunLedgerStore::get_workflow_run`] without a weaker fallback.
     async fn get_workflow_run(&self, id: &str) -> Result<Option<WorkflowRun>> {
-        Ok(self
-            .read::<WorkflowRun>(WORKFLOWS, id)
-            .await?
-            .map(|row| row.doc))
+        let Some(found) = self.read::<WorkflowRun>(WORKFLOWS, id).await? else {
+            return Ok(None);
+        };
+        Ok(Some(self.with_lease(found.doc, now()).await?))
     }
 
     /// Implement [`RunLedgerStore::list_workflow_runs`] without a weaker fallback.
@@ -421,13 +526,13 @@ impl RunLedgerStore for DriverRunLedger {
     ) -> Result<WorkflowRunListResponse> {
         let filter = eq_nonblank(
             Filter::default(),
-            "record.definitionId",
+            "definition_id",
             request.definition_id.as_deref(),
         );
-        let filter = eq_nonblank(filter, "record.status", request.status.as_deref());
+        let filter = eq_nonblank(filter, "status", request.status.as_deref());
         let filter = eq_nonblank(
             filter,
-            "record.parentThreadId",
+            "parent_thread_id",
             request.parent_thread_id.as_deref(),
         );
         let (runs, count) = self
@@ -438,11 +543,19 @@ impl RunLedgerStore for DriverRunLedger {
                 request.offset.unwrap_or(0),
             )
             .await?;
-        Ok(WorkflowRunListResponse { runs, count })
+        let at = now();
+        let mut leased = Vec::with_capacity(runs.len());
+        for run in runs {
+            leased.push(self.with_lease(run, at).await?);
+        }
+        Ok(WorkflowRunListResponse {
+            runs: leased,
+            count,
+        })
     }
 
     async fn upsert_agent_team(&self, upsert: AgentTeamUpsert) -> Result<AgentTeam> {
-        let now = Utc::now();
+        let now = now();
         Ok(self
             .merge(TEAMS, &upsert.id, |previous: Option<AgentTeam>| AgentTeam {
                 id: upsert.id.clone(),
@@ -460,7 +573,7 @@ impl RunLedgerStore for DriverRunLedger {
                 created_at: previous
                     .as_ref()
                     .map(|row| row.created_at)
-                    .unwrap_or(upsert.created_at.unwrap_or(now)),
+                    .unwrap_or(upsert.created_at.map(trunc).unwrap_or(now)),
                 updated_at: now,
                 closed_at: upsert
                     .closed_at
@@ -479,10 +592,10 @@ impl RunLedgerStore for DriverRunLedger {
     ) -> Result<AgentTeamListResponse> {
         let filter = eq_nonblank(
             Filter::default(),
-            "record.parentThreadId",
+            "parent_thread_id",
             request.parent_thread_id.as_deref(),
         );
-        let filter = eq_nonblank(filter, "record.status", request.status.as_deref());
+        let filter = eq_nonblank(filter, "status", request.status.as_deref());
         let (teams, count) = self
             .page(
                 TEAMS,
@@ -498,7 +611,7 @@ impl RunLedgerStore for DriverRunLedger {
         &self,
         upsert: AgentTeamMemberUpsert,
     ) -> Result<AgentTeamMember> {
-        let now = Utc::now();
+        let now = now();
         Ok(self
             .merge(MEMBERS, &upsert.id, |previous: Option<AgentTeamMember>| {
                 AgentTeamMember {
@@ -530,7 +643,7 @@ impl RunLedgerStore for DriverRunLedger {
                     created_at: previous
                         .as_ref()
                         .map(|row| row.created_at)
-                        .unwrap_or(upsert.created_at.unwrap_or(now)),
+                        .unwrap_or(upsert.created_at.map(trunc).unwrap_or(now)),
                     updated_at: now,
                 }
             })
@@ -545,13 +658,13 @@ impl RunLedgerStore for DriverRunLedger {
         Ok(self
             .records(
                 MEMBERS,
-                Query::filter(Filter::eq("record.teamId", team_id)).sort(Sort::asc("createdSql")),
+                Query::filter(Filter::eq("team_id", team_id)).sort(Sort::asc("created_ms")),
             )
             .await?)
     }
 
     async fn upsert_agent_team_task(&self, upsert: AgentTeamTaskUpsert) -> Result<AgentTeamTask> {
-        let now = Utc::now();
+        let now = now();
         Ok(self
             .merge(TASKS, &upsert.id, |previous: Option<AgentTeamTask>| {
                 let live = previous
@@ -594,7 +707,7 @@ impl RunLedgerStore for DriverRunLedger {
                     created_at: previous
                         .as_ref()
                         .map(|row| row.created_at)
-                        .unwrap_or(upsert.created_at.unwrap_or(now)),
+                        .unwrap_or(upsert.created_at.map(trunc).unwrap_or(now)),
                     updated_at: now,
                 }
             })
@@ -609,9 +722,9 @@ impl RunLedgerStore for DriverRunLedger {
         Ok(self
             .records(
                 TASKS,
-                Query::filter(Filter::eq("record.teamId", team_id))
-                    .sort(Sort::asc("record.orderIndex"))
-                    .sort(Sort::asc("createdSql")),
+                Query::filter(Filter::eq("team_id", team_id))
+                    .sort(Sort::asc("order_index"))
+                    .sort(Sort::asc("created_ms")),
             )
             .await?)
     }
@@ -658,7 +771,7 @@ impl RunLedgerStore for DriverRunLedger {
         worker_thread_id: &str,
         run_id: &str,
     ) -> Result<Option<AgentTeamMember>> {
-        let now = Utc::now();
+        let now = now();
         self.change(MEMBERS, member_id, |previous: Option<AgentTeamMember>| {
             let Some(mut row) = previous.filter(|row| row.team_id == team_id) else {
                 return Ok((None, None));
@@ -679,7 +792,7 @@ impl RunLedgerStore for DriverRunLedger {
         team_id: &str,
         member_id: &str,
     ) -> Result<Option<AgentTeamMember>> {
-        let now = Utc::now();
+        let now = now();
         self.change(MEMBERS, member_id, |previous: Option<AgentTeamMember>| {
             let Some(mut row) = previous.filter(|row| row.team_id == team_id) else {
                 return Ok((None, None));
@@ -694,7 +807,7 @@ impl RunLedgerStore for DriverRunLedger {
     }
 
     async fn release_agent_team_task(&self, team_id: &str, task_id: &str) -> Result<bool> {
-        let now = Utc::now();
+        let now = now();
         self.change(TASKS, task_id, |previous: Option<AgentTeamTask>| {
             let Some(mut row) = previous.filter(|row| {
                 row.team_id == team_id && row.status == AgentTeamTaskStatus::InProgress

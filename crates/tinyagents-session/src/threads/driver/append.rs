@@ -4,14 +4,14 @@ use super::*;
 use tinystoragedrivers_core::{Capability, ExpectedDocument, ReadCheck, WriteOp, WriteResult};
 
 impl DriverConversationStore {
-    /// Existing metadata plus the companion durable append-intent declaration.
+    /// Thread metadata plus the companion durable append-intent declaration
+    /// (`conversations.appends`).
     ///
     /// Readers and metadata-only handles retain [`Self::collection_specs`].
-    /// Compatible native required-feature supersets are accepted. Intent fields
-    /// are strings so numeric TTL supersets cannot expire accepted intent.
+    /// Compatible native required-feature supersets are accepted.
     pub fn append_collection_specs() -> Vec<CollectionSpec> {
         let mut specs = Self::collection_specs();
-        specs.push(CollectionSpec::new(APPENDS));
+        specs.push(append_spec());
         specs
     }
 
@@ -55,7 +55,7 @@ impl DriverConversationStore {
         thread_id: &str,
         incarnation: &str,
     ) -> ConversationResult<Option<Versioned<AppendIntent>>> {
-        let key = AppendIntent::key(&Self::key(thread_id)?, incarnation);
+        let key = AppendIntent::key(thread_id, incarnation)?;
         self.docs
             .get(APPENDS, &key)
             .await?
@@ -103,14 +103,13 @@ impl DriverConversationStore {
             .find(|row| row.id == message.id))
     }
 
-    async fn exact_row(&self, intent: &AppendIntent) -> ConversationResult<bool> {
-        let offset = intent.offset()?;
-        let stream = Self::stream(&Self::key(&intent.thread_id)?, &intent.incarnation);
-        let rows = self.streams.read_window(&stream, offset, 1).await?;
+    async fn exact_row(&self, intent: &AppendIntent, stream: &str) -> ConversationResult<bool> {
+        let offset = intent.offset();
+        let rows = self.streams.read_window(stream, offset, 1).await?;
         let Some(row) = rows.first() else {
             return Ok(false);
         };
-        if rows.len() != 1 || row.offset != offset || row.value != intent.record_value()? {
+        if rows.len() != 1 || row.offset != offset || row.value != *intent.record_value() {
             return Err(StorageError::serialization(
                 "conversation stream row disagrees with durable append intent",
             )
@@ -123,7 +122,7 @@ impl DriverConversationStore {
     // an acknowledged successful batch. Row equality alone cannot prove an
     // unobserved ordinary-ID reservation belonged to this attempt.
     async fn committed(&self, intent: &AppendIntent) -> ConversationResult<bool> {
-        let offset = intent.offset()?;
+        let offset = intent.offset();
         let Some(row) = self.load(&intent.thread_id).await? else {
             return Ok(false);
         };
@@ -133,7 +132,7 @@ impl DriverConversationStore {
         {
             return Ok(false);
         }
-        if !self.exact_row(intent).await? {
+        if !self.exact_row(intent, &row.doc.stream()?).await? {
             return Err(
                 StorageError::serialization("missing committed conversation append").into(),
             );
@@ -146,12 +145,11 @@ impl DriverConversationStore {
     }
 
     async fn finish_append(&self, intent: &AppendIntent) -> ConversationResult<ThreadMessage> {
-        let offset = intent.offset()?;
-        let stream = Self::stream(&Self::key(&intent.thread_id)?, &intent.incarnation);
+        let offset = intent.offset();
         for _ in 0..RETRIES {
             self.admit_append().await?;
             if self.committed(intent).await? {
-                return Ok(intent.record()?.message);
+                return intent.message();
             }
             let current = self.load(&intent.thread_id).await?;
             let thread = Self::live(current.as_ref().map(|row| &row.doc))?;
@@ -160,6 +158,7 @@ impl DriverConversationStore {
                     StorageError::conflict("conversation append incarnation retired").into(),
                 );
             }
+            let stream = thread.stream()?;
             if thread.visible_end != offset {
                 return Err(StorageError::serialization(
                     "conversation append prefix is inconsistent",
@@ -174,7 +173,7 @@ impl DriverConversationStore {
             }
             match self
                 .streams
-                .append_batch_if_offset(&stream, offset, vec![intent.record_value()?])
+                .append_batch_if_offset(&stream, offset, vec![intent.record_value().clone()])
                 .await
             {
                 Ok(actual) if actual == offset => {}
@@ -188,7 +187,7 @@ impl DriverConversationStore {
                     if error.kind() == ErrorKind::Conflict
                         || Self::acknowledgment_may_be_lost(&error) =>
                 {
-                    match self.exact_row(intent).await {
+                    match self.exact_row(intent, &stream).await {
                         Ok(true) => {}
                         Ok(false) => return Err(error.into()),
                         Err(ConversationError::Driver(read))
@@ -201,7 +200,7 @@ impl DriverConversationStore {
                 }
                 Err(error) => return Err(error.into()),
             }
-            if !self.exact_row(intent).await? {
+            if !self.exact_row(intent, &stream).await? {
                 return Err(StorageError::serialization(
                     "conversation append row missing after acknowledgment",
                 )
@@ -227,16 +226,8 @@ impl DriverConversationStore {
             current.doc.visible_end = offset
                 .checked_add(1)
                 .ok_or_else(|| StorageError::invalid_input("conversation prefix overflow"))?;
-            current.doc.thread.message_count = current
-                .doc
-                .thread
-                .message_count
-                .checked_add(1)
-                .ok_or_else(|| {
-                    StorageError::invalid_input("conversation message count overflow")
-                })?;
-            current.doc.thread.last_message_at = intent.record()?.message.created_at;
-            let body = serde_json::to_value(&current.doc).map_err(|error| {
+            current.doc.thread.last_message_at = intent.message()?.created_at;
+            let body = serde_json::to_value(current.doc.to_dto()?).map_err(|error| {
                 StorageError::serialization("encode committed conversation metadata")
                     .with_source(error)
             })?;
@@ -258,11 +249,11 @@ impl DriverConversationStore {
                 },
             ];
             match self.docs.atomic_batch_checked(checks, writes).await {
-                Ok(_) => return Ok(intent.record()?.message),
+                Ok(_) => return intent.message(),
                 Err(error) if error.kind() == ErrorKind::Conflict => continue,
                 Err(error) if Self::acknowledgment_may_be_lost(&error) => {
                     return match self.committed(intent).await {
-                        Ok(true) => Ok(intent.record()?.message),
+                        Ok(true) => intent.message(),
                         Ok(false) => Err(error.into()),
                         Err(ConversationError::Driver(read))
                             if Self::acknowledgment_may_be_lost(&read) =>
@@ -305,7 +296,7 @@ impl DriverConversationStore {
             if let Some(existing) = self.duplicate(thread_id, &message).await? {
                 return Ok(existing);
             }
-            let stream = Self::stream(&Self::key(thread_id)?, &thread.incarnation);
+            let stream = thread.stream()?;
             match self
                 .streams
                 .append_batch_if_offset(&stream, thread.visible_end, Vec::new())
@@ -324,8 +315,8 @@ impl DriverConversationStore {
             let Some(current) = current else {
                 return Err(StorageError::not_found("conversation thread not found").into());
             };
-            let intent = AppendIntent::new(&thread, message.clone())?;
-            let pending_key = AppendIntent::key(&current.id, &thread.incarnation);
+            let intent = AppendIntent::new(&thread, &message)?;
+            let pending_key = AppendIntent::key(thread_id, &thread.incarnation)?;
             let checks = vec![
                 Self::check(COLLECTION, &current.id, current.version),
                 ReadCheck {

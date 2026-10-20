@@ -222,21 +222,29 @@ provider actor factory propagates validation-only admission.
 
 | Scoped collection | Records and query indexes |
 | --- | --- |
-| `run_ledger_workflow_runs` | Definition, status, parent thread, updated time and lease expiry |
-| `run_ledger_telemetry` | Run telemetry, updated time |
-| `run_ledger_agent_runs` | Runs; kind, status, parent/worker identities and updated time |
-| `run_ledger_teams` | Parent thread, status and updated time |
-| `run_ledger_members` | Team, creation time and unique `(teamId, name)` |
-| `run_ledger_tasks` | Team, status, claimant and `(teamId, orderIndex, created time)` |
-| `run_ledger_tool_effects` | Run, status and start time |
-| `run_ledger_event_outbox` | Authoritative events, unique per-run sequence |
-| `run_ledger_event_heads` | Next per-run event ordinal |
-| `run_ledger_agent_imports` | Scoped import operation receipt and source fingerprint |
+| `ledger.workflow_runs` | Definition, status, parent thread, updated time; the driver lease is a `tsd.leases` record (`ledger`, `Key::of(["workflow", run])`) |
+| `ledger.telemetry` | Run telemetry, updated time |
+| `ledger.agent_runs` | Runs; kind, status, parent/worker identities and updated time |
+| `ledger.teams` | Parent thread, status and updated time |
+| `ledger.members` | Team, creation time and unique `(team_id, name)` |
+| `ledger.tasks` | Team, status, claimant and `(team_id, order_index, created_ms)` |
+| `ledger.tool_effects` | Run, status and start time |
+| `ledger.event_outbox` | Authoritative events, unique per-run sequence |
+| `ledger.event_heads` | Next per-run event ordinal (recomputed from the events when absent) |
+| `ledger.entry_heads`, `.entries`, `.entry_labels`, `.entry_indexes` | The entry tree |
+| stream `ledger.events/<run>` | The native projection of a run's events |
+| `tsd.migrations` (`ledger`, `agent_import/<operation id>`) | Agent-import receipt; the source fingerprint is its `cursor` |
 
-Records use a version-one envelope, original domain IDs and SQL-compatible
-RFC3339 timestamp sort keys. Physical document IDs are length-prefixed SHA256
-digests; effect IDs bind run and call identities. Durable metadata has no TTL.
-Unknown envelope schemas fail as typed serialization errors.
+Records are bare snake_case storage DTOs with `*_ms` times (the camelCase wire
+types are unchanged) under `Key::of` ids. The writer-set times stay body
+fields: an import or a caller supplies them, and paging and retention order by
+them. Times are whole milliseconds. Durable metadata has no TTL.
+Single-record updates are one `Repo::update` loop. A workflow claim, renewal or
+revision-fenced write is a lease operation plus a record write, so unlike the
+embedded lease it is no longer one atomic document change.
+
+See [`docs/modules/session/ledger-history-storage-schema.md`](../../../../docs/modules/session/ledger-history-storage-schema.md)
+for the v1 to v2 mapping, the steps and the host importer.
 
 ### Status, event receipts and stream projection
 

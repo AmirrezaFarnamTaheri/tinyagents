@@ -41,7 +41,7 @@ pub(super) fn stores(error: &StorageError, bridge: &Blocking) -> AgentStores {
             "refused",
         )),
         turn_states: Arc::new(DriverTurnStates::new(Arc::clone(&docs), bridge.clone())),
-        kv: Arc::new(DriverStore::new(docs)),
+        kv: Arc::new(DriverStore::with_owner(docs, "session")),
         journal: Arc::new(DriverAppendStore::new(streams)),
     }
 }
@@ -66,6 +66,17 @@ impl DocumentStore for Refused {
         _id: &str,
         _doc: Value,
         _precondition: Precondition,
+    ) -> Result<Version> {
+        Err(self.error())
+    }
+
+    async fn put_with(
+        &self,
+        _collection: &str,
+        _id: &str,
+        _doc: Value,
+        _precondition: Precondition,
+        _options: tinystoragedrivers_core::WriteOptions,
     ) -> Result<Version> {
         Err(self.error())
     }

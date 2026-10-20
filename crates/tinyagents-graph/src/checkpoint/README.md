@@ -101,16 +101,12 @@ a [tinystoragedrivers](https://github.com/tinyhumansai/tinystoragedrivers)
 opened, such as SQLite or MongoDB. The handle is bound to a tenant scope, so
 tenants that share a thread id still never see each other's checkpoints.
 
-It uses four collections, all prefixed `graph` by default:
-
-- `<prefix>_checkpoints`: one document per stored checkpoint, keyed by a
-  per-thread insertion sequence. Duplicate ids resolve to the latest write,
-  as in the append-only backends.
-- `<prefix>_threads`: the per-thread sequence counter, advanced with
-  compare-and-swap.
-- `<prefix>_writes`: merged pending writes per `(thread, namespace, checkpoint)`.
-- `<prefix>_leases`: per-thread execution leases, claimed, renewed and
-  released with compare-and-swap.
+It is the one checkpointer: every user shares `graph.checkpoints`,
+`graph.threads` and `graph.writes` and tells itself apart by a namespace
+(`DriverCheckpointer::with_namespace`, default `graph`; `delegation` and `flows`
+for the delegation graph and workflows). Leases live in `tsd.leases`, claimed
+through `Leases`, whose epoch is the write fence. See
+`docs/modules/graph/storage-schema.md`.
 
 It passes the same `testkit::conformance` contracts as the bundled backends:
 checkpointer, writes, lineage and concurrency.

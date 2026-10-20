@@ -177,8 +177,11 @@ impl TranscriptLocator for Destination {
 
 /// An empty driver-backed transcript store (the production store, over memory).
 pub(crate) fn driver() -> Arc<dyn TranscriptLocator> {
-    DriverSessionStores::new(Arc::new(MemoryStorage::new()))
-        .expect("driver session stores over memory")
-        .for_agent("runtime-tests")
-        .transcripts
+    DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()),
+        tinystoragedrivers_core::Scope::local(),
+    )
+    .expect("driver session stores over memory")
+    .for_agent("runtime-tests")
+    .transcripts
 }

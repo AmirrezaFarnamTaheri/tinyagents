@@ -5,11 +5,12 @@
 //! status store is *orphaned*: no executor will ever advance it, yet it lingers
 //! in the "active runs" listing. [`reap_orphaned_runs`] sweeps every
 //! still-active run to the terminal `Cancelled` state with an explanatory error
-//! so the listing reflects reality.
+//! so the listing reflects reality. [`reap_orphaned_runs_and_seal`] also seals
+//! each reaped run's journal, since nothing will append to it again.
 
 use std::time::SystemTime;
 
-use super::HarnessStatusStore;
+use super::{HarnessEventJournal, HarnessStatusStore};
 
 /// Error recorded on a run reaped by the startup sweep. Stable and
 /// grep-friendly so an operator (or a test) can tell a reaped run from a
@@ -24,6 +25,25 @@ pub const ORPHAN_REAP_REASON: &str = "run orphaned: core restarted while the run
 /// failure is logged and does not abort the sweep, and a failure to list logs
 /// and yields `0`. Returns the number of runs reaped.
 pub async fn reap_orphaned_runs(store: &dyn HarnessStatusStore) -> usize {
+    sweep(store, None).await
+}
+
+/// [`reap_orphaned_runs`], and seal the journal of every run it reaped.
+///
+/// A reaped run is finished for good (its executor died with the process), so
+/// its journal gets no more observations: sealing it lets a durable journal
+/// store it compactly and apply its retention period, without changing what a
+/// reader sees. A run that never journaled anything has nothing to seal. A
+/// failure to seal is logged and does not undo the reap or stop the sweep.
+/// Returns the number of runs reaped.
+pub async fn reap_orphaned_runs_and_seal(
+    store: &dyn HarnessStatusStore,
+    journal: &dyn HarnessEventJournal,
+) -> usize {
+    sweep(store, Some(journal)).await
+}
+
+async fn sweep(store: &dyn HarnessStatusStore, journal: Option<&dyn HarnessEventJournal>) -> usize {
     // One id for the whole sweep so every line can be tied to the same boot.
     // Derived from the clock rather than a uuid so it stays ordered in a tail.
     let sweep_id = SystemTime::now()
@@ -70,6 +90,14 @@ pub async fn reap_orphaned_runs(store: &dyn HarnessStatusStore) -> usize {
                     "[agent] startup run sweep sweep_id={sweep_id} run_id={run_id} \
                      transition={from_status}->{to_status} persisted"
                 );
+                if let Some(journal) = journal
+                    && let Err(err) = journal.seal_run(&run_id).await
+                {
+                    tracing::warn!(
+                        "[agent] startup run sweep sweep_id={sweep_id} run_id={run_id} \
+                         journal seal failed: {err}"
+                    );
+                }
             }
             Err(err) => {
                 tracing::warn!(

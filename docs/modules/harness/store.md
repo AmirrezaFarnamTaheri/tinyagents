@@ -496,4 +496,4 @@ Session state now reaches a host's database through `tinyagents_session::port` (
 
 - store operation events
 - value summaries
-- namespace redaction policies
+- namespace redaction policies (v2 names: [storage-schema.md](storage-schema.md))
