@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
-
 use super::{CompletionRouter, CompletionStore, DriverCompletionStore};
 
 /// Outcome of replacing one cached router only if it is still current.

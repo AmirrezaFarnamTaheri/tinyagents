@@ -11,9 +11,9 @@ use tinyagents_session::transcript::{
     DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscripts, TranscriptHistory,
     TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn,
 };
+use tinyagents_storage_kit::{Scope, ScopedStorage};
 use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_testkit::MemoryBackend;
-use tinyagents_storage_kit::{Scope, ScopedStorage};
 use tinystoragedrivers_types::StorageError;
 
 /// An empty transcript store: the production driver-backed locator, over memory.
@@ -189,7 +189,7 @@ pub(crate) fn driver() -> Arc<dyn TranscriptLocator> {
         Ok(ScopedStorage::new(storage, scope))
     });
     DriverSessionStores::new(factory)
-    .expect("driver session stores over memory")
-    .for_agent("runtime-tests")
-    .transcripts
+        .expect("driver session stores over memory")
+        .for_agent("runtime-tests")
+        .transcripts
 }

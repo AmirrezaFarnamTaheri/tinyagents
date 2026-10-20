@@ -51,30 +51,38 @@ async fn independent_adapters_preserve_claim_revision_and_stale_owner_rules() {
             .unwrap(),
         WorkflowLeaseClaim::Busy(_)
     ));
-    assert!(!second
-        .renew("workflow", "owner-b", Duration::from_secs(60))
-        .await
-        .unwrap());
-    assert!(second
-        .compare_and_swap(row(), claimed.revision, "owner-b", Duration::from_secs(60))
-        .await
-        .unwrap()
-        .is_none());
-    assert!(first
-        .renew("workflow", "owner-a", Duration::from_secs(60))
-        .await
-        .unwrap());
+    assert!(
+        !second
+            .renew("workflow", "owner-b", Duration::from_secs(60))
+            .await
+            .unwrap()
+    );
+    assert!(
+        second
+            .compare_and_swap(row(), claimed.revision, "owner-b", Duration::from_secs(60))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        first
+            .renew("workflow", "owner-a", Duration::from_secs(60))
+            .await
+            .unwrap()
+    );
     let updated = first
         .compare_and_swap(row(), claimed.revision, "owner-a", Duration::from_secs(60))
         .await
         .unwrap()
         .unwrap();
     assert_eq!(updated.revision, claimed.revision + 1);
-    assert!(first
-        .compare_and_swap(row(), claimed.revision, "owner-a", Duration::from_secs(60))
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        first
+            .compare_and_swap(row(), claimed.revision, "owner-a", Duration::from_secs(60))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 struct AuthoritativeRegistration;
@@ -191,22 +199,28 @@ async fn expired_owner_takeover_fences_prior_owner_without_sleeping() {
         panic!("expired takeover refused")
     };
     assert!(replacement.revision > expired.revision);
-    assert!(!store
-        .renew("workflow", "old-owner", Duration::from_secs(60))
-        .await
-        .unwrap());
-    assert!(store
-        .compare_and_swap(
-            row(),
-            replacement.revision,
-            "old-owner",
-            Duration::from_secs(60)
-        )
-        .await
-        .unwrap()
-        .is_none());
-    assert!(store
-        .renew("workflow", "new-owner", Duration::from_secs(60))
-        .await
-        .unwrap());
+    assert!(
+        !store
+            .renew("workflow", "old-owner", Duration::from_secs(60))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .compare_and_swap(
+                row(),
+                replacement.revision,
+                "old-owner",
+                Duration::from_secs(60)
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .renew("workflow", "new-owner", Duration::from_secs(60))
+            .await
+            .unwrap()
+    );
 }

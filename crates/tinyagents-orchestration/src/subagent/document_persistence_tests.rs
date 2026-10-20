@@ -338,16 +338,20 @@ async fn pause_replacement_rejects_stale_continuations_and_invalid_imports() {
         store.pause_outcome(&task_key).unwrap().unwrap().output,
         "second"
     );
-    assert!(store
-        .import_record(&key("other"), Some(pause(task_key.clone(), "bad")), None)
-        .is_err());
-    assert!(store
-        .import_record_at(
-            "wrong-component",
-            Some(pause(task_key.clone(), "bad")),
-            None
-        )
-        .is_err());
+    assert!(
+        store
+            .import_record(&key("other"), Some(pause(task_key.clone(), "bad")), None)
+            .is_err()
+    );
+    assert!(
+        store
+            .import_record_at(
+                "wrong-component",
+                Some(pause(task_key.clone(), "bad")),
+                None
+            )
+            .is_err()
+    );
     let invalid = PersistedSubagentPause {
         key: task_key.clone(),
         outcome: SubagentOutcome::completed("task", "not a pause"),

@@ -25,10 +25,10 @@ pub fn memory() -> ScopedStorage {
 /// exercise durable document/stream state only.
 pub fn sqlite(dir: &Path, name: &str) -> ScopedStorage {
     let scope = Scope::new("integration-sqlite").unwrap();
-    let connection = tinystoragedrivers_connect::sqlite::SqliteConnection::open(dir.join(name))
-        .unwrap();
-    let documents = Arc::new(SqliteDocuments::new(connection.clone(), scope.clone()))
-        as Arc<dyn DocumentStore>;
+    let connection =
+        tinystoragedrivers_connect::sqlite::SqliteConnection::open(dir.join(name)).unwrap();
+    let documents =
+        Arc::new(SqliteDocuments::new(connection.clone(), scope.clone())) as Arc<dyn DocumentStore>;
     let streams = Arc::new(SqliteStreams::new(connection, scope.clone())) as Arc<dyn StreamStore>;
     let memory = MemoryBackend::new().for_scope(&scope).unwrap();
     let storage = Storage::new(

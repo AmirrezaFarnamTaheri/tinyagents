@@ -97,19 +97,23 @@ async fn a_stale_lease_cannot_mark_owner_migration_complete() {
         .unwrap();
     assert!(ensure_tenure(&lease_doc.doc, &stale.holder, stale.lease.epoch).is_err());
     assert!(stale.mark_done("tasks", "records_v2").await.is_err());
-    assert!(!Migrations::new(&storage)
-        .done("tasks", "records_v2")
-        .await
-        .unwrap());
-    assert!(leases
-        .release(
-            "tasks",
-            MIGRATION_KEY,
-            &replacement.holder,
-            replacement.epoch,
-        )
-        .await
-        .unwrap());
+    assert!(
+        !Migrations::new(&storage)
+            .done("tasks", "records_v2")
+            .await
+            .unwrap()
+    );
+    assert!(
+        leases
+            .release(
+                "tasks",
+                MIGRATION_KEY,
+                &replacement.holder,
+                replacement.epoch,
+            )
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

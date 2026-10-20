@@ -205,13 +205,17 @@ async fn configured_refusal_never_uses_legacy_initialise_or_drive() {
             ),
             kind
         );
-        assert!(engine
-            .initialise("legacy".into(), &definition, json!({}), None)
-            .is_err());
-        assert!(engine
-            .drive("legacy", &definition, CancellationToken::new())
-            .await
-            .is_err());
+        assert!(
+            engine
+                .initialise("legacy".into(), &definition, json!({}), None)
+                .is_err()
+        );
+        assert!(
+            engine
+                .drive("legacy", &definition, CancellationToken::new())
+                .await
+                .is_err()
+        );
     }
     assert_eq!(
         ambient_db.exists(),

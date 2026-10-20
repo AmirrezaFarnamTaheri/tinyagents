@@ -177,8 +177,9 @@ pub struct TargetRecord {
     pub id: String,
     /// The new body.
     pub body: Value,
-    /// Creation time to record (Unix epoch ms), usually the source's. `None`
-    /// uses the driver clock (or keeps the time of an in-place rewrite).
+    /// Source creation time for checking an idempotent same-row rewrite.
+    /// The owner runner does not write host-owned creation metadata through
+    /// the module storage port; a newly created target uses the host clock.
     pub created_ms: Option<i64>,
     /// What to record as the expiry. See [`Expiry`].
     pub expires: Expiry,
@@ -212,7 +213,8 @@ impl TargetRecord {
         }
     }
 
-    /// Keep `created_ms` as the creation time (migration only).
+    /// Carry the source time for same-row rewrite conflict checks. New target
+    /// rows remain dated by the storage host.
     #[must_use]
     pub fn created_ms(mut self, created_ms: i64) -> Self {
         self.created_ms = Some(created_ms);

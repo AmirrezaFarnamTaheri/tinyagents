@@ -12,7 +12,7 @@ use tinystoragedrivers_types::{
 use tokio::sync::Mutex;
 
 use crate::primitives::{self, Acquire, Acquisition, Lease, Leases};
-use crate::{Key, ScopedStorage, MIGRATIONS_COLLECTION};
+use crate::{Key, MIGRATIONS_COLLECTION, ScopedStorage};
 
 const MIGRATION_KEY: &str = "owner_migrations";
 const DEFAULT_TTL_MS: i64 = 30_000;

@@ -371,9 +371,12 @@ impl StepRun<'_> {
                 Expiry::Carry | Expiry::Never => None,
             };
             let mut write = WriteOptions::new().schema(schema);
-            if let Some(created) = output.created_ms {
-                write = write.created_ms(created);
-            }
+            // Creation time is host-owned and the storage bus rejects every
+            // module attempt to write it. Existing-row writes retain their
+            // timestamp in the backend; new rows receive the host clock.
+            let existing_same_row = self.in_place()
+                && output.collection == self.step.item
+                && versions.contains_key(&output.id);
             if let Some(expires) = expires_ms {
                 write = write.expires_ms(expires);
             }
@@ -387,7 +390,7 @@ impl StepRun<'_> {
                 Precondition::Absent
             };
             let (collection, id, body) = (output.collection, output.id, output.body);
-            let created_ms = output.created_ms;
+            let expected_created_ms = output.created_ms.filter(|_| existing_same_row);
             match self
                 .docs
                 .put_with(&collection, &id, body.clone(), precondition, write)
@@ -395,8 +398,8 @@ impl StepRun<'_> {
             {
                 Ok(_) => {}
                 // Only an interrupted run of this step may have left the
-                // output behind, and then it holds exactly this body, schema
-                // expiry and (when the step supplies one) creation time. Any
+                // output behind, and then it holds exactly this body, schema,
+                // and expiry. Any
                 // other conflict (a stranger under the id, a unique-index
                 // collision with another document, a concurrent edit) stops
                 // the step.
@@ -407,7 +410,8 @@ impl StepRun<'_> {
                     let identical = stored.is_some_and(|found| {
                         found.doc == body
                             && found.meta.schema == schema
-                            && created_ms.is_none_or(|created| found.meta.created_ms == created)
+                            && expected_created_ms
+                                .is_none_or(|created| found.meta.created_ms == created)
                             && found.meta.expires_ms == expires_ms
                     });
                     if !identical {
@@ -473,3 +477,7 @@ impl StepRun<'_> {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "runner_tests.rs"]
+mod tests;
