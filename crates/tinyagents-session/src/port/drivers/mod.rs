@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission};
 #[cfg(test)]
 use tinyagents_storage_kit::Scope;
-use tinyagents_storage_kit::{Blocking, ScopedStorage};
+use tinyagents_storage_kit::{Blocking, MigrateOptions, Registry, ScopedStorage};
 use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::{CollectionSpec, StorageError};
 
@@ -183,6 +183,11 @@ impl DriverSessionStores {
         agent_id: &str,
     ) -> Result<crate::run_ledger::DriverRunLedger, StorageError> {
         let scoped = self.scoped_storage(agent_id)?;
+        if self.schema_admission == SchemaAdmission::Declare {
+            let for_open = scoped.clone();
+            self.bridge
+                .run(async move { open_agent_storage(&for_open).await })??;
+        }
         Ok(match self.schema_admission {
             SchemaAdmission::Declare => crate::run_ledger::DriverRunLedger::new(scoped),
             SchemaAdmission::ValidateOnly => {
@@ -211,6 +216,11 @@ impl DriverSessionStores {
             return Ok(stores.clone());
         }
         let scoped = self.scoped_storage(agent_id)?;
+        if self.schema_admission == SchemaAdmission::Declare {
+            let for_open = scoped.clone();
+            self.bridge
+                .run(async move { open_agent_storage(&for_open).await })??;
+        }
         if self.schema_admission == SchemaAdmission::ValidateOnly {
             let documents = Arc::clone(scoped.documents());
             self.bridge.run(async move {
