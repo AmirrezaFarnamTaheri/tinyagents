@@ -9,6 +9,7 @@ mod ask_clarification;
 mod canonical_json;
 pub mod per_call;
 mod plan_exit;
+pub mod run_mode;
 pub mod schema;
 pub mod thread_locks;
 mod time;
@@ -34,7 +35,7 @@ pub mod subagents;
 pub mod todos;
 
 pub use ask_clarification::AskClarificationTool;
-pub use plan_exit::{PLAN_EXIT_MARKER, PlanExitModeLookup, PlanExitTool};
+pub use plan_exit::{PLAN_EXIT_MARKER, ParkedPlanReviewLookup, PlanExitHost, PlanExitTool};
 pub use time::{CurrentTimeTool, ResolveTimeTool, register_time_tools, time_tools};
 
 #[cfg(test)]

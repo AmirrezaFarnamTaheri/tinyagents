@@ -2022,6 +2022,24 @@ async fn plan_mode_allowlist_keeps_specific_tools_available() {
         .expect("allowlisted tool stays executable in plan mode");
 }
 
+#[test]
+fn common_plan_mode_allowlist_covers_review_exit_and_host_planning_tools() {
+    let names = plan_mode_allowlist();
+    for required in [
+        "plan_exit",
+        "request_plan_review",
+        "todo",
+        "goal_get",
+        "goal_set",
+        "goal_complete",
+        "goal_pause",
+        "goal_resume",
+        "goal_clear",
+    ] {
+        assert!(names.contains(&required), "missing {required}");
+    }
+}
+
 #[tokio::test]
 async fn plan_mode_treats_unclassified_tools_as_side_effecting() {
     // Fail-closed: a tool with no policy entry at all is hidden/denied in
