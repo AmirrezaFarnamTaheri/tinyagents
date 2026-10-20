@@ -1,17 +1,17 @@
 # `session::run_ledger` — background run and team coordination
 
 A durable, restart-survivable ledger for background agent/workflow execution
-state, sharing the session database with `crate::store`. See the top-level
-`session` crate README for how this fits next to session history and the
-graph checkpointer.
+state, stored through the host-bound session storage ports. See the top-level
+`session` crate README for how this fits next to session history and the graph
+checkpointer.
 
 ## Why this is separate from session history
 
-`crate::ops` (session history) records what a conversation *said*. This
+Session history records what a conversation *said*. This
 module records what the runtime was *doing*: which background agent runs,
 worker threads, and workflows were in flight, what state they held, and how
 they coordinate. A run and the session that produced it are queryable
-together (both go through `crate::store`), but they answer different
+together (both use the host-bound storage scope), but they answer different
 questions and have different write patterns — session history is append-only
 per turn; the run ledger is upserted and compare-and-swapped as a run's
 state changes.
