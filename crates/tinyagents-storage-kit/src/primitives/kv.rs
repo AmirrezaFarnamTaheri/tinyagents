@@ -97,6 +97,44 @@ impl Kv {
         self.repo.put(&self.id(key)?, &entry).await
     }
 
+    /// Atomically update one value in this namespace.
+    ///
+    /// The closure may return `None` to leave the key unchanged. On a write
+    /// conflict it is called again with the value written by the winner.
+    ///
+    /// # Errors
+    ///
+    /// A storage error, or `Serialization` when either value cannot be encoded.
+    pub async fn update<T, F>(&self, key: &str, mut update: F) -> Result<Option<T>>
+    where
+        T: DeserializeOwned + Serialize + Sync,
+        F: FnMut(Option<T>) -> Result<Option<T>> + Send,
+    {
+        let id = self.id(key)?;
+        let owner = self.owner.clone();
+        let ns = self.ns.clone();
+        let changed = self
+            .repo
+            .update(&id, move |current: Option<Entry>| {
+                let value = current
+                    .map(|entry| serde_json::from_value(entry.value))
+                    .transpose()?;
+                let Some(value) = update(value)? else {
+                    return Ok(None);
+                };
+                Ok(Some(Entry {
+                    owner: owner.clone(),
+                    ns: ns.clone(),
+                    key: key.to_owned(),
+                    value: serde_json::to_value(value)?,
+                }))
+            })
+            .await?;
+        changed
+            .map(|(entry, _)| serde_json::from_value(entry.value))
+            .transpose()
+    }
+
     /// Remove `key` and report whether it existed.
     ///
     /// # Errors
@@ -138,3 +176,7 @@ impl Kv {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "kv_tests.rs"]
+mod tests;

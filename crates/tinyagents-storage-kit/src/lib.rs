@@ -91,7 +91,7 @@ impl Key {
 }
 
 pub use migrations::{MIGRATIONS_COLLECTION, Migrations};
-pub use primitives::{Leases, Repo};
+pub use primitives::{Counters, Kv, Leases, Repo};
 pub use schema::{
     BlobOutput, BlobStepFn, ComposedRegistry, Expiry, Item, MigrateOptions, MigrationReport, Owner,
     Registry, Schema, SchemaMetadata, ScopeClass, SealPolicy, SealWhen, SourceRecord, Step,
