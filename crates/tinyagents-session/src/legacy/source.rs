@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tinystoragedrivers_core::{ErrorKind, Scope, StorageError};
+use tinystoragedrivers_types::{ErrorKind, Scope, StorageError};
 use tinystoragedrivers_sqlite::rusqlite::{self, Connection, OpenFlags, OptionalExtension};
 
 use crate::run_ledger::{LedgerError, LedgerResult};

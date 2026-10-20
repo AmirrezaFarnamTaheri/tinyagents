@@ -1,7 +1,7 @@
 use super::*;
 use crate::testkit::conformance::{session_store_conformance, session_store_isolation_conformance};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tinystoragedrivers_core::{CollectionSpec, DocumentStore, ErrorKind, MemoryStorage};
+use tinystoragedrivers_types::{CollectionSpec, DocumentStore, ErrorKind, MemoryStorage};
 
 #[derive(Debug, Default)]
 struct Observations {
@@ -20,9 +20,9 @@ struct ProbeDocs {
 #[error("original retired actor")]
 struct Retired;
 
-#[tinystoragedrivers_core::async_trait]
+#[tinystoragedrivers_types::async_trait]
 impl DocumentStore for ProbeDocs {
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     async fn ensure_collection(&self, spec: &CollectionSpec) -> Result<(), StorageError> {
@@ -33,7 +33,7 @@ impl DocumentStore for ProbeDocs {
         self.observed.validated.lock().unwrap().push(spec.clone());
         match self.observed.refusal.load(Ordering::SeqCst) {
             1 => Err(StorageError::unsupported(
-                tinystoragedrivers_core::Capability::CollectionValidation,
+                tinystoragedrivers_types::Capability::CollectionValidation,
                 "unsupported adapter",
             )),
             2 => Err(StorageError::fenced("retired actor").with_source(Retired)),
@@ -44,7 +44,7 @@ impl DocumentStore for ProbeDocs {
         &self,
         collection: &str,
         id: &str,
-    ) -> Result<Option<tinystoragedrivers_core::Versioned<serde_json::Value>>, StorageError> {
+    ) -> Result<Option<tinystoragedrivers_types::Versioned<serde_json::Value>>, StorageError> {
         self.inner.get(collection, id).await
     }
     async fn put(
@@ -52,8 +52,8 @@ impl DocumentStore for ProbeDocs {
         collection: &str,
         id: &str,
         doc: serde_json::Value,
-        precondition: tinystoragedrivers_core::Precondition,
-    ) -> Result<tinystoragedrivers_core::Version, StorageError> {
+        precondition: tinystoragedrivers_types::Precondition,
+    ) -> Result<tinystoragedrivers_types::Version, StorageError> {
         self.inner.put(collection, id, doc, precondition).await
     }
     async fn put_with(
@@ -61,9 +61,9 @@ impl DocumentStore for ProbeDocs {
         collection: &str,
         id: &str,
         doc: serde_json::Value,
-        precondition: tinystoragedrivers_core::Precondition,
-        options: tinystoragedrivers_core::WriteOptions,
-    ) -> Result<tinystoragedrivers_core::Version, StorageError> {
+        precondition: tinystoragedrivers_types::Precondition,
+        options: tinystoragedrivers_types::WriteOptions,
+    ) -> Result<tinystoragedrivers_types::Version, StorageError> {
         self.inner
             .put_with(collection, id, doc, precondition, options)
             .await
@@ -72,16 +72,16 @@ impl DocumentStore for ProbeDocs {
         &self,
         collection: &str,
         id: &str,
-        precondition: tinystoragedrivers_core::Precondition,
+        precondition: tinystoragedrivers_types::Precondition,
     ) -> Result<bool, StorageError> {
         self.inner.delete(collection, id, precondition).await
     }
     async fn query(
         &self,
         collection: &str,
-        query: &tinystoragedrivers_core::Query,
+        query: &tinystoragedrivers_types::Query,
     ) -> Result<
-        tinystoragedrivers_core::Page<tinystoragedrivers_core::Versioned<serde_json::Value>>,
+        tinystoragedrivers_types::Page<tinystoragedrivers_types::Versioned<serde_json::Value>>,
         StorageError,
     > {
         self.inner.query(collection, query).await
@@ -89,24 +89,24 @@ impl DocumentStore for ProbeDocs {
     async fn count(
         &self,
         collection: &str,
-        filter: &tinystoragedrivers_core::Filter,
+        filter: &tinystoragedrivers_types::Filter,
     ) -> Result<u64, StorageError> {
         self.inner.count(collection, filter).await
     }
     async fn delete_where(
         &self,
         collection: &str,
-        filter: &tinystoragedrivers_core::Filter,
+        filter: &tinystoragedrivers_types::Filter,
     ) -> Result<u64, StorageError> {
         self.inner.delete_where(collection, filter).await
     }
     async fn claim(
         &self,
         collection: &str,
-        filter: &tinystoragedrivers_core::Filter,
-        sort: &[tinystoragedrivers_core::Sort],
+        filter: &tinystoragedrivers_types::Filter,
+        sort: &[tinystoragedrivers_types::Sort],
         patch: &serde_json::Value,
-    ) -> Result<Option<tinystoragedrivers_core::Versioned<serde_json::Value>>, StorageError> {
+    ) -> Result<Option<tinystoragedrivers_types::Versioned<serde_json::Value>>, StorageError> {
         self.inner.claim(collection, filter, sort, patch).await
     }
     async fn drop_collection(&self, collection: &str) -> Result<(), StorageError> {
@@ -123,7 +123,7 @@ impl StorageBackend for ProbeBackend {
     fn driver(&self) -> &'static str {
         self.inner.driver()
     }
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     fn for_scope(&self, scope: &Scope) -> Result<ScopedStorage, StorageError> {
@@ -168,7 +168,7 @@ async fn validation_only_conformance_never_attempts_schema_declaration() {
     let (backend, observed) = prepared().await;
     let provider = DriverSessionStores::new_with_schema_admission(
         backend,
-        tinystoragedrivers_core::Scope::local(),
+        tinystoragedrivers_types::Scope::local(),
         SchemaAdmission::ValidateOnly,
     )
     .unwrap()
@@ -191,14 +191,14 @@ async fn validation_only_refusals_keep_native_sources_and_retry_without_caching(
     let (backend, observed) = prepared().await;
     let provider = DriverSessionStores::new_with_schema_admission(
         backend,
-        tinystoragedrivers_core::Scope::local(),
+        tinystoragedrivers_types::Scope::local(),
         SchemaAdmission::ValidateOnly,
     )
     .unwrap();
     for (refusal, kind) in [
         (
             1,
-            ErrorKind::Unsupported(tinystoragedrivers_core::Capability::CollectionValidation),
+            ErrorKind::Unsupported(tinystoragedrivers_types::Capability::CollectionValidation),
         ),
         (2, ErrorKind::Fenced),
     ] {
@@ -222,7 +222,7 @@ async fn validation_only_refusals_keep_native_sources_and_retry_without_caching(
 async fn explicit_actor_factory_selects_validation_without_changing_original_provider() {
     let (backend, observed) = prepared().await;
     let original = Arc::new(
-        DriverSessionStores::new(backend.clone(), tinystoragedrivers_core::Scope::local())
+        DriverSessionStores::new(backend.clone(), tinystoragedrivers_types::Scope::local())
             .unwrap()
             .recover_on_open(true),
     );
@@ -261,7 +261,7 @@ async fn validation_only_missing_or_incompatible_schema_refuses_before_recovery_
         }
         let provider = DriverSessionStores::new_with_schema_admission(
             storage.existing_schema().unwrap(),
-            tinystoragedrivers_core::Scope::local(),
+            tinystoragedrivers_types::Scope::local(),
             SchemaAdmission::ValidateOnly,
         )
         .unwrap()
@@ -297,7 +297,7 @@ async fn legacy_actor_factory_inherits_validation_policy_without_declaring_schem
     let original: Arc<dyn SessionStoreProvider> = Arc::new(
         DriverSessionStores::new_with_schema_admission(
             backend.clone(),
-            tinystoragedrivers_core::Scope::local(),
+            tinystoragedrivers_types::Scope::local(),
             SchemaAdmission::ValidateOnly,
         )
         .unwrap()
@@ -331,7 +331,7 @@ async fn validation_only_provider_ledger_uses_prepared_schema_without_declaratio
     });
     let provider = DriverSessionStores::new_with_schema_admission(
         backend,
-        tinystoragedrivers_core::Scope::local(),
+        tinystoragedrivers_types::Scope::local(),
         SchemaAdmission::ValidateOnly,
     )
     .unwrap();

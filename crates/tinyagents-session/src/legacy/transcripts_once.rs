@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::{
     CollectionSpec, MIGRATIONS_COLLECTION, Migrations, Precondition, ScopedStorage, StorageError,
 };
 

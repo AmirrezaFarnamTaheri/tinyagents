@@ -1,7 +1,7 @@
 use super::super::tests::ledgers;
 use super::*;
 use crate::legacy::fixtures::classic_database;
-use tinystoragedrivers_core::ErrorKind;
+use tinystoragedrivers_types::ErrorKind;
 use tinystoragedrivers_sqlite::rusqlite;
 
 const STARTED: &str = "2026-01-01T00:00:00+00:00";
@@ -286,7 +286,7 @@ async fn changed_source_cannot_reuse_a_committed_import_operation() {
         ("ledger", "agent_import/import")
     );
     assert!(
-        tinystoragedrivers_core::Migrations::new(&ledger.scoped)
+        tinystoragedrivers_types::Migrations::new(&ledger.scoped)
             .done("ledger", "agent_import/import")
             .await
             .unwrap()
@@ -338,7 +338,7 @@ async fn imported_event_counter_can_allocate_the_last_classic_signed_sequence() 
 
 #[tokio::test]
 async fn imported_last_signed_sequence_persists_bson_representable_terminal_head() {
-    use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
+    use tinystoragedrivers_types::{MemoryStorage, StorageBackend};
     let backend = MemoryStorage::new();
     let scope = Scope::local();
     let native = backend.for_scope(&scope).unwrap();

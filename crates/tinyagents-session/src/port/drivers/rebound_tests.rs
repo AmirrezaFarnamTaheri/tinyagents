@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::Value;
-use tinystoragedrivers_core::MemoryStorage;
+use tinystoragedrivers_types::MemoryStorage;
 
 #[tokio::test]
 async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes() {
@@ -102,13 +102,13 @@ impl StorageBackend for GateBackend {
     fn driver(&self) -> &'static str {
         self.inner.driver()
     }
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     fn for_scope(
         &self,
-        scope: &tinystoragedrivers_core::Scope,
-    ) -> std::result::Result<tinystoragedrivers_core::ScopedStorage, StorageError> {
+        scope: &tinystoragedrivers_types::Scope,
+    ) -> std::result::Result<tinystoragedrivers_types::ScopedStorage, StorageError> {
         if let Some((entered, release)) = self.gate.lock().unwrap().take() {
             let _ = entered.send(());
             let _ = release.recv();

@@ -15,8 +15,8 @@ use super::schema::{SCHEMA_VERSION, THREADS as COLLECTION, append_spec, stream_n
 use super::*;
 use async_trait::async_trait;
 use std::sync::Arc;
-use tinystoragedrivers_core::primitives::Repo;
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::primitives::Repo;
+use tinystoragedrivers_types::{
     CollectionSpec, DocumentStore, ErrorKind, Filter, Key, Precondition, Query, ScopedStorage,
     StorageError, StreamStore, Versioned, WriteOptions,
 };
@@ -120,7 +120,7 @@ impl DriverConversationStore {
     /// # Panics
     /// Never in practice: the memory driver accepts every declaration.
     pub async fn in_memory() -> Self {
-        use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+        use tinystoragedrivers_types::{MemoryStorage, Scope, StorageBackend};
         let backend = MemoryStorage::new();
         let scoped = backend
             .for_scope(&Scope::new("local").expect("static scope"))
@@ -148,7 +148,7 @@ impl DriverConversationStore {
     /// The native declaration error, preserving its kind and original cause.
     pub async fn prepare_schema(
         documents: &dyn DocumentStore,
-    ) -> tinystoragedrivers_core::Result<()> {
+    ) -> tinystoragedrivers_types::Result<()> {
         for spec in Self::collection_specs() {
             documents.ensure_collection(&spec).await?;
         }

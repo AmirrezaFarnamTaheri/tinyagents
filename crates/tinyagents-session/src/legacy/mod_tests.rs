@@ -5,7 +5,7 @@ use super::*;
 use crate::run_ledger::{DriverRunLedger, RunEventAppend, RunLedgerStore, SessionHistoryStore};
 use crate::types::SessionSearchParams;
 use std::path::Path;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_types::{MemoryStorage, Scope, StorageBackend};
 use tinystoragedrivers_sqlite::rusqlite::{Connection, params};
 
 const T0: &str = "2026-01-01T00:00:00+00:00";
@@ -412,7 +412,7 @@ async fn a_source_must_belong_to_the_target_scope_and_be_checkpointed() {
     let error = ledger.import_legacy_database(&foreign).await.unwrap_err();
     assert!(
         matches!(error, crate::run_ledger::LedgerError::Driver(ref e)
-        if e.kind() == tinystoragedrivers_core::ErrorKind::InvalidInput)
+        if e.kind() == tinystoragedrivers_types::ErrorKind::InvalidInput)
     );
 
     // A database with committed data still in its WAL is refused, never guessed at.

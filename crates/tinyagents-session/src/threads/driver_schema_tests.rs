@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::json;
-use tinystoragedrivers_core::{CollectionSpec, Fence, MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_types::{CollectionSpec, Fence, MemoryStorage, Scope, StorageBackend};
 
 fn request(id: &str) -> CreateConversationThread {
     CreateConversationThread {
@@ -207,7 +207,7 @@ async fn schema_preparation_is_explicit_and_restricted_native_handles_refuse_it(
         .unwrap_err();
     assert_eq!(
         error.kind(),
-        ErrorKind::Unsupported(tinystoragedrivers_core::Capability::ExistingSchema)
+        ErrorKind::Unsupported(tinystoragedrivers_types::Capability::ExistingSchema)
     );
     actor
         .documents()

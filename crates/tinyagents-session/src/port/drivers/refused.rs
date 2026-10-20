@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::{
     Blocking, Capabilities, CollectionSpec, DocumentStore, ErrorKind, Filter, Page, Precondition,
     Query, Result, Sort, StorageError, StreamEntry, StreamStore, Version, Versioned, async_trait,
 };
@@ -76,7 +76,7 @@ impl DocumentStore for Refused {
         _id: &str,
         _doc: Value,
         _precondition: Precondition,
-        _options: tinystoragedrivers_core::WriteOptions,
+        _options: tinystoragedrivers_types::WriteOptions,
     ) -> Result<Version> {
         Err(self.error())
     }

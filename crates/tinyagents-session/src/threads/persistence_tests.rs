@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::json;
-use tinystoragedrivers_core::ErrorKind;
+use tinystoragedrivers_types::ErrorKind;
 
 fn thread(id: &str) -> CreateConversationThread {
     CreateConversationThread {

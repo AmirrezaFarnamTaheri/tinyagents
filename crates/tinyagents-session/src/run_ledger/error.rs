@@ -22,7 +22,7 @@ pub enum LedgerError {
     SourceRequiresSnapshot { path: std::path::PathBuf },
     /// A driver operation failed, retaining capability/conflict/admission kinds.
     #[error(transparent)]
-    Driver(Box<tinystoragedrivers_core::StorageError>),
+    Driver(Box<tinystoragedrivers_types::StorageError>),
 }
 
 impl From<tinyagents_harness::TinyAgentsError> for LedgerError {
@@ -37,8 +37,8 @@ impl From<super::command_center::ControlError> for LedgerError {
     }
 }
 
-impl From<tinystoragedrivers_core::StorageError> for LedgerError {
-    fn from(error: tinystoragedrivers_core::StorageError) -> Self {
+impl From<tinystoragedrivers_types::StorageError> for LedgerError {
+    fn from(error: tinystoragedrivers_types::StorageError) -> Self {
         Self::Driver(Box::new(error))
     }
 }

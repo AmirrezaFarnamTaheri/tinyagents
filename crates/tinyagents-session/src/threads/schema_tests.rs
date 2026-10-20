@@ -6,7 +6,7 @@ use crate::threads::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::{
     CollectionSpec, Item, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopeClass,
     ScopedStorage, StorageBackend, WriteOptions,
     schema::{StepBody, StreamStepFn},
@@ -88,7 +88,7 @@ async fn migrate(storage: &ScopedStorage) {
             storage.documents().ensure_collection(&spec).await.unwrap();
         }
     }
-    for spec in tinystoragedrivers_core::primitives::collection_specs() {
+    for spec in tinystoragedrivers_types::primitives::collection_specs() {
         storage.documents().ensure_collection(&spec).await.unwrap();
     }
     Registry::compose([conversations_storage_schema()])

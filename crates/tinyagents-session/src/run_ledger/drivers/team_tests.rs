@@ -1,5 +1,5 @@
 use super::*;
-use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
+use tinystoragedrivers_types::{MemoryStorage, StorageBackend};
 
 fn ledger_on(backend: &dyn StorageBackend, scope: &str) -> DriverRunLedger {
     DriverRunLedger::new(backend.for_scope(&Scope::new(scope).unwrap()).unwrap())

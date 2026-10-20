@@ -2,7 +2,7 @@
 
 use super::{DriverRunLedger, RunTelemetry, storage};
 use chrono::{DateTime, Utc};
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::{
     DocumentStoreExt, ErrorKind, Precondition, Query, StorageError, WriteOp, WriteResult,
 };
 

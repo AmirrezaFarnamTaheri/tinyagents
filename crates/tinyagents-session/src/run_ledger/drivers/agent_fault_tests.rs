@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::{
     CollectionSpec, DocumentStore, Page, Precondition, ReadCheck, Version, Versioned, WriteOp,
     WriteResult,
 };
@@ -17,7 +17,7 @@ type NativeResult<T> = std::result::Result<T, StorageError>;
 
 #[async_trait::async_trait]
 impl DocumentStore for NoPostCommitReads {
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     async fn ensure_collection(&self, spec: &CollectionSpec) -> NativeResult<()> {

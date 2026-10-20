@@ -1,6 +1,6 @@
 use super::*;
 use crate::testkit::conformance::transcript_history_conformance;
-use tinystoragedrivers_core::{MemoryStorage, Precondition, Scope, StorageBackend};
+use tinystoragedrivers_types::{MemoryStorage, Precondition, Scope, StorageBackend};
 
 pub(in crate::port::drivers) fn meta(thread_id: &str) -> TranscriptMeta {
     let mut meta = discovered_seed("planner");
@@ -431,7 +431,7 @@ fn ids_are_unambiguous_and_bounded() {
     let long = "x".repeat(1_000);
     let hashed = index_id(&long).unwrap();
     assert!(hashed.starts_with('~') && hashed.len() == 53, "{hashed}");
-    assert!(entry_id(&long, 9).unwrap().len() < tinystoragedrivers_core::MAX_ID_LEN);
+    assert!(entry_id(&long, 9).unwrap().len() < tinystoragedrivers_types::MAX_ID_LEN);
     assert!(is_subagent("parent__child"));
     assert!(!is_subagent("__child"));
     assert!(!is_subagent("plain"));

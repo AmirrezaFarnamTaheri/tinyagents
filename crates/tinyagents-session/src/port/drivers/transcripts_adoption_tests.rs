@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::port::drivers::transcripts::tests::meta;
 use crate::transcript::TranscriptMessage;
-use tinystoragedrivers_core::{Blocking, DocumentStore, MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_types::{Blocking, DocumentStore, MemoryStorage, Scope, StorageBackend};
 
 const THREAD: &str = "t";
 
@@ -308,7 +308,7 @@ fn a_root_missing_from_the_index_is_still_folded() {
             docs.delete(
                 super::super::INDEX,
                 &super::super::index_id("1700000200_planner").unwrap(),
-                tinystoragedrivers_core::Precondition::None,
+                tinystoragedrivers_types::Precondition::None,
             )
             .await
         })

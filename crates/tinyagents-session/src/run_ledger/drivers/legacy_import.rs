@@ -19,7 +19,7 @@ use super::*;
 use crate::legacy::{QuiescentSource, rows, source};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tinystoragedrivers_core::{Counters, ErrorKind, Precondition, primitives::LEASES};
+use tinystoragedrivers_types::{Counters, ErrorKind, Precondition, primitives::LEASES};
 
 const LOG_PREFIX: &str = "[session_db:import]";
 

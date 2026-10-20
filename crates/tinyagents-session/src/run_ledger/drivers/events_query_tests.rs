@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::Value;
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::{
     CollectionSpec, DocumentStore, ErrorKind, MemoryStorage, Page, Precondition, ReadCheck,
     StorageBackend, Version, Versioned, WriteOp, WriteResult,
 };
@@ -14,7 +14,7 @@ struct BoundedQueries {
 }
 #[async_trait::async_trait]
 impl DocumentStore for BoundedQueries {
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     async fn ensure_collection(&self, spec: &CollectionSpec) -> NativeResult<()> {
@@ -87,12 +87,12 @@ impl DocumentStore for BoundedQueries {
 
 #[derive(Debug)]
 struct ArrivingReceipts {
-    inner: Arc<dyn tinystoragedrivers_core::StreamStore>,
+    inner: Arc<dyn tinystoragedrivers_types::StreamStore>,
     ledger: DriverRunLedger,
     generated: std::sync::atomic::AtomicUsize,
 }
 #[async_trait::async_trait]
-impl tinystoragedrivers_core::StreamStore for ArrivingReceipts {
+impl tinystoragedrivers_types::StreamStore for ArrivingReceipts {
     async fn append(
         &self,
         stream: &str,
@@ -137,7 +137,7 @@ impl tinystoragedrivers_core::StreamStore for ArrivingReceipts {
         stream: &str,
         from: u64,
         limit: usize,
-    ) -> std::result::Result<Vec<tinystoragedrivers_core::StreamEntry>, StorageError> {
+    ) -> std::result::Result<Vec<tinystoragedrivers_types::StreamEntry>, StorageError> {
         self.inner.read_window(stream, from, limit).await
     }
     async fn len(&self, stream: &str) -> std::result::Result<u64, StorageError> {

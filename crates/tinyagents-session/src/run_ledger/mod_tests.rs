@@ -4,7 +4,7 @@ use tinyagents_harness::tool::{
     ToolEffectLedger, ToolEffectSettle as HarnessSettle, ToolEffectStart as HarnessStart,
     ToolEffectStatus as HarnessStatus,
 };
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_types::{MemoryStorage, Scope, StorageBackend};
 
 use super::*;
 

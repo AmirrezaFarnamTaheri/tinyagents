@@ -90,7 +90,7 @@ pub trait SessionStoreProvider: Send + Sync {
     fn try_for_agent(
         &self,
         agent_id: &str,
-    ) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
+    ) -> Result<AgentStores, tinystoragedrivers_types::StorageError> {
         Ok(self.for_agent(agent_id))
     }
 
@@ -108,8 +108,8 @@ pub trait SessionStoreProvider: Send + Sync {
     /// retain their native sources; hosts must propagate a configured refusal.
     fn bind_actor(
         &self,
-        _backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
-    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
+        _backend: Arc<dyn tinystoragedrivers_types::StorageBackend>,
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
         Ok(None)
     }
 
@@ -143,9 +143,9 @@ pub trait SessionStoreProvider: Send + Sync {
     /// Native actor admission errors, retaining their sources.
     fn bind_actor_with_schema_admission(
         &self,
-        backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
+        backend: Arc<dyn tinystoragedrivers_types::StorageBackend>,
         admission: tinyagents_harness::store::SchemaAdmission,
-    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
         match admission {
             tinyagents_harness::store::SchemaAdmission::Declare => self.bind_actor(backend),
             tinyagents_harness::store::SchemaAdmission::ValidateOnly => Ok(None),
@@ -295,14 +295,14 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
     fn try_for_agent(
         &self,
         agent_id: &str,
-    ) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
+    ) -> Result<AgentStores, tinystoragedrivers_types::StorageError> {
         (**self).try_for_agent(agent_id)
     }
 
     fn bind_actor(
         &self,
-        backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
-    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
+        backend: Arc<dyn tinystoragedrivers_types::StorageBackend>,
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
         (**self).bind_actor(backend)
     }
 
@@ -323,9 +323,9 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
 
     fn bind_actor_with_schema_admission(
         &self,
-        backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
+        backend: Arc<dyn tinystoragedrivers_types::StorageBackend>,
         admission: tinyagents_harness::store::SchemaAdmission,
-    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
         (**self).bind_actor_with_schema_admission(backend, admission)
     }
 

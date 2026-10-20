@@ -61,7 +61,7 @@ fn shared_providers_explicitly_leave_actor_rebinding_unsupported() {
     let provider = SharedStores::default();
     assert!(
         provider
-            .bind_actor(Arc::new(tinystoragedrivers_core::MemoryStorage::new()))
+            .bind_actor(Arc::new(tinystoragedrivers_types::MemoryStorage::new()))
             .unwrap()
             .is_none()
     );
@@ -79,18 +79,18 @@ fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
         }
         fn bind_actor(
             &self,
-            _: Arc<dyn tinystoragedrivers_core::StorageBackend>,
-        ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError>
+            _: Arc<dyn tinystoragedrivers_types::StorageBackend>,
+        ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError>
         {
-            Err(tinystoragedrivers_core::StorageError::fenced("actor refused").with_source(Retired))
+            Err(tinystoragedrivers_types::StorageError::fenced("actor refused").with_source(Retired))
         }
     }
     let provider: Arc<dyn SessionStoreProvider> = Arc::new(RefusingProvider);
     let error = provider
-        .bind_actor(Arc::new(tinystoragedrivers_core::MemoryStorage::new()))
+        .bind_actor(Arc::new(tinystoragedrivers_types::MemoryStorage::new()))
         .err()
         .expect("configured refusal must remain an error");
-    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Fenced);
+    assert_eq!(error.kind(), tinystoragedrivers_types::ErrorKind::Fenced);
     assert!(std::error::Error::source(&error).unwrap().is::<Retired>());
 }
 
@@ -125,9 +125,9 @@ fn checked_accessor_arc_forwards_native_refusal() {
         fn try_for_agent(
             &self,
             _: &str,
-        ) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
+        ) -> Result<AgentStores, tinystoragedrivers_types::StorageError> {
             Err(
-                tinystoragedrivers_core::StorageError::invalid_input("invalid key")
+                tinystoragedrivers_types::StorageError::invalid_input("invalid key")
                     .with_source(Native),
             )
         }
@@ -138,7 +138,7 @@ fn checked_accessor_arc_forwards_native_refusal() {
     let error = erased.try_for_agent("invalid").unwrap_err();
     assert_eq!(
         error.kind(),
-        tinystoragedrivers_core::ErrorKind::InvalidInput
+        tinystoragedrivers_types::ErrorKind::InvalidInput
     );
     assert!(error.source().unwrap().is::<Native>());
 }
@@ -147,7 +147,7 @@ fn checked_accessor_arc_forwards_native_refusal() {
 #[test]
 fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
     use crate::run_ledger::{DriverRunLedger, RunLedgerStore};
-    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+    use tinystoragedrivers_types::{MemoryStorage, Scope, StorageBackend};
     struct LedgerProvider {
         sessions: InMemorySessionStores,
         ledger: Arc<dyn RunLedgerStore>,
@@ -199,17 +199,17 @@ fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
         }
         fn bind_actor(
             &self,
-            _: Arc<dyn tinystoragedrivers_core::StorageBackend>,
-        ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError>
+            _: Arc<dyn tinystoragedrivers_types::StorageBackend>,
+        ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError>
         {
-            Err(tinystoragedrivers_core::StorageError::fenced(
+            Err(tinystoragedrivers_types::StorageError::fenced(
                 "legacy declaration factory",
             ))
         }
     }
     let provider: Arc<dyn SessionStoreProvider> = Arc::new(LegacyFactory);
-    let backend: Arc<dyn tinystoragedrivers_core::StorageBackend> =
-        Arc::new(tinystoragedrivers_core::MemoryStorage::new());
+    let backend: Arc<dyn tinystoragedrivers_types::StorageBackend> =
+        Arc::new(tinystoragedrivers_types::MemoryStorage::new());
     assert!(
         provider
             .bind_actor_with_schema_admission(backend.clone(), SchemaAdmission::ValidateOnly)
@@ -220,7 +220,7 @@ fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
         .bind_actor_with_schema_admission(backend, SchemaAdmission::Declare)
         .err()
         .unwrap();
-    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Fenced);
+    assert_eq!(error.kind(), tinystoragedrivers_types::ErrorKind::Fenced);
     assert!(error.to_string().contains("legacy declaration factory"));
 }
 
@@ -269,7 +269,7 @@ fn optional_conversation_provider_forwards_selected_handle_and_preserves_absence
 #[test]
 fn optional_conversation_provider_keeps_native_refusal_kind_and_source_through_arc() {
     use crate::threads::{ConversationError, ConversationPersistence, ConversationResult};
-    use tinystoragedrivers_core::{ErrorKind, StorageError};
+    use tinystoragedrivers_types::{ErrorKind, StorageError};
     struct Refused(InMemorySessionStores);
     impl SessionStoreProvider for Refused {
         fn for_agent(&self, id: &str) -> AgentStores {

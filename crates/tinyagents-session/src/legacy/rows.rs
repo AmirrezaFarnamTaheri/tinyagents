@@ -13,7 +13,7 @@
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
-use tinystoragedrivers_core::{ErrorKind, StorageError};
+use tinystoragedrivers_types::{ErrorKind, StorageError};
 use tinystoragedrivers_sqlite::rusqlite::{self, Row, types::Type};
 
 use super::source::{LegacySourceSnapshot, source_sql_error};

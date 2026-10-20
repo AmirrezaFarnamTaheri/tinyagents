@@ -10,7 +10,7 @@ use crate::transcript::{
 use crate::turn_state::{TurnLifecycle, TurnState};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
+use tinystoragedrivers_types::{MemoryStorage, StorageBackend};
 
 fn meta(thread: &str, turns: usize) -> TranscriptMeta {
     TranscriptMeta {
@@ -55,7 +55,7 @@ fn usage(iteration: u32) -> TurnUsage {
 fn provider() -> DriverSessionStores {
     DriverSessionStores::new(
         Arc::new(MemoryStorage::new()) as Arc<dyn StorageBackend>,
-        tinystoragedrivers_core::Scope::local(),
+        tinystoragedrivers_types::Scope::local(),
     )
     .unwrap()
 }

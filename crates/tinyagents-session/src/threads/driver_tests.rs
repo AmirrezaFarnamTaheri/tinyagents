@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_types::{MemoryStorage, Scope, StorageBackend};
 
 fn request(id: &str) -> CreateConversationThread {
     CreateConversationThread {
@@ -248,7 +248,7 @@ async fn invalid_ids_and_malformed_committed_records_keep_native_error_kinds() {
 
 #[tokio::test]
 async fn native_scope_fence_rejects_metadata_takeover_without_local_fallback() {
-    use tinystoragedrivers_core::Fence;
+    use tinystoragedrivers_types::Fence;
     let backend = MemoryStorage::new();
     let owner_scope = Scope::new("root-owner").unwrap();
     let owner = backend.for_scope(&owner_scope).unwrap();

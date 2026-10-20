@@ -5,7 +5,7 @@ use crate::run_ledger::{DriverRunLedger, RunLedgerStore};
 use chrono::{Duration, Utc};
 use serde_json::json;
 use std::sync::Arc;
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::{
     DocumentStoreExt, MemoryStorage, Scope, StorageBackend, WriteOptions,
 };
 

@@ -24,8 +24,8 @@
 use super::storage::{HISTORY_OWNER, LEDGER_OWNER, key, workflow_lease_key};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tinystoragedrivers_core::primitives::{self, LEASES};
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::primitives::{self, LEASES};
+use tinystoragedrivers_types::{
     CollectionSpec, Counters, Cursor, ErrorKind, Filter, ID_FIELD, Migrations, Precondition, Query,
     Result, ScopedStorage, Sort,
 };
@@ -55,7 +55,7 @@ fn legacy_key(parts: &[&str]) -> String {
 async fn rows(
     storage: &ScopedStorage,
     collection: &str,
-) -> Result<Vec<tinystoragedrivers_core::Versioned<Value>>> {
+) -> Result<Vec<tinystoragedrivers_types::Versioned<Value>>> {
     let docs = storage.documents();
     docs.ensure_collection(&CollectionSpec::new(collection))
         .await?;
@@ -88,7 +88,7 @@ pub async fn import_legacy_ledger(storage: &ScopedStorage) -> Result<LegacyLedge
     storage
         .documents()
         .ensure_collection(&CollectionSpec::new(
-            tinystoragedrivers_core::MIGRATIONS_COLLECTION,
+            tinystoragedrivers_types::MIGRATIONS_COLLECTION,
         ))
         .await?;
     let mut report = LegacyLedgerImport::default();

@@ -7,7 +7,7 @@ use crate::run_ledger::history::{
 };
 use crate::types::{SessionSearchParams, SessionStatus};
 use chrono::Duration;
-use tinystoragedrivers_core::{MemoryStorage, Precondition, StorageBackend};
+use tinystoragedrivers_types::{MemoryStorage, Precondition, StorageBackend};
 
 fn ledger_on(backend: &dyn StorageBackend, scope: &str) -> DriverRunLedger {
     DriverRunLedger::new(backend.for_scope(&Scope::new(scope).unwrap()).unwrap())

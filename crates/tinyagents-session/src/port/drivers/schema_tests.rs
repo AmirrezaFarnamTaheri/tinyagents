@@ -3,7 +3,7 @@ use crate::port::SessionStoreProvider;
 use crate::turn_state::TurnState;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::{
     Filter, Item, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopedStorage,
     StorageBackend, WriteOptions,
 };
@@ -28,8 +28,8 @@ async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value
         .unwrap();
 }
 
-async fn migrate(storage: &ScopedStorage) -> tinystoragedrivers_core::MigrationReport {
-    for spec in tinystoragedrivers_core::primitives::collection_specs() {
+async fn migrate(storage: &ScopedStorage) -> tinystoragedrivers_types::MigrationReport {
+    for spec in tinystoragedrivers_types::primitives::collection_specs() {
         storage.documents().ensure_collection(&spec).await.unwrap();
     }
     for item in storage_schema().items {
@@ -69,7 +69,7 @@ fn the_schema_names_what_the_session_crate_owns() {
         schema
             .items
             .iter()
-            .all(|item| item.scope() == tinystoragedrivers_core::ScopeClass::Agent)
+            .all(|item| item.scope() == tinystoragedrivers_types::ScopeClass::Agent)
     );
     Registry::compose([schema]).unwrap();
 }
@@ -194,7 +194,7 @@ async fn turn_states_are_unwrapped_to_the_snake_case_storage_form() {
 fn migrated_records_are_what_the_provider_reads() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let storage = agent_storage(&backend);
-    let blocking = tinystoragedrivers_core::Blocking::new().unwrap();
+    let blocking = tinystoragedrivers_types::Blocking::new().unwrap();
     blocking
         .run({
             let storage = storage.clone();

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tinyagents_harness::tinyinference_llm::Message;
-use tinystoragedrivers_core::{Blocking, MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_types::{Blocking, MemoryStorage, Scope, StorageBackend};
 
 use super::*;
 use crate::run_ledger::{DriverRunLedger, RunLedgerStore};

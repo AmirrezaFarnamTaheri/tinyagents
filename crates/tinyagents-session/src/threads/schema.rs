@@ -34,7 +34,7 @@
 //!   record's expiry is its `_expires_ms`, which the store never sets.
 
 use super::schema_steps;
-use tinystoragedrivers_core::{CollectionSpec, Key, Owner, Schema, ScopeClass, StorageError};
+use tinystoragedrivers_types::{CollectionSpec, Key, Owner, Schema, ScopeClass, StorageError};
 
 /// The owner of the conversation store's collections and streams.
 pub(super) const OWNER: &str = "conversations";

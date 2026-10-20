@@ -20,8 +20,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use serde_json::Value;
-use tinystoragedrivers_core::primitives::Repo;
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::primitives::Repo;
+use tinystoragedrivers_types::{
     Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, IndexSpec, Key,
     Precondition, Query, StorageError, Versioned, WriteOptions,
 };

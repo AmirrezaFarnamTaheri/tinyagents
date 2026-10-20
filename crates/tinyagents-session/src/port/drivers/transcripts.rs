@@ -35,8 +35,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tinyagents_harness::store::SchemaAdmission;
-use tinystoragedrivers_core::primitives::{Leases, Repo};
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::primitives::{Leases, Repo};
+use tinystoragedrivers_types::{
     Blocking, CREATED_FIELD, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter,
     ID_FIELD, IndexSpec, Key, Query, Sort, StorageError, WriteOptions,
 };

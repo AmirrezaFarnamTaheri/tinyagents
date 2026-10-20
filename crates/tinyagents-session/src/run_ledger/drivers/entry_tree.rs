@@ -8,7 +8,7 @@ use crate::entry_tree::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::{
     DocumentStoreExt, ErrorKind, Filter, Precondition, Query, ReadCheck, StorageError, Version,
     WriteOp,
 };
@@ -356,8 +356,8 @@ impl Tree {
             id: key(&[&self.head.session_id])?,
             expected: self
                 .version
-                .map(tinystoragedrivers_core::ExpectedDocument::Version)
-                .unwrap_or(tinystoragedrivers_core::ExpectedDocument::Absent),
+                .map(tinystoragedrivers_types::ExpectedDocument::Version)
+                .unwrap_or(tinystoragedrivers_types::ExpectedDocument::Absent),
         })
     }
 

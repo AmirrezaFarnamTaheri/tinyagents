@@ -5,7 +5,7 @@ use crate::turn_state::{
 };
 
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_types::{MemoryStorage, Scope, StorageBackend};
 
 fn store() -> (DriverTurnStates, Arc<dyn DocumentStore>) {
     let storage = MemoryStorage::new();

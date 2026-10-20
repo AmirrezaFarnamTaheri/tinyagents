@@ -37,7 +37,7 @@ use storage::{
     LEDGER_OWNER, MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank, now, trunc,
     workflow_lease_key,
 };
-use tinystoragedrivers_core::{Filter, Leases, Query, Scope, ScopedStorage, Sort, StorageError};
+use tinystoragedrivers_types::{Filter, Leases, Query, Scope, ScopedStorage, Sort, StorageError};
 use tokio::sync::OnceCell;
 
 use super::LedgerResult as Result;
@@ -86,7 +86,7 @@ impl DriverRunLedger {
     }
 
     /// Exact document declarations shared by bootstrap preparation and lazy admission.
-    pub fn collection_specs() -> Vec<tinystoragedrivers_core::CollectionSpec> {
+    pub fn collection_specs() -> Vec<tinystoragedrivers_types::CollectionSpec> {
         storage::specs()
     }
 
@@ -96,7 +96,7 @@ impl DriverRunLedger {
     /// The first native declaration refusal, with no fallback or rollback claim
     /// for earlier successful declarations. This does not prepare native internal schema.
     pub async fn prepare_schema(
-        documents: &dyn tinystoragedrivers_core::DocumentStore,
+        documents: &dyn tinystoragedrivers_types::DocumentStore,
     ) -> std::result::Result<(), StorageError> {
         // The shared `tsd.*` collections (leases, counters, migrations) are
         // declared with them: the ledger reads and writes those too.

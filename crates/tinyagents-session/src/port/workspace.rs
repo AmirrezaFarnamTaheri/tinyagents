@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
-use tinystoragedrivers_core::StorageBackend;
+use tinystoragedrivers_types::StorageBackend;
 use tinystoragedrivers_sqlite::SqliteStorage;
 
 use super::AgentStores;
@@ -73,7 +73,7 @@ impl WorkspaceStores {
             Arc::new(SqliteStorage::open(workspace_dir.join(STORE_DIR))?);
         let provider = Arc::new(DriverSessionStores::new(
             backend,
-            tinystoragedrivers_core::Scope::local(),
+            tinystoragedrivers_types::Scope::local(),
         )?);
         let stores = provider.try_for_agent(agent_id)?;
         let outcome = import_transcripts_once(&provider, agent_id, workspace_dir)?;

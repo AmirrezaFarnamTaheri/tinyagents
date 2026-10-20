@@ -1,6 +1,6 @@
 use chrono::{TimeZone, Utc};
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_types::{MemoryStorage, Scope, StorageBackend};
 
 use super::control::plan_transition;
 use super::*;

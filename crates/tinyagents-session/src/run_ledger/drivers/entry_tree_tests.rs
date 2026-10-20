@@ -1,7 +1,7 @@
 use super::*;
 use crate::entry_tree::{ForkPosition, ForkScope};
 use crate::transcript::TranscriptMessage;
-use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
+use tinystoragedrivers_types::{MemoryStorage, StorageBackend};
 
 fn kind(text: &str) -> EntryKind {
     EntryKind::Message(TranscriptMessage::new("user", text))
@@ -258,7 +258,7 @@ async fn compaction_and_pinned_context_project_summary_pinned_then_kept_rows() {
 
 #[tokio::test]
 async fn retired_generation_cannot_read_or_append_fresh_entry_tree() {
-    use tinystoragedrivers_core::{ErrorKind, PurgeMode, PurgeRequest};
+    use tinystoragedrivers_types::{ErrorKind, PurgeMode, PurgeRequest};
     let backend = MemoryStorage::new();
     let scope = Scope::new("alice").unwrap();
     let scoped = backend.for_scope(&scope).unwrap();
@@ -295,7 +295,7 @@ async fn retired_generation_cannot_read_or_append_fresh_entry_tree() {
 
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::{
     CollectionSpec, DocumentStore, Page, Precondition, ReadCheck, Version, Versioned, WriteOp,
     WriteResult,
 };
@@ -312,7 +312,7 @@ struct TreeBoundary {
 }
 #[async_trait::async_trait]
 impl DocumentStore for TreeBoundary {
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     async fn ensure_collection(&self, spec: &CollectionSpec) -> NativeResult<()> {
@@ -438,7 +438,7 @@ async fn competing_entry_allocators_retry_without_losing_parent_or_ordinal() {
 
 #[tokio::test]
 async fn tree_batch_refusal_preserves_entries_labels_head_and_native_source() {
-    use tinystoragedrivers_core::ErrorKind;
+    use tinystoragedrivers_types::ErrorKind;
     let backend = MemoryStorage::new();
     let native = backend.for_scope(&Scope::local()).unwrap();
     let reader = DriverRunLedger::new(native.clone());
@@ -516,7 +516,7 @@ async fn import_keeps_insertion_order_for_entries_sharing_an_ordinal() {
 
 #[tokio::test]
 async fn existing_schema_entry_tree_requires_trusted_preparation_and_never_ensures() {
-    use tinystoragedrivers_core::ErrorKind;
+    use tinystoragedrivers_types::ErrorKind;
     let backend = MemoryStorage::new();
     let scope = Scope::local();
     let restricted = backend.existing_schema().unwrap();
@@ -551,7 +551,7 @@ async fn existing_schema_entry_tree_requires_trusted_preparation_and_never_ensur
 
 #[tokio::test]
 async fn imported_cycle_and_native_ordinal_exhaustion_refuse_without_partial_entries() {
-    use tinystoragedrivers_core::ErrorKind;
+    use tinystoragedrivers_types::ErrorKind;
     let backend = MemoryStorage::new();
     let native = DriverRunLedger::new(backend.for_scope(&Scope::local()).unwrap());
     let cycle = Entry {
@@ -604,7 +604,7 @@ async fn terminal_entry_allocators_remain_representable_in_native_bson() {
                 "session_id": "append", "next_ordinal": i64::MAX,
                 "next_insertion": 0, "tip": null
             }),
-            tinystoragedrivers_core::Precondition::Absent,
+            tinystoragedrivers_types::Precondition::Absent,
         )
         .await
         .unwrap();
@@ -645,7 +645,7 @@ async fn terminal_entry_allocators_remain_representable_in_native_bson() {
             .unwrap();
         assert!(row.doc["next_ordinal"].is_null());
         assert!(
-            matches!(native.entry_append_to_head(session, kind("overflow")).await.unwrap_err(), super::super::LedgerError::Driver(error) if error.kind() == tinystoragedrivers_core::ErrorKind::InvalidInput)
+            matches!(native.entry_append_to_head(session, kind("overflow")).await.unwrap_err(), super::super::LedgerError::Driver(error) if error.kind() == tinystoragedrivers_types::ErrorKind::InvalidInput)
         );
     }
     assert_eq!(

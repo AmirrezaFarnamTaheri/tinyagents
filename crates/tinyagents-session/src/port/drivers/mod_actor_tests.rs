@@ -1,14 +1,14 @@
 use super::*;
 use crate::turn_state::TurnState;
 use serde_json::json;
-use tinystoragedrivers_core::{Capabilities, Fence, Filter, MemoryStorage};
+use tinystoragedrivers_types::{Capabilities, Fence, Filter, MemoryStorage};
 
 #[test]
 fn actor_factory_uses_supplied_backend_with_independent_stable_agent_cache() {
     let original_backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let admitted_backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let original =
-        DriverSessionStores::new(original_backend, tinystoragedrivers_core::Scope::local())
+        DriverSessionStores::new(original_backend, tinystoragedrivers_types::Scope::local())
             .unwrap();
     let old = original.for_agent("alice~planner");
     old.turn_states
@@ -77,7 +77,7 @@ fn set_epoch(backend: &Arc<dyn StorageBackend>, epoch: u64) {
                     "leases",
                     "alice",
                     json!({"epoch": epoch}),
-                    tinystoragedrivers_core::Precondition::None,
+                    tinystoragedrivers_types::Precondition::None,
                 )
                 .await
         })
@@ -90,7 +90,7 @@ fn fresh_actor_after_native_takeover_preserves_namespace_and_refuses_retained_ol
     let inner: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     set_epoch(&inner, 1);
     let original =
-        DriverSessionStores::new(admitted(&inner, 1), tinystoragedrivers_core::Scope::local())
+        DriverSessionStores::new(admitted(&inner, 1), tinystoragedrivers_types::Scope::local())
             .unwrap();
     let old = original.for_agent("alice~planner");
     let saved = TurnState::started("persisted", "r", 1, "2026-01-01T00:00:00Z");
@@ -119,7 +119,7 @@ fn fresh_actor_after_native_takeover_preserves_namespace_and_refuses_retained_ol
         .expect("retained transcript writes are fenced");
     assert_eq!(
         error.downcast_ref::<StorageError>().unwrap().kind(),
-        tinystoragedrivers_core::ErrorKind::Fenced
+        tinystoragedrivers_types::ErrorKind::Fenced
     );
     assert!(
         new.transcripts

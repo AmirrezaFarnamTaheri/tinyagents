@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::{Value, json};
-use tinystoragedrivers_core::{CollectionSpec, MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_types::{CollectionSpec, MemoryStorage, Scope, StorageBackend};
 
 // Explicit fixture preparation is owning bootstrap authority, not actor DDL.
 const PENDING_COLLECTION: &str = "conversations.appends";
@@ -251,7 +251,7 @@ async fn counterfeit_document_capabilities_do_not_reserve_when_actual_stream_pro
         .await
         .unwrap_err();
     assert!(
-        matches!(error, ConversationError::Driver(ref e) if matches!(e.kind(), ErrorKind::Unsupported(tinystoragedrivers_core::Capability::ConditionalStreamAppend)))
+        matches!(error, ConversationError::Driver(ref e) if matches!(e.kind(), ErrorKind::Unsupported(tinystoragedrivers_types::Capability::ConditionalStreamAppend)))
     );
     assert!(store.get_messages("same").await.unwrap().is_empty());
     assert_eq!(
@@ -328,7 +328,7 @@ async fn pending_old_incarnation_cannot_publish_after_delete_and_recreate() {
 }
 
 async fn fenced_phases(backend: &dyn StorageBackend) {
-    use tinystoragedrivers_core::Fence;
+    use tinystoragedrivers_types::Fence;
     let store = actor(backend).await;
     let cluster = Scope::new("cluster").unwrap();
     let owner = backend.for_scope(&cluster).unwrap();

@@ -8,8 +8,8 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tinystoragedrivers_core::DocumentStoreExt;
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::DocumentStoreExt;
+use tinystoragedrivers_types::{
     Item, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopedStorage,
     StorageBackend, WriteOptions,
 };
@@ -33,7 +33,7 @@ fn v1_id(parts: &[&str]) -> String {
 async fn put_v1(storage: &ScopedStorage, collection: &str, parts: &[&str], record: Value) {
     let envelope = json!({"schemaVersion": 1, "updatedSql": null, "record": record});
     let docs = storage.documents();
-    docs.ensure_collection(&tinystoragedrivers_core::CollectionSpec::new(collection))
+    docs.ensure_collection(&tinystoragedrivers_types::CollectionSpec::new(collection))
         .await
         .unwrap();
     docs.put_with(
@@ -48,7 +48,7 @@ async fn put_v1(storage: &ScopedStorage, collection: &str, parts: &[&str], recor
 }
 
 async fn migrate(storage: &ScopedStorage) {
-    for spec in tinystoragedrivers_core::primitives::collection_specs() {
+    for spec in tinystoragedrivers_types::primitives::collection_specs() {
         storage.documents().ensure_collection(&spec).await.unwrap();
     }
     for schema in [ledger_storage_schema(), history_storage_schema()] {

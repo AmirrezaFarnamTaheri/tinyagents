@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
+use tinystoragedrivers_types::{MemoryStorage, StorageBackend};
 
 pub(super) fn run(id: &str) -> AgentRunUpsert {
     AgentRunUpsert {
@@ -191,9 +191,9 @@ async fn independent_event_allocators_replay_without_duplicates_and_keep_cursor_
 }
 
 #[derive(Debug)]
-struct RefusingProjection(Arc<dyn tinystoragedrivers_core::StreamStore>);
+struct RefusingProjection(Arc<dyn tinystoragedrivers_types::StreamStore>);
 #[async_trait::async_trait]
-impl tinystoragedrivers_core::StreamStore for RefusingProjection {
+impl tinystoragedrivers_types::StreamStore for RefusingProjection {
     async fn append(
         &self,
         stream: &str,
@@ -221,7 +221,7 @@ impl tinystoragedrivers_core::StreamStore for RefusingProjection {
         stream: &str,
         from: u64,
         limit: usize,
-    ) -> std::result::Result<Vec<tinystoragedrivers_core::StreamEntry>, StorageError> {
+    ) -> std::result::Result<Vec<tinystoragedrivers_types::StreamEntry>, StorageError> {
         self.0.read_window(stream, from, limit).await
     }
     async fn len(&self, stream: &str) -> std::result::Result<u64, StorageError> {
@@ -271,7 +271,7 @@ async fn committed_status_and_event_survive_projection_refusal_and_process_recon
     .await
     .unwrap();
     assert!(
-        matches!(a.reconcile_run_events("run").await.unwrap_err(), super::super::LedgerError::Driver(ref e) if e.kind() == tinystoragedrivers_core::ErrorKind::Fenced)
+        matches!(a.reconcile_run_events("run").await.unwrap_err(), super::super::LedgerError::Driver(ref e) if e.kind() == tinystoragedrivers_types::ErrorKind::Fenced)
     );
     let reconstructed = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
     assert_eq!(
@@ -392,7 +392,7 @@ async fn native_command_center_controls_use_atomic_status_and_event_receipts() {
 
 #[tokio::test]
 async fn retired_generation_cannot_change_status_allocate_events_or_project_streams() {
-    use tinystoragedrivers_core::{ErrorKind, PurgeMode, PurgeRequest, ScopeGeneration};
+    use tinystoragedrivers_types::{ErrorKind, PurgeMode, PurgeRequest, ScopeGeneration};
     let backend = MemoryStorage::new();
     let scope = Scope::new("alice").unwrap();
     let old = DriverRunLedger::new(
@@ -508,7 +508,7 @@ async fn projection_refuses_an_existing_stream_that_disagrees_with_committed_rec
         .unwrap();
     assert!(
         matches!(a.reconcile_run_events("run").await.unwrap_err(), super::super::LedgerError::Driver(ref error)
-        if error.kind() == tinystoragedrivers_core::ErrorKind::Serialization)
+        if error.kind() == tinystoragedrivers_types::ErrorKind::Serialization)
     );
 }
 
@@ -540,7 +540,7 @@ async fn existing_schema_ledger_missing_declaration_refuses_before_any_record_wr
     let actor = DriverRunLedger::new_existing_schema(restricted.for_scope(&scope).unwrap());
     assert!(
         matches!(actor.upsert_agent_run(run("run")).await.unwrap_err(), super::super::LedgerError::Driver(ref error)
-        if error.kind() == tinystoragedrivers_core::ErrorKind::NotFound)
+        if error.kind() == tinystoragedrivers_types::ErrorKind::NotFound)
     );
     let inspect = backend.for_scope(&scope).unwrap();
     assert!(
@@ -585,7 +585,7 @@ async fn projection_refuses_a_valid_receipt_that_skips_an_earlier_committed_even
         .unwrap();
     let error = ledger.reconcile_run_events("run").await.unwrap_err();
     assert!(
-        matches!(error, crate::run_ledger::LedgerError::Driver(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Serialization)
+        matches!(error, crate::run_ledger::LedgerError::Driver(error) if error.kind() == tinystoragedrivers_types::ErrorKind::Serialization)
     );
     assert_eq!(native.streams().len(&stream).await.unwrap(), 1);
     assert_eq!(

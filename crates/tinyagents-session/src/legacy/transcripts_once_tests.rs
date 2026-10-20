@@ -5,7 +5,7 @@ use crate::port::DriverSessionStores;
 use crate::transcript::{TranscriptMessage, TranscriptMeta, write_transcript};
 use std::path::Path;
 use std::sync::Arc;
-use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
+use tinystoragedrivers_types::{MemoryStorage, StorageBackend};
 
 fn meta() -> TranscriptMeta {
     TranscriptMeta {
@@ -33,7 +33,7 @@ fn meta() -> TranscriptMeta {
 fn provider() -> DriverSessionStores {
     DriverSessionStores::new(
         Arc::new(MemoryStorage::new()) as Arc<dyn StorageBackend>,
-        tinystoragedrivers_core::Scope::local(),
+        tinystoragedrivers_types::Scope::local(),
     )
     .unwrap()
 }
@@ -126,7 +126,7 @@ fn the_marker_is_a_migrations_record() {
     let done = provider
         .bridge()
         .run(async move {
-            tinystoragedrivers_core::Migrations::new(&scoped)
+            tinystoragedrivers_types::Migrations::new(&scoped)
                 .done(MIGRATION_OWNER, TRANSCRIPT_IMPORT_STEP)
                 .await
         })
@@ -146,7 +146,7 @@ fn a_v1_marker_is_carried_over_instead_of_rescanning() {
         .bridge()
         .run(async move {
             let docs = seeded.documents();
-            docs.ensure_collection(&tinystoragedrivers_core::CollectionSpec::new(
+            docs.ensure_collection(&tinystoragedrivers_types::CollectionSpec::new(
                 "session_import_markers",
             ))
             .await
@@ -155,7 +155,7 @@ fn a_v1_marker_is_carried_over_instead_of_rescanning() {
                 "session_import_markers",
                 "session_raw_jsonl_v1",
                 serde_json::json!({"imported_at": "2026-01-01T00:00:00Z", "read": 1}),
-                tinystoragedrivers_core::Precondition::Absent,
+                tinystoragedrivers_types::Precondition::Absent,
             )
             .await
             .unwrap();
@@ -168,7 +168,7 @@ fn a_v1_marker_is_carried_over_instead_of_rescanning() {
     let (migrated, left) = provider
         .bridge()
         .run(async move {
-            let migrated = tinystoragedrivers_core::Migrations::new(&check)
+            let migrated = tinystoragedrivers_types::Migrations::new(&check)
                 .done(MIGRATION_OWNER, TRANSCRIPT_IMPORT_STEP)
                 .await
                 .unwrap();

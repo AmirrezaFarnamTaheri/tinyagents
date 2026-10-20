@@ -8,7 +8,7 @@
 //! [`DriverRunLedger::import_legacy_database`].
 use super::*;
 use crate::legacy::{LegacySourceSnapshot, QuiescentSource, rows, source};
-use tinystoragedrivers_core::{ErrorKind, MIGRATIONS_COLLECTION, Progress};
+use tinystoragedrivers_types::{ErrorKind, MIGRATIONS_COLLECTION, Progress};
 
 /// The `tsd.migrations` step (owner `ledger`) that records the agent-family
 /// import `operation_id`.
@@ -17,7 +17,7 @@ pub(super) fn import_step(operation_id: &str) -> String {
 }
 
 /// The id of an import's receipt in `tsd.migrations`: `Key::of([owner, step])`,
-/// the id [`tinystoragedrivers_core::Migrations::mark_done`] gives an importer.
+/// the id [`tinystoragedrivers_types::Migrations::mark_done`] gives an importer.
 pub(super) fn import_receipt_id(operation_id: &str) -> std::result::Result<String, StorageError> {
     super::storage::key(&[LEDGER_OWNER, &import_step(operation_id)])
 }
@@ -61,10 +61,10 @@ impl DriverRunLedger {
         source: &QuiescentSource,
         operation_id: &str,
     ) -> Result<AgentImportReport> {
-        tinystoragedrivers_core::ReadCheck {
+        tinystoragedrivers_types::ReadCheck {
             collection: MIGRATIONS_COLLECTION.into(),
             id: import_receipt_id(operation_id)?,
-            expected: tinystoragedrivers_core::ExpectedDocument::Absent,
+            expected: tinystoragedrivers_types::ExpectedDocument::Absent,
         }
         .validate()?;
         let loaded = self.load_agent_import(source)?;
@@ -147,7 +147,7 @@ impl DriverRunLedger {
         operation_id: &str,
     ) -> Result<AgentImportReport> {
         use super::storage::{AGENTS, EVENT_HEADS, EVENTS, TELEMETRY, key, put_op};
-        use tinystoragedrivers_core::{Precondition, WriteOp};
+        use tinystoragedrivers_types::{Precondition, WriteOp};
         self.declare().await?;
         let report = AgentImportReport {
             agent_runs: loaded.runs.len(),

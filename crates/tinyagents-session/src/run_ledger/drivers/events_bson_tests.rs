@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::Value;
-use tinystoragedrivers_core::{
+use tinystoragedrivers_types::{
     CollectionSpec, DocumentStore, ErrorKind, MemoryStorage, Page, Precondition, ReadCheck,
     StorageBackend, Version, Versioned, WriteOp, WriteResult,
 };
@@ -38,7 +38,7 @@ struct SignedBsonDocuments {
 }
 #[async_trait::async_trait]
 impl DocumentStore for SignedBsonDocuments {
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     async fn ensure_collection(&self, spec: &CollectionSpec) -> NativeResult<()> {
