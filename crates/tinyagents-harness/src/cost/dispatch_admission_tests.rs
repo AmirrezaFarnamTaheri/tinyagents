@@ -1033,7 +1033,7 @@ async fn monetarily_budgeted_stream_releases_admission_at_terminal_item() {
         let counts = Arc::new(Counts::default());
         let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
         let budget = ModelBudget::new(Budget::new(SpendLimits::default()), CallBudget {
-            input_tokens: 100,
+            input_tokens: 10_000,
             output_tokens: 10,
             cost_micros: 100,
         });
@@ -1071,7 +1071,7 @@ async fn monetarily_budgeted_pending_stream_keeps_admission_until_drop() {
     let counts = Arc::new(Counts::default());
     let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
     let budget = ModelBudget::new(Budget::new(SpendLimits::default()), CallBudget {
-        input_tokens: 100,
+        input_tokens: 10_000,
         output_tokens: 10,
         cost_micros: 100,
     });
