@@ -18,10 +18,10 @@ use super::types::{Item, Owner, Schema};
 use super::{MigrateOptions, MigrationReport, SchemaDeclaration, TransformExecutor};
 use crate::backend::ScopedStorage;
 
-/// The composed declarations of every owner in a process.
+/// A validated set of storage declarations, normally owned by one crate.
 ///
-/// Built once by the host with [`Registry::compose`]. The registry itself is
-/// immutable apart from the per-scope readiness sets [`Registry::check_ready`]
+/// The owner builds this from its own [`Schema`] values. It is immutable apart
+/// from the per-scope readiness sets [`Registry::check_ready`]
 /// and [`Registry::check_ready_in`] read, which
 /// [`Registry::migrate`](Registry::migrate) keeps current.
 ///

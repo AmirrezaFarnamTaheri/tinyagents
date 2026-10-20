@@ -40,9 +40,9 @@ pub(crate) fn attachment_stash_spec() -> CollectionSpec {
     CollectionSpec::new(ATTACHMENT_STASH).index(IndexSpec::new("touched", ["touched_ms"]))
 }
 
-/// The harness's storage declarations: what it stores and the steps that bring
-/// the v1 names and shapes forward. The host composes it with
-/// `Registry::compose` and runs `Registry::migrate` per scope.
+/// The harness's storage declaration and the steps that bring its v1 names
+/// and shapes forward. Harness open runs this owner-local migration against
+/// the already-bound scope before returning the handle.
 ///
 /// | v1 | v2 |
 /// |---|---|

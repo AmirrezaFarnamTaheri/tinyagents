@@ -247,7 +247,7 @@ README.
   those controls only affect terminal-state bookkeeping in the `TaskStore`,
   not the in-flight task itself.
 - `TaskStore` is a synchronous trait, so `DriverTaskStore` bridges the async
-  driver ports with `tinystoragedrivers_core::Blocking`; build it from a
+  driver ports with `tinyagents_storage_kit::Blocking`; build it from a
   multi-thread runtime or outside one. History snapshots grow one per
   transition, so prune old records through the backend if that matters.
 - `OrchestrationTaskFilter::matches` is evaluated in-process against loaded

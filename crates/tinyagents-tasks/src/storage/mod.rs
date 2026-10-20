@@ -47,9 +47,9 @@ pub(crate) fn completions_spec() -> CollectionSpec {
         .index(IndexSpec::new("by_state", ["state"]))
 }
 
-/// The tasks crate's storage declarations: what it stores and the steps that
-/// bring the v1 names and shapes forward. The host composes it with
-/// `Registry::compose` and runs `Registry::migrate` per scope.
+/// The tasks crate's storage declaration and the steps that bring its v1 names
+/// and shapes forward. `open_storage` runs this owner-local migration against
+/// the already-bound scope before returning the handle.
 ///
 /// | v1 | v2 |
 /// |---|---|

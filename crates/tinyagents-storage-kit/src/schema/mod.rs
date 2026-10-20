@@ -1,16 +1,16 @@
-//! The schema registry: owners declare what they store, the host composes the
-//! declarations, prepares the backend and migrates older data forward.
+//! Schema declarations and migration helpers for storage-owning crates.
 //!
-//! Every crate that owns a record type exports `storage_schema() -> Schema`:
+//! Every crate that owns a record type may declare `storage_schema() -> Schema`:
 //! its [`Item`]s (collections, streams, blob and secret prefixes, each with a
 //! [`ScopeClass`]) and the [`Step`]s that rewrite older versions of a
-//! collection. The host builds one [`Registry`] from all of them:
+//! collection. The owner applies its declaration to the storage handle already
+//! bound by the host; owner migrations stay local to that crate:
 //!
 //! 1. [`Registry::compose`] refuses bad names, names outside an owner's prefix,
 //!    duplicate claims and owners, step gaps and descending versions. It is
 //!    pure: nothing touches a backend.
-//! 2. [`Registry::prepare`] declares every collection (trusted bootstrap).
-//! 3. [`Registry::migrate`] runs each pending step over a [`ScopedStorage`](crate::ScopedStorage),
+//! 2. [`Registry::prepare`] declares the owner's collections (trusted bootstrap).
+//! 3. [`Registry::migrate`] runs that owner's pending steps over a [`ScopedStorage`](crate::ScopedStorage),
 //!    recording progress in the `tsd.migrations` collection so a crash resumes
 //!    at the last finished batch.
 //! 4. Typed repositories call [`Registry::check_ready`] before they write;

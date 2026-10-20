@@ -4,12 +4,12 @@
 //! Every owner needs the same four things, and each used to rebuild them. They
 //! all run on a [`DocumentStore`](crate::DocumentStore) handle the caller opened for the right
 //! scope (a tenant for [`Kv`] and [`Counters`], usually `cluster` for
-//! [`Leases`] that place processes), so scope isolation and write fencing
+//! [`Leases`] that place processes), so scope isolation and conditional writes
 //! apply to them exactly as to any other record.
 //!
 //! The three collections they use, [`LEASES`], [`KV`] and [`COUNTERS`], are
-//! declared by [`collection_specs`]; call [`ensure`] once per scope at boot
-//! (the schema registry does it for a host that composes one).
+//! declared by [`collection_specs`]; each storage owner calls [`ensure`] for
+//! its already-bound scope during open.
 //!
 //! ```
 //! # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
