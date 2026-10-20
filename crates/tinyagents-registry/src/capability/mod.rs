@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use crate::component::{ComponentKind, ComponentMetadata};
 use tinyagents_harness::error::{Result, TinyAgentsError};
+use tinyagents_harness::model_registry::ModelRegistry;
 use tinyagents_harness::tool::ToolRegistry;
 use tinyinference_llm::model::ChatModel;
 use tinytools::Tool;
