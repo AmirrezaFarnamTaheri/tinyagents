@@ -2,9 +2,10 @@ use super::*;
 use std::collections::BTreeSet;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tinystoragedrivers_core::{
-    Capabilities, CollectionSpec, DocumentStore, Filter, Page, Precondition, Query, Sort,
-    StorageError, Version, Versioned, WriteOptions,
+use tinystoragedrivers_api::{Capabilities, DocumentStore};
+use tinystoragedrivers_types::{
+    CollectionSpec, Filter, Page, Precondition, Query, Sort, StorageError, Version, Versioned,
+    WriteOptions,
 };
 
 struct DeleteProbeDocs {
@@ -31,14 +32,14 @@ impl DocumentStore for DeleteProbeDocs {
     async fn validate_collection_spec(
         &self,
         required: &CollectionSpec,
-    ) -> tinystoragedrivers_core::Result<()> {
+    ) -> tinystoragedrivers_types::Result<()> {
         self.inner.validate_collection_spec(required).await
     }
 
     async fn ensure_collection(
         &self,
         spec: &CollectionSpec,
-    ) -> tinystoragedrivers_core::Result<()> {
+    ) -> tinystoragedrivers_types::Result<()> {
         self.inner.ensure_collection(spec).await
     }
 
@@ -46,7 +47,7 @@ impl DocumentStore for DeleteProbeDocs {
         &self,
         collection: &str,
         id: &str,
-    ) -> tinystoragedrivers_core::Result<Option<Versioned<serde_json::Value>>> {
+    ) -> tinystoragedrivers_types::Result<Option<Versioned<serde_json::Value>>> {
         self.inner.get(collection, id).await
     }
 
@@ -56,7 +57,7 @@ impl DocumentStore for DeleteProbeDocs {
         id: &str,
         doc: serde_json::Value,
         precondition: Precondition,
-    ) -> tinystoragedrivers_core::Result<Version> {
+    ) -> tinystoragedrivers_types::Result<Version> {
         self.inner.put(collection, id, doc, precondition).await
     }
 
@@ -67,7 +68,7 @@ impl DocumentStore for DeleteProbeDocs {
         doc: serde_json::Value,
         precondition: Precondition,
         options: WriteOptions,
-    ) -> tinystoragedrivers_core::Result<Version> {
+    ) -> tinystoragedrivers_types::Result<Version> {
         self.inner
             .put_with(collection, id, doc, precondition, options)
             .await
@@ -78,7 +79,7 @@ impl DocumentStore for DeleteProbeDocs {
         collection: &str,
         id: &str,
         precondition: Precondition,
-    ) -> tinystoragedrivers_core::Result<bool> {
+    ) -> tinystoragedrivers_types::Result<bool> {
         if collection == COLLECTION {
             let attempt = self.thread_deletes.fetch_add(1, Ordering::SeqCst) + 1;
             if self.fail_on_thread_delete == Some(attempt) {
@@ -126,7 +127,7 @@ impl DocumentStore for DeleteProbeDocs {
         &self,
         collection: &str,
         query: &Query,
-    ) -> tinystoragedrivers_core::Result<Page<Versioned<serde_json::Value>>> {
+    ) -> tinystoragedrivers_types::Result<Page<Versioned<serde_json::Value>>> {
         self.inner.query(collection, query).await
     }
 
@@ -134,7 +135,7 @@ impl DocumentStore for DeleteProbeDocs {
         &self,
         collection: &str,
         filter: &Filter,
-    ) -> tinystoragedrivers_core::Result<u64> {
+    ) -> tinystoragedrivers_types::Result<u64> {
         self.inner.count(collection, filter).await
     }
 
@@ -142,7 +143,7 @@ impl DocumentStore for DeleteProbeDocs {
         &self,
         collection: &str,
         filter: &Filter,
-    ) -> tinystoragedrivers_core::Result<u64> {
+    ) -> tinystoragedrivers_types::Result<u64> {
         self.inner.delete_where(collection, filter).await
     }
 
@@ -152,19 +153,19 @@ impl DocumentStore for DeleteProbeDocs {
         filter: &Filter,
         sort: &[Sort],
         patch: &serde_json::Value,
-    ) -> tinystoragedrivers_core::Result<Option<Versioned<serde_json::Value>>> {
+    ) -> tinystoragedrivers_types::Result<Option<Versioned<serde_json::Value>>> {
         self.inner.claim(collection, filter, sort, patch).await
     }
 
     async fn atomic_batch_checked(
         &self,
-        checks: Vec<tinystoragedrivers_core::ReadCheck>,
-        ops: Vec<tinystoragedrivers_core::WriteOp>,
-    ) -> tinystoragedrivers_core::Result<Vec<tinystoragedrivers_core::WriteResult>> {
+        checks: Vec<tinystoragedrivers_types::ReadCheck>,
+        ops: Vec<tinystoragedrivers_types::WriteOp>,
+    ) -> tinystoragedrivers_types::Result<Vec<tinystoragedrivers_types::WriteResult>> {
         self.inner.atomic_batch_checked(checks, ops).await
     }
 
-    async fn drop_collection(&self, collection: &str) -> tinystoragedrivers_core::Result<()> {
+    async fn drop_collection(&self, collection: &str) -> tinystoragedrivers_types::Result<()> {
         self.inner.drop_collection(collection).await
     }
 }
