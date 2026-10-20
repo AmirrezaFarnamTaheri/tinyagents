@@ -272,13 +272,12 @@ impl ChatModel<()> for TestModel {
     }
 }
 
-struct ArmLateRefusalAfterStreamConstruction {
+struct RetryingOpenAiModel {
     inner: Arc<tinyinference_llm::providers::openai::OpenAiModel>,
-    permit_state: Arc<PermitState>,
 }
 
 #[async_trait]
-impl ChatModel<()> for ArmLateRefusalAfterStreamConstruction {
+impl ChatModel<()> for RetryingOpenAiModel {
     fn profile(&self) -> Option<&ModelProfile> {
         <tinyinference_llm::providers::openai::OpenAiModel as ChatModel<()>>::profile(
             &self.inner,
@@ -567,9 +566,8 @@ async fn assert_openai_retry_rechecks_committed_admission(with_money_budget: boo
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     let counts = Arc::new(Counts::default());
     let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
-    let provider = Arc::new(ArmLateRefusalAfterStreamConstruction {
+    let provider = Arc::new(RetryingOpenAiModel {
         inner: Arc::new(OpenAiModel::new("test-key").with_base_url(endpoint)),
-        permit_state: admission.permits.clone(),
     });
     let money_budget = with_money_budget.then(|| {
         ModelBudget::new(
@@ -647,7 +645,7 @@ async fn assert_openai_retry_rechecks_committed_admission(with_money_budget: boo
     server.abort();
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
     assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
-    assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
+    assert_eq!(counts.observer_start.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
