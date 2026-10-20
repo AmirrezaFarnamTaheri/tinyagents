@@ -163,12 +163,13 @@ fn harness_with_chain(
     attempts: usize,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", primary)));
-    let mut models = vec!["primary".to_string()];
-    for (name, model) in others {
-        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(name, model)));
-        models.push(name.to_string());
-    }
+    let models = std::iter::once("primary".to_string())
+        .chain(others.iter().map(|(name, _)| (*name).to_string()))
+        .collect::<Vec<_>>();
+    harness.with_model_resolver(Arc::new(crate::host::PrebuiltModelResolver::new(
+        primary,
+        others.into_iter().map(|(name, model)| (name.to_string(), model)),
+    ).with_primary_name("primary")));
     harness.with_policy(RunPolicy {
         limits,
         retry: RetryPolicy::default()

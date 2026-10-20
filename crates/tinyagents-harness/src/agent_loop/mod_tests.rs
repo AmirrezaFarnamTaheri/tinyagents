@@ -3867,8 +3867,11 @@ async fn retry_then_fallback_succeeds() {
     let failing = Arc::new(FailingModel {
         attempts: Mutex::new(0),
     });
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", failing.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("backup", Arc::new(MockModel::constant("recovered")))));
+    let backup = Arc::new(MockModel::constant("recovered"));
+    harness.with_model_resolver(Arc::new(crate::host::PrebuiltModelResolver::new(
+        failing.clone(),
+        [("backup".to_string(), backup)],
+    ).with_primary_name("primary")));
     harness.with_policy(RunPolicy {
         // 2 attempts on primary, then fall back to backup.
         retry: RetryPolicy::default().with_max_attempts(2),
@@ -3895,8 +3898,10 @@ async fn provider_budget_refusal_does_not_call_model_fallback() {
         "unexpected fallback",
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", primary.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("fallback", fallback.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::PrebuiltModelResolver::new(
+        primary.clone(),
+        [("fallback".to_string(), fallback.clone())],
+    ).with_primary_name("primary")));
     harness.with_policy(RunPolicy {
         fallback: Some(FallbackPolicy::new(["primary", "fallback"])),
         ..RunPolicy::default()
@@ -3946,8 +3951,10 @@ async fn a_provider_budget_refusal_stops_retries_and_model_fallback() {
         "unexpected fallback",
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", primary.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("fallback", fallback.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::PrebuiltModelResolver::new(
+        primary.clone(),
+        [("fallback".to_string(), fallback.clone())],
+    ).with_primary_name("primary")));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(4),
         fallback: Some(FallbackPolicy::new(["primary", "fallback"])),
@@ -4079,8 +4086,10 @@ async fn fallback_chain_with_repeated_model_name_terminates() {
     let backup = Arc::new(FailingModel {
         attempts: Mutex::new(0),
     });
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", primary.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("backup", backup.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::PrebuiltModelResolver::new(
+        primary.clone(),
+        [("backup".to_string(), backup.clone())],
+    ).with_primary_name("primary")));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(1),
         fallback: Some(FallbackPolicy::new(["primary", "backup", "primary"])),
@@ -4213,9 +4222,13 @@ async fn runtime_fallback_skips_capability_ineligible_candidate() {
     });
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", primary.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("backup", backup.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("tertiary", tertiary.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::PrebuiltModelResolver::new(
+        primary.clone(),
+        [
+            ("backup".to_string(), backup.clone() as Arc<dyn ChatModel<()>>),
+            ("tertiary".to_string(), tertiary.clone() as Arc<dyn ChatModel<()>>),
+        ],
+    ).with_primary_name("primary")));
     harness.push_middleware(Arc::new(RequireCapsMiddleware {
         model: "primary",
         caps: CapabilitySet {
