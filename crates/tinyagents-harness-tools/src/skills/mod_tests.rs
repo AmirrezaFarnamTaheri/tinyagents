@@ -263,6 +263,21 @@ async fn authorization_and_execution_use_the_same_packed_tool_after_rebind() {
 }
 
 #[tokio::test]
+async fn erased_use_skill_exposes_its_shared_registry_handle() {
+    let handle = PackRegistryHandle::default();
+    let tool: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle.clone(), CATALOG));
+    let recovered = pack_registry_handle(tool.as_ref()).expect("registered use_skill handle");
+    let registry = Arc::new(vec![Box::new(FakeTool::plain("a_one")) as Box<dyn Tool>]);
+    recovered.bind(Arc::downgrade(&registry));
+
+    let result = tool
+        .execute(json!({"skill": "alpha", "tool": "a_one", "args": {}}))
+        .await
+        .unwrap();
+    assert_eq!(result.text(), "a_one:{}");
+}
+
+#[tokio::test]
 async fn catalogs_with_the_same_start_pointer_but_different_lengths_conflict() {
     let handle = PackRegistryHandle::default();
     let mut inner: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("executed"))];
