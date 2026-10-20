@@ -49,7 +49,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// call; a rejection puts it back when `request.model` still carries the
     /// rejected name, so that name never reaches resolution or an adapter that
     /// honours `request.model`. A model a middleware picked is left alone.
-    pub(super) fn apply_steered_model_switch(
+    pub(super) async fn apply_steered_model_switch(
         &self,
         ctx: &mut RunContext<Ctx>,
         request: &mut ModelRequest,
@@ -65,14 +65,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             crate::runtime::host_invocation_binding::<State, Ctx>(ctx),
             Ok(None)
         );
-        let eligible = !hosted
-            && self.models.get(&requested).is_some_and(|model| {
-                model_eligible(
-                    model.as_ref(),
-                    request.required_capabilities.as_ref(),
-                    false,
-                )
-            });
+        let eligible = if hosted { false } else if let Some(resolver) = self.model_resolver.as_ref() {
+            resolver.resolve_named(&requested).await.ok().flatten()
+                .is_some_and(|model| model_is_eligible(model.as_ref(), request.required_capabilities.as_ref()))
+        } else { false };
         if eligible {
             if request.model.as_deref() != Some(requested.as_str()) {
                 match request.model.as_deref() {
@@ -97,10 +93,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if request.model.as_deref() == Some(requested.as_str()) {
             request.model = model_before_switch.clone();
         }
-        let resolved = self
-            .models
-            .resolve_request(request, None, None)
-            .map_or_else(|| "<default>".to_string(), |binding| binding.resolved.name);
+        let resolved = self.model_resolver.as_ref()
+            .and_then(|resolver| resolver.preview(&super::model_call::local_resolve_request(request)))
+            .and_then(|model| model.profile().and_then(|p| p.model.clone()))
+            .unwrap_or_else(|| "<default>".to_string());
         tracing::warn!(
             target: "tinyagents::steering",
             run_id = %ctx.run_id(),

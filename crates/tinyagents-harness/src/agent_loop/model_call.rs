@@ -22,7 +22,7 @@ use crate::no_progress::StreamTextStallDetector;
 use crate::retry::{FailoverDecision, FailoverReason, FailoverState, decide};
 use tinyinference_llm::cache::CachePolicy;
 
-fn local_resolve_request(request: &ModelRequest) -> crate::host::ModelResolveRequest {
+pub(super) fn local_resolve_request(request: &ModelRequest) -> crate::host::ModelResolveRequest {
     let mut resolve = crate::host::ModelResolveRequest::new("local");
     if let Some(pin) = request.model.as_deref() {
         resolve = resolve.with_model_pin(pin);
@@ -35,19 +35,21 @@ fn local_resolve_request(request: &ModelRequest) -> crate::host::ModelResolveReq
     resolve
 }
 
-fn ensure_model_eligible<State: Send + Sync>(
+pub(super) fn model_is_eligible<State: Send + Sync>(
     model: &dyn ChatModel<State>,
-    request: &ModelRequest,
+    required: Option<&tinyinference_llm::model::CapabilitySet>,
+) -> bool {
+    model.profile().is_none_or(|profile| {
+        profile.is_usable()
+            && required.is_none_or(|required| profile.satisfies(required))
+    })
+}
+
+fn ensure_model_eligible<State: Send + Sync>(
+    model: &dyn ChatModel<State>, request: &ModelRequest,
 ) -> Result<()> {
-    if model.profile().is_some_and(|profile| !profile.is_usable()) {
-        return Err(TinyAgentsError::Model("resolved model is retired".into()));
-    }
-    if let Some(required) = request.required_capabilities.as_ref()
-        && model.profile().is_some_and(|profile| !profile.satisfies(required))
-    {
-        return Err(TinyAgentsError::Model("resolved model lacks required capabilities".into()));
-    }
-    Ok(())
+    if model_is_eligible(model, request.required_capabilities.as_ref()) { Ok(()) }
+    else { Err(TinyAgentsError::Model("resolved model is not eligible for this call".into())) }
 }
 
 /// Converts a configured stream window to a [`Duration`]. `None` and a zero
@@ -686,7 +688,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if ctx.limits.is_model_skipped(&current_name)
             && crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_none()
             && let Some((name, next_model)) =
-                self.select_fallback(ctx, request, &current_name, &mut visited, None)
+                self.select_fallback(ctx, request, &current_name, &mut visited, None).await?
         {
             tracing::debug!(
                 call_id = %call_id.as_str(),
@@ -945,7 +947,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         &current_name,
                         &mut visited,
                         larger_than,
-                    );
+                    ).await?;
                     let decision = decide(
                         reason,
                         FailoverState {
@@ -1009,14 +1011,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// visited and surfaced as [`AgentEvent::FallbackSkipped`]. With
     /// `larger_than = Some(n)` a candidate must also declare a
     /// `max_input_tokens` strictly greater than `n` (context-overflow failover).
-    fn select_fallback(
+    async fn select_fallback(
         &self,
         ctx: &mut RunContext<Ctx>,
         request: &ModelRequest,
         cursor: &str,
         visited: &mut std::collections::HashSet<String>,
         larger_than: Option<u64>,
-    ) -> Option<(String, Arc<dyn ChatModel<State>>)> {
+    ) -> Result<Option<(String, Arc<dyn ChatModel<State>>)>> {
         let required = request.required_capabilities.as_ref();
         // A steered model outside the chain falls back through the whole
         // chain (the original primary's), not from a position it lacks.
@@ -1036,8 +1038,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 })
                 .map(str::to_owned)
                 .filter(|name| !visited.contains(name));
-            let (name, next_model) =
-                next.and_then(|name| self.models.get(&name).map(|m| (name, m)))?;
+            let Some(name) = next else { return Ok(None); };
+            let host = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?;
+            let resolver = host.as_ref().map(|binding| &binding.host.models)
+                .or(self.model_resolver.as_ref());
+            let Some(resolver) = resolver else { return Ok(None); };
+            let next_model = resolver.resolve_named(&name).await?;
+            let Some(next_model) = next_model else {
+                visited.insert(name.clone());
+                ctx.emit(AgentEvent::FallbackSkipped { model: name.clone() });
+                cursor = name;
+                continue;
+            };
             let written_off = ctx.limits.is_model_skipped(&name);
             // `larger_than` (context-overflow failover): the candidate must
             // *declare* a window strictly above the given one.
@@ -1047,7 +1059,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     .and_then(|profile| profile.max_input_tokens)
                     .is_none_or(|window| window <= floor)
             });
-            if written_off || too_small || !model_eligible(next_model.as_ref(), required, false) {
+            if written_off || too_small || !model_is_eligible(next_model.as_ref(), required) {
                 visited.insert(name.clone());
                 ctx.emit(AgentEvent::FallbackSkipped {
                     model: name.clone(),
@@ -1055,7 +1067,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 cursor = name;
                 continue;
             }
-            return Some((name, next_model));
+            return Ok(Some((name, next_model)));
         }
     }
 

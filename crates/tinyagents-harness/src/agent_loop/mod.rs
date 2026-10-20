@@ -107,7 +107,6 @@ use crate::middleware::{
     ToolBaseCall,
 };
 use crate::agent_loop::ModelBinding;
-use crate::model_registry::model_eligible;
 use crate::runtime::{AgentHarness, EndStrategy, InvalidArgsPolicy, UnknownToolPolicy};
 use crate::structured::{StructuredExtractor, StructuredStrategy};
 use crate::terminal::{TerminalClass, TerminalOutcome, TimeoutPhase};
