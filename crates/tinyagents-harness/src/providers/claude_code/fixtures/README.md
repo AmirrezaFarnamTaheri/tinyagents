@@ -1,8 +1,10 @@
-# Released Claude Code persistence fixtures
+# Legacy Claude Code persistence fixtures
 
-These files were written by the old file-backed public APIs from TinyAgents
-commit `d5ef63ce7ece369e8faaba69ab32a881540dde78`, immediately before the
-storage-port migration. `claude-code-sessions.json` comes from
+These files were written by the pre-migration file-backed public APIs from
+TinyAgents commit `d5ef63ce7ece369e8faaba69ab32a881540dde78`. The generator
+inputs `session_store.rs` and `settings.rs` are byte-identical to their
+pre-epic versions at `31cc57180f67b2f539a3c98d03388251084f0da0`. The files are
+not attributed to a release tag. `claude-code-sessions.json` comes from
 `session_store::SessionStore::open`, `set`, and `record_delivered`; it includes
 an orphan delivered-turn entry because the old API allowed recording turns
 before a session UUID existed. `claude_code_settings.json` comes from
