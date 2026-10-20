@@ -162,8 +162,8 @@ async fn steer_rejects_followup_unknown_unowned_and_terminal_without_consuming_r
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
-#[test]
-fn terminal_transition_after_snapshot_is_rejected_by_live_handle_check() {
+#[tokio::test]
+async fn terminal_transition_after_snapshot_is_rejected_by_live_handle_check() {
     let steering = SteeringRegistry::default();
     let reg = registry(steering);
     let tx = add(&reg, "t1", "p1", None);
