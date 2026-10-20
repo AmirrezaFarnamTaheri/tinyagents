@@ -117,12 +117,10 @@ async fn non_finite_vectors_are_not_persisted() {
 }
 
 #[tokio::test]
-async fn a_ranker_warms_from_a_sqlite_file_after_a_restart() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("embeddings.sqlite");
+async fn a_ranker_warms_after_a_driver_reopen() {
+    let storage = MemoryBackend::new();
     let first = bag();
     {
-        let storage = crate::test_support::shared_memory_backend(&path);
         let cache = Arc::new(DriverEmbeddingCache::new(docs(&storage, "local")));
         EmbeddingToolRanker::new(first.clone(), SIGNATURE)
             .with_cache(cache)
@@ -132,7 +130,6 @@ async fn a_ranker_warms_from_a_sqlite_file_after_a_restart() {
     }
     assert_eq!(first.calls.load(Ordering::SeqCst), 2, "catalogue + intent");
 
-    let storage = crate::test_support::shared_memory_backend(&path);
     let cache = Arc::new(DriverEmbeddingCache::new(docs(&storage, "local")));
     let warm = bag();
     let hits = EmbeddingToolRanker::new(warm.clone(), SIGNATURE)

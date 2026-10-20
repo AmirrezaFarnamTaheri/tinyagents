@@ -98,12 +98,10 @@ fn an_already_requested_cancellation_is_idempotent() {
 }
 
 #[test]
-fn state_and_history_survive_a_reopened_sqlite_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("tasks.sqlite");
+fn state_and_history_survive_a_driver_reopen_on_the_same_backend() {
+    let storage = MemoryBackend::new();
     let id = TaskId::new("task-a");
     {
-        let storage = crate::test_support::memory_backend(&path);
         let store = DriverTaskStore::new(docs_of(&storage, "local")).unwrap();
         store.insert(spec("task-a")).unwrap();
         store.mark_running(&id).unwrap();
@@ -112,7 +110,6 @@ fn state_and_history_survive_a_reopened_sqlite_file() {
             .unwrap();
         assert_eq!(store.history(&id).len(), 3);
     }
-    let storage = crate::test_support::memory_backend(&path);
     let reopened = DriverTaskStore::new(docs_of(&storage, "local")).unwrap();
     let record = reopened.get(&id).expect("task survives a restart");
     assert_eq!(record.status, OrchestrationTaskStatus::Completed);

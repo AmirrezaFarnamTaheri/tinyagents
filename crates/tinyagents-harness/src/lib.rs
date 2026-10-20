@@ -103,8 +103,6 @@ pub mod terminal;
 pub mod testkit;
 pub mod title;
 
-#[cfg(test)]
-mod test_support;
 pub mod token_estimation;
 pub mod tool;
 #[cfg(feature = "builtin-tools")]

@@ -2,6 +2,15 @@
 //! posture, PATH construction, and bounded stderr accumulation.
 
 use super::*;
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
+
+fn storage_pair(name: &str) -> (tinyagents_storage_kit::ScopedStorage, Arc<SessionStore>, tinyagents_storage_kit::primitives::Kv) {
+    let storage = MemoryBackend::new().for_scope(&Scope::new(name).unwrap()).unwrap();
+    let sessions = Arc::new(SessionStore::new(storage.documents()).unwrap());
+    let settings = super::settings::store(storage.documents()).unwrap();
+    (storage, sessions, settings)
+}
 
 #[test]
 fn missing_session_error_is_recognized_precisely() {
@@ -41,6 +50,7 @@ mod retry {
     async fn drive(
         dir: &std::path::Path,
         store: Arc<SessionStore>,
+        settings_store: tinyagents_storage_kit::primitives::Kv,
         bin: PathBuf,
     ) -> anyhow::Result<ChatResponse> {
         let messages = vec![ChatMessage::user("hi")];
@@ -54,6 +64,7 @@ mod retry {
             append_system_prompt: None,
             messages: &messages,
             session_store: store,
+            settings_store,
             stream: None,
             anthropic_api_key: None,
             mcp_provider: None,
@@ -66,13 +77,13 @@ mod retry {
     #[tokio::test]
     async fn missing_resumed_session_clears_mapping_and_retries_as_new() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(SessionStore::open(dir.path()));
-        store.set("t1", SAVED).unwrap();
+        let (_storage, store, settings_store) = storage_pair("driver-retry-one");
+        store.set("t1", SAVED).await.unwrap();
         let bin = fake_cli(
             dir.path(),
             &format!("No conversation found with session ID: {SAVED}"),
         );
-        drive(dir.path(), store.clone(), bin)
+        drive(dir.path(), store.clone(), settings_store, bin)
             .await
             .expect("retry succeeds");
         let log = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
@@ -80,20 +91,20 @@ mod retry {
         assert_eq!(lines.len(), 2, "one resume then one retry: {log}");
         assert!(lines[0].contains("--resume"));
         assert!(lines[1].contains("--session-id") && !lines[1].contains("--resume"));
-        let new_id = store.get("t1").expect("new mapping persisted");
+        let new_id = store.get("t1").await.unwrap().expect("new mapping persisted");
         assert_ne!(new_id, SAVED);
     }
 
     #[tokio::test]
     async fn unrelated_failure_keeps_mapping_and_does_not_retry() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(SessionStore::open(dir.path()));
-        store.set("t1", SAVED).unwrap();
+        let (_storage, store, settings_store) = storage_pair("driver-retry-two");
+        store.set("t1", SAVED).await.unwrap();
         let bin = fake_cli(dir.path(), "authentication_failed");
-        assert!(drive(dir.path(), store.clone(), bin).await.is_err());
+        assert!(drive(dir.path(), store.clone(), settings_store, bin).await.is_err());
         let log = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
         assert_eq!(log.lines().count(), 1);
-        assert_eq!(store.get("t1").as_deref(), Some(SAVED));
+        assert_eq!(store.get("t1").await.unwrap().as_deref(), Some(SAVED));
     }
 }
 
