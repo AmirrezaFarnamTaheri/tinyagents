@@ -4,10 +4,13 @@
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{
-    DisplayRecord, TranscriptHistory, TranscriptLocator, TranscriptTurn, read_transcript_display,
+    DisplayRecord, DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscript,
+    ThreadTranscripts, TranscriptHistory, TranscriptLocator, TranscriptMeta, TranscriptRead,
+    TranscriptTurn, read_transcript_display,
 };
 use crate::port::SessionStoreProvider;
 
@@ -39,6 +42,7 @@ pub(crate) fn imported_locator(workspace: &Path) -> Arc<dyn TranscriptLocator> {
         .transcripts;
     let raw = workspace.join("session_raw");
     let mut files = Vec::new();
+    let mut displays = HashMap::new();
     if raw.exists() {
         visit(&raw, &mut files).expect("walk transcript fixtures");
     }
@@ -52,6 +56,7 @@ pub(crate) fn imported_locator(workspace: &Path) -> Arc<dyn TranscriptLocator> {
         else {
             continue;
         };
+        displays.insert(stem.to_owned(), transcript.clone());
         let history = locator
             .open_stem(stem, transcript.meta.clone())
             .expect("open fixture transcript");
@@ -86,11 +91,107 @@ pub(crate) fn imported_locator(workspace: &Path) -> Arc<dyn TranscriptLocator> {
             previous = next;
         }
     }
-    locator
+    Arc::new(DisplayLocator { inner: locator, displays })
 }
 
 /// [`thread_spend_in`](super::spend::thread_spend_in) over the fixtures
 /// imported from `workspace`.
 pub(crate) fn thread_spend(workspace: &Path, thread_id: &str) -> super::spend::ThreadSpend {
     super::spend::thread_spend_in(imported_locator(workspace).as_ref(), thread_id)
+}
+
+struct DisplayRead {
+    inner: Arc<dyn TranscriptRead>,
+    display: Option<DisplaySessionTranscript>,
+}
+
+impl TranscriptRead for DisplayRead {
+    fn path(&self) -> &Path {
+        self.inner.path()
+    }
+
+    fn read_session(&self) -> anyhow::Result<Option<SessionTranscript>> {
+        self.inner.read_session()
+    }
+
+    fn read_display(&self) -> anyhow::Result<Option<DisplaySessionTranscript>> {
+        match &self.display {
+            Some(display) => Ok(Some(display.clone())),
+            None => self.inner.read_display(),
+        }
+    }
+}
+
+struct DisplayLocator {
+    inner: Arc<dyn TranscriptLocator>,
+    displays: HashMap<String, DisplaySessionTranscript>,
+}
+
+impl DisplayLocator {
+    fn wrap(&self, transcript: Arc<dyn TranscriptRead>) -> Arc<dyn TranscriptRead> {
+        let stem = super::history::stem_of_handle(transcript.path());
+        Arc::new(DisplayRead {
+            inner: transcript,
+            display: self.displays.get(&stem).cloned(),
+        })
+    }
+
+    fn wrap_listing(&self, mut listed: ThreadTranscripts) -> ThreadTranscripts {
+        for item in listed.roots.iter_mut().chain(&mut listed.subagents) {
+            item.transcript = self.wrap(Arc::clone(&item.transcript));
+        }
+        listed
+    }
+}
+
+impl TranscriptLocator for DisplayLocator {
+    fn destination_key(&self) -> Option<String> {
+        self.inner.destination_key()
+    }
+
+    fn latest_for_agent(&self, agent_name: &str) -> Option<Arc<dyn TranscriptRead>> {
+        self.inner
+            .latest_for_agent(agent_name)
+            .map(|transcript| self.wrap(transcript))
+    }
+
+    fn root_for_thread(&self, thread_id: &str) -> Option<Arc<dyn TranscriptRead>> {
+        self.inner
+            .root_for_thread(thread_id)
+            .map(|transcript| self.wrap(transcript))
+    }
+
+    fn root_for_thread_scoped(
+        &self,
+        thread_id: &str,
+        agent_id: Option<&str>,
+    ) -> Option<Arc<dyn TranscriptRead>> {
+        self.inner
+            .root_for_thread_scoped(thread_id, agent_id)
+            .map(|transcript| self.wrap(transcript))
+    }
+
+    fn thread_transcripts(
+        &self,
+        thread_id: &str,
+        agent_id: Option<&str>,
+    ) -> Option<ThreadTranscripts> {
+        self.inner
+            .thread_transcripts(thread_id, agent_id)
+            .map(|listed| self.wrap_listing(listed))
+    }
+
+    fn open_stem(
+        &self,
+        stem: &str,
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<Arc<dyn TranscriptHistory>> {
+        self.inner.open_stem(stem, seed)
+    }
+
+    fn read_session_transcript(&self, session: &SessionRef) -> Option<Arc<dyn TranscriptRead>> {
+        self.inner
+            .read_session_transcript(session)
+            .map(|transcript| self.wrap(transcript))
+    }
 }
