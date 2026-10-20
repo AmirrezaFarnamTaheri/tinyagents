@@ -2097,7 +2097,6 @@ dependencies = [
  "tinyagents-storage-kit",
  "tinyagents-tasks",
  "tinystoragedrivers-api",
- "tinystoragedrivers-sqlite",
  "tinystoragedrivers-testkit",
  "tinystoragedrivers-types",
  "tinytools-agent",

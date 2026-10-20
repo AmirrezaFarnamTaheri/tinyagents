@@ -1,1 +1,2706 @@
-flock: failed to execute scripts/ci-cancel-aware.sh: No such file or directory
+[ci-cancel-aware] exec: cargo test -p tinyagents-session --all-features --no-run 
+   Compiling tinyagents-session v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-session)
+error[E0432]: unresolved import `tinyagents_storage_kit::Fence`
+ --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:4:46
+  |
+4 | use tinyagents_storage_kit::{CollectionSpec, Fence, Scope};
+  |                                              ^^^^^ no `Fence` in the root
+
+error[E0432]: unresolved import `tinystoragedrivers_types::Fence`
+   --> crates/tinyagents-session/src/threads/driver_append_tests.rs:333:9
+    |
+333 |     use tinystoragedrivers_types::Fence;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^-----
+    |                                   |
+    |                                   no `Fence` in the root
+
+error[E0432]: unresolved import `tinyagents_storage_kit::Fence`
+   --> crates/tinyagents-session/src/run_ledger/drivers/mod_tests.rs:714:50
+    |
+714 |     use tinyagents_storage_kit::{CollectionSpec, Fence, Precondition};
+    |                                                  ^^^^^ no `Fence` in the root
+
+error[E0432]: unresolved import `tinystoragedrivers_types::Fence`
+   --> crates/tinyagents-session/src/threads/driver_tests.rs:252:9
+    |
+252 |     use tinystoragedrivers_types::Fence;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^-----
+    |                                   |
+    |                                   no `Fence` in the root
+
+error[E0433]: cannot find module or crate `tinystoragedrivers_sqlite` in this scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/mod_tests.rs:328:15
+    |
+328 |     let sql = tinystoragedrivers_sqlite::rusqlite::Connection::open_with_flags(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `tinystoragedrivers_sqlite`
+    |
+help: there is a crate or module with a similar name
+    |
+328 -     let sql = tinystoragedrivers_sqlite::rusqlite::Connection::open_with_flags(
+328 +     let sql = tinystoragedrivers_api::rusqlite::Connection::open_with_flags(
+    |
+
+error[E0433]: cannot find module or crate `tinystoragedrivers_sqlite` in this scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/mod_tests.rs:330:9
+    |
+330 |         tinystoragedrivers_sqlite::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `tinystoragedrivers_sqlite`
+    |
+help: there is a crate or module with a similar name
+    |
+330 -         tinystoragedrivers_sqlite::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+330 +         tinystoragedrivers_api::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    |
+
+error[E0433]: cannot find module or crate `tinystoragedrivers_sqlite` in this scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/agent_tests.rs:430:15
+    |
+430 |     let sql = tinystoragedrivers_sqlite::rusqlite::Connection::open_with_flags(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `tinystoragedrivers_sqlite`
+    |
+help: there is a crate or module with a similar name
+    |
+430 -     let sql = tinystoragedrivers_sqlite::rusqlite::Connection::open_with_flags(
+430 +     let sql = tinystoragedrivers_api::rusqlite::Connection::open_with_flags(
+    |
+
+error[E0433]: cannot find module or crate `tinystoragedrivers_sqlite` in this scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/agent_tests.rs:432:9
+    |
+432 |         tinystoragedrivers_sqlite::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `tinystoragedrivers_sqlite`
+    |
+help: there is a crate or module with a similar name
+    |
+432 -         tinystoragedrivers_sqlite::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+432 +         tinystoragedrivers_api::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    |
+
+warning: unused import: `display::with_background as display_with_background_row`
+   --> crates/tinyagents-session/src/transcript.rs:100:16
+    |
+100 | pub(crate) use display::with_background as display_with_background_row;
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0599]: no method named `prepare_schema` found for struct `std::sync::Arc<dyn PortStorageBackend>` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:146:13
+    |
+146 |     storage.prepare_schema().await.unwrap();
+    |             ^^^^^^^^^^^^^^ method not found in `std::sync::Arc<dyn PortStorageBackend>`
+
+error[E0599]: no method named `existing_schema` found for struct `std::sync::Arc<dyn PortStorageBackend>` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:159:28
+    |
+159 |             inner: storage.existing_schema().unwrap(),
+    |                            ^^^^^^^^^^^^^^^ method not found in `std::sync::Arc<dyn PortStorageBackend>`
+
+error[E0308]: mismatched types
+  --> crates/tinyagents-session/src/run_ledger/drivers/entry_tree_tests.rs:17:39
+   |
+17 |     let native = DriverRunLedger::new(scoped.clone());
+   |                  -------------------- ^^^^^^^^^^^^^^ expected `ScopedStorage`, found `Storage`
+   |                  |
+   |                  arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> crates/tinyagents-session/src/run_ledger/drivers/mod.rs:59:12
+   |
+59 |     pub fn new(scoped: ScopedStorage) -> Self {
+   |            ^^^ ---------------------
+
+error[E0308]: mismatched types
+  --> crates/tinyagents-session/src/run_ledger/drivers/entry_tree_tests.rs:18:37
+   |
+18 |     let peer = DriverRunLedger::new(scoped);
+   |                -------------------- ^^^^^^ expected `ScopedStorage`, found `Storage`
+   |                |
+   |                arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> crates/tinyagents-session/src/run_ledger/drivers/mod.rs:59:12
+   |
+59 |     pub fn new(scoped: ScopedStorage) -> Self {
+   |            ^^^ ---------------------
+
+error[E0308]: mismatched types
+   --> crates/tinyagents-session/src/run_ledger/drivers/entry_tree_tests.rs:119:38
+    |
+119 |     let other = DriverRunLedger::new(backend.for_scope(&Scope::new("bob").unwrap()).unwrap());
+    |                 -------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `ScopedStorage`, found `Storage`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/run_ledger/drivers/mod.rs:59:12
+    |
+ 59 |     pub fn new(scoped: ScopedStorage) -> Self {
+    |            ^^^ ---------------------
+
+error[E0308]: mismatched types
+  --> crates/tinyagents-session/src/run_ledger/drivers/retention_tests.rs:31:34
+   |
+31 |     let a = DriverRunLedger::new(backend.for_scope(&Scope::new("a").unwrap()).unwrap());
+   |             -------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `ScopedStorage`, found `Storage`
+   |             |
+   |             arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> crates/tinyagents-session/src/run_ledger/drivers/mod.rs:59:12
+   |
+59 |     pub fn new(scoped: ScopedStorage) -> Self {
+   |            ^^^ ---------------------
+
+error[E0308]: mismatched types
+  --> crates/tinyagents-session/src/run_ledger/drivers/retention_tests.rs:32:37
+   |
+32 |     let peer = DriverRunLedger::new(backend.for_scope(&Scope::new("a").unwrap()).unwrap());
+   |                -------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `ScopedStorage`, found `Storage`
+   |                |
+   |                arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> crates/tinyagents-session/src/run_ledger/drivers/mod.rs:59:12
+   |
+59 |     pub fn new(scoped: ScopedStorage) -> Self {
+   |            ^^^ ---------------------
+
+error[E0308]: mismatched types
+  --> crates/tinyagents-session/src/run_ledger/drivers/retention_tests.rs:33:40
+   |
+33 |     let sibling = DriverRunLedger::new(backend.for_scope(&Scope::new("b").unwrap()).unwrap());
+   |                   -------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `ScopedStorage`, found `Storage`
+   |                   |
+   |                   arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> crates/tinyagents-session/src/run_ledger/drivers/mod.rs:59:12
+   |
+59 |     pub fn new(scoped: ScopedStorage) -> Self {
+   |            ^^^ ---------------------
+
+error[E0599]: no method named `for_scope` found for struct `MemoryBackend` in the current scope
+ --> crates/tinyagents-session/src/threads/persistence_tests.rs:8:26
+  |
+8 |     let scoped = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
+  |                          ^^^^^^^^^ method not found in `MemoryBackend`
+  |
+  = help: items from traits can only be used if the trait is in scope
+help: the following traits which provide `for_scope` are implemented but not in scope; perhaps you want to import one of them
+  |
+1 + use tinyagents_storage_kit::PortStorageBackend;
+  |
+1 + use tinyagents_storage_kit::StorageBackend;
+  |
+
+error[E0599]: no method named `prepare_schema` found for reference `&dyn PortStorageBackend` in the current scope
+  --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:20:13
+   |
+20 |     backend.prepare_schema().await.unwrap();
+   |             ^^^^^^^^^^^^^^ method not found in `&dyn PortStorageBackend`
+
+error[E0308]: mismatched types
+   --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:24:60
+    |
+ 24 |     let store = DriverConversationStore::new_validate_only(scoped);
+    |                 ------------------------------------------ ^^^^^^ expected `ScopedStorage`, found `Storage`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/threads/driver.rs:111:12
+    |
+111 |     pub fn new_validate_only(scoped: ScopedStorage) -> Self {
+    |            ^^^^^^^^^^^^^^^^^ ---------------------
+
+error[E0599]: no method named `prepare_schema` found for reference `&dyn PortStorageBackend` in the current scope
+  --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:34:13
+   |
+34 |     backend.prepare_schema().await.unwrap();
+   |             ^^^^^^^^^^^^^^ method not found in `&dyn PortStorageBackend`
+
+error[E0599]: no method named `existing_schema` found for reference `&dyn PortStorageBackend` in the current scope
+  --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:54:25
+   |
+54 |     let actor = backend.existing_schema().unwrap();
+   |                         ^^^^^^^^^^^^^^^ method not found in `&dyn PortStorageBackend`
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+  --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:75:84
+   |
+75 |     assert!(matches!(error, ConversationError::Driver(e) if e.kind() == ErrorKind::Fenced));
+   |                                                                                    ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0308]: mismatched types
+  --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:77:38
+   |
+77 |         DriverConversationStore::new(raw)
+   |         ---------------------------- ^^^ expected `ScopedStorage`, found `Storage`
+   |         |
+   |         arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> crates/tinyagents-session/src/threads/driver.rs:97:12
+   |
+97 |     pub fn new(scoped: ScopedStorage) -> Self {
+   |            ^^^ ---------------------
+
+error[E0599]: no method named `prepare_schema` found for reference `&dyn PortStorageBackend` in the current scope
+  --> crates/tinyagents-session/src/threads/driver_append_tests.rs:34:13
+   |
+34 |     backend.prepare_schema().await.unwrap();
+   |             ^^^^^^^^^^^^^^ method not found in `&dyn PortStorageBackend`
+
+error[E0599]: no method named `existing_schema` found for reference `&dyn PortStorageBackend` in the current scope
+  --> crates/tinyagents-session/src/threads/driver_append_tests.rs:45:30
+   |
+45 |     let restricted = backend.existing_schema().unwrap();
+   |                              ^^^^^^^^^^^^^^^ method not found in `&dyn PortStorageBackend`
+
+error[E0599]: no method named `prepare_schema` found for reference `&dyn PortStorageBackend` in the current scope
+   --> crates/tinyagents-session/src/threads/driver_append_fixtures.rs:279:13
+    |
+279 |     backend.prepare_schema().await.unwrap();
+    |             ^^^^^^^^^^^^^^ method not found in `&dyn PortStorageBackend`
+
+error[E0599]: no method named `existing_schema` found for reference `&dyn PortStorageBackend` in the current scope
+   --> crates/tinyagents-session/src/threads/driver_append_fixtures.rs:286:14
+    |
+285 | /         backend
+286 | |             .existing_schema()
+    | |             -^^^^^^^^^^^^^^^ method not found in `&dyn PortStorageBackend`
+    | |_____________|
+    |
+
+error[E0599]: no method named `existing_schema` found for reference `&dyn PortStorageBackend` in the current scope
+   --> crates/tinyagents-session/src/threads/driver_append_tests.rs:360:18
+    |
+359 | /             backend
+360 | |                 .existing_schema()
+    | |                 -^^^^^^^^^^^^^^^ method not found in `&dyn PortStorageBackend`
+    | |_________________|
+    |
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+   --> crates/tinyagents-session/src/threads/driver_append_tests.rs:386:98
+    |
+386 |             matches!(writer.await, Err(ConversationError::Driver(ref e)) if e.kind()==ErrorKind::Fenced)
+    |                                                                                                  ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0599]: no method named `existing_schema` found for reference `&dyn PortStorageBackend` in the current scope
+   --> crates/tinyagents-session/src/threads/driver_append_tests.rs:394:18
+    |
+393 | /             backend
+394 | |                 .existing_schema()
+    | |                 -^^^^^^^^^^^^^^^ method not found in `&dyn PortStorageBackend`
+    | |_________________|
+    |
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+  --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:10:63
+   |
+10 |     let provider = RebindableSessionStores::new_in(&registry, old_backend.clone(), false).unwrap();
+   |                                                               ^^^^^^^^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+   |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+  --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+   |
+62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+   = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+  --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:26:32
+   |
+26 |     assert_eq!(registry.rebind(new_backend.clone()).unwrap(), 1);
+   |                                ^^^^^^^^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+   |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+  --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+   |
+62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+   = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+  --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:47:49
+   |
+47 |     let fresh_driver = DriverSessionStores::new(new_backend, Scope::new("local").unwrap()).unwrap();
+   |                                                 ^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+   |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+  --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+   |
+62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+   = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+  --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:47:24
+   |
+47 |     let fresh_driver = DriverSessionStores::new(new_backend, Scope::new("local").unwrap()).unwrap();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^              ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+   |
+note: associated function defined here
+  --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+   |
+82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+   |            ^^^
+help: remove the extra argument
+   |
+47 -     let fresh_driver = DriverSessionStores::new(new_backend, Scope::new("local").unwrap()).unwrap();
+47 +     let fresh_driver = DriverSessionStores::new(new_backend).unwrap();
+   |
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+  --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:57:47
+   |
+57 |     let old_driver = DriverSessionStores::new(old_backend, Scope::new("local").unwrap()).unwrap();
+   |                                               ^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+   |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+  --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+   |
+62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+   = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+  --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:57:22
+   |
+57 |     let old_driver = DriverSessionStores::new(old_backend, Scope::new("local").unwrap()).unwrap();
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^              ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+   |
+note: associated function defined here
+  --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+   |
+82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+   |            ^^^
+help: remove the extra argument
+   |
+57 -     let old_driver = DriverSessionStores::new(old_backend, Scope::new("local").unwrap()).unwrap();
+57 +     let old_driver = DriverSessionStores::new(old_backend).unwrap();
+   |
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+  --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:73:52
+   |
+73 |         RebindableSessionStores::new_in(&registry, Arc::new(MemoryStorage::new()), false).unwrap();
+   |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+   |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+  --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+   |
+62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+   = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+  --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:80:21
+   |
+80 |     provider.rebind(Arc::new(MemoryStorage::new())).unwrap();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+   |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+  --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+   |
+62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+   = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:144:34
+    |
+144 |         DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::new("local").unwrap())
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+   --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:144:9
+    |
+144 |         DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::new("local").unwrap())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^                                 ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+144 -         DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::new("local").unwrap())
+144 +         DriverSessionStores::new(Arc::new(MemoryStorage::new()))
+    |
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:185:52
+    |
+185 |         RebindableSessionStores::new_in(&registry, Arc::new(MemoryStorage::new()), false).unwrap();
+    |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+   --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0308]: mismatched types
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:195:68
+    |
+195 |     let rebind = std::thread::spawn(move || rebind_provider.rebind(rebind_backend).unwrap());
+    |                                                             ------ ^^^^^^^^^^^^^^ expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+    |                                                             |
+    |                                                             arguments to this method are incorrect
+    |
+    = note: expected struct `Arc<(dyn f...tatic)>`
+               found struct `Arc<dyn PortStorageBackend>`
+note: method defined here
+   --> crates/tinyagents-session/src/port/drivers/rebound.rs:106:12
+    |
+106 |     pub fn rebind(&self, factory: AgentStorageFactory) -> std::result::Result<(), StorageError> {
+    |            ^^^^^^        ----------------------------
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `Fn(&str)` closure, found `GateBackend`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:212:47
+    |
+212 |         let direct = DriverSessionStores::new(new_backend, Scope::new("local").unwrap()).unwrap();
+    |                                               ^^^^^^^^^^^ expected an `Fn(&str)` closure, found `GateBackend`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `GateBackend`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:96:1
+    |
+ 96 | struct GateBackend {
+    | ^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<GateBackend>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:212:22
+    |
+212 |         let direct = DriverSessionStores::new(new_backend, Scope::new("local").unwrap()).unwrap();
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^              ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+212 -         let direct = DriverSessionStores::new(new_backend, Scope::new("local").unwrap()).unwrap();
+212 +         let direct = DriverSessionStores::new(new_backend).unwrap();
+    |
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:229:52
+    |
+229 |         RebindableSessionStores::new_in(&registry, Arc::new(MemoryStorage::new()), false).unwrap();
+    |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+   --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:243:32
+    |
+243 |         rebind_provider.rebind(new_backend).unwrap();
+    |                                ^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+   --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:257:52
+    |
+257 |         let independent = DriverSessionStores::new(expected_backend, Scope::new("local").unwrap())
+    |                                                    ^^^^^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+   --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:257:27
+    |
+257 |         let independent = DriverSessionStores::new(expected_backend, Scope::new("local").unwrap())
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^                   ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+257 -         let independent = DriverSessionStores::new(expected_backend, Scope::new("local").unwrap())
+257 +         let independent = DriverSessionStores::new(expected_backend)
+    |
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:275:52
+    |
+275 |         RebindableSessionStores::new_in(&registry, Arc::new(MemoryStorage::new()), false).unwrap();
+    |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+   --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:290:29
+    |
+290 |             provider.rebind(backend).unwrap();
+    |                             ^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+   --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:307:51
+    |
+307 |             let direct = DriverSessionStores::new(backend, Scope::new("local").unwrap()).unwrap();
+    |                                                   ^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+   --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:307:26
+    |
+307 |             let direct = DriverSessionStores::new(backend, Scope::new("local").unwrap()).unwrap();
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^          ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+307 -             let direct = DriverSessionStores::new(backend, Scope::new("local").unwrap()).unwrap();
+307 +             let direct = DriverSessionStores::new(backend).unwrap();
+    |
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:326:38
+    |
+326 |             DriverSessionStores::new(backends[winner].clone(), Scope::new("local").unwrap())
+    |                                      ^^^^^^^^^^^^^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+   --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:326:13
+    |
+326 |             DriverSessionStores::new(backends[winner].clone(), Scope::new("local").unwrap())
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^                           ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+326 -             DriverSessionStores::new(backends[winner].clone(), Scope::new("local").unwrap())
+326 +             DriverSessionStores::new(backends[winner].clone())
+    |
+
+error[E0599]: no associated function or constant named `new_in_tenant` found for struct `rebound::RebindableSessionStores` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:348:45
+    |
+348 |     let provider = RebindableSessionStores::new_in_tenant(
+    |                                             ^^^^^^^^^^^^^ associated function or constant not found in `rebound::RebindableSessionStores`
+    |
+   ::: crates/tinyagents-session/src/port/drivers/rebound.rs:62:1
+    |
+ 62 | pub struct RebindableSessionStores {
+    | ---------------------------------- associated function or constant `new_in_tenant` not found for this struct
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:357:21
+    |
+357 |     registry.rebind(next.clone()).unwrap();
+    |                     ^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+   --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:363:42
+    |
+363 |     let alice = DriverSessionStores::new(next.clone(), tenant)
+    |                                          ^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+   --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:363:17
+    |
+363 |     let alice = DriverSessionStores::new(next.clone(), tenant)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^               ------ unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+363 -     let alice = DriverSessionStores::new(next.clone(), tenant)
+363 +     let alice = DriverSessionStores::new(next.clone())
+    |
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:366:40
+    |
+366 |     let bob = DriverSessionStores::new(next.clone(), Scope::new("u:bob").unwrap())
+    |                                        ^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+   --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:366:15
+    |
+366 |     let bob = DriverSessionStores::new(next.clone(), Scope::new("u:bob").unwrap())
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^               ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+366 -     let bob = DriverSessionStores::new(next.clone(), Scope::new("u:bob").unwrap())
+366 +     let bob = DriverSessionStores::new(next.clone())
+    |
+
+error[E0277]: expected an `Fn(&str)` closure, found `MemoryStorage`
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:369:42
+    |
+369 |     let local = DriverSessionStores::new(next, Scope::new("local").unwrap())
+    |                                          ^^^^ expected an `Fn(&str)` closure, found `MemoryStorage`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `MemoryStorage`
+   --> crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<MemoryStorage>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/rebound_tests.rs:369:17
+    |
+369 |     let local = DriverSessionStores::new(next, Scope::new("local").unwrap())
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^       ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+369 -     let local = DriverSessionStores::new(next, Scope::new("local").unwrap())
+369 +     let local = DriverSessionStores::new(next)
+    |
+
+error[E0034]: multiple applicable items in scope
+   --> crates/tinyagents-session/src/port/drivers/refused_tests.rs:26:21
+    |
+ 26 |     assert_eq!(docs.capabilities(), Capabilities::default());
+    |                     ^^^^^^^^^^^^ multiple `capabilities` found
+    |
+note: candidate #1 is defined in an impl of the trait `tinyagents_storage_kit::DocumentStore` for the type `refused::Refused`
+   --> crates/tinyagents-session/src/port/drivers/refused.rs:54:5
+    |
+ 54 |     fn capabilities(&self) -> Capabilities {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: candidate #2 is defined in an impl of the trait `tinyagents_storage_kit::StreamStore` for the type `refused::Refused`
+   --> crates/tinyagents-session/src/port/drivers/refused.rs:120:5
+    |
+120 |     fn capabilities(&self) -> Capabilities {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: disambiguate the method for candidate #1
+    |
+ 26 -     assert_eq!(docs.capabilities(), Capabilities::default());
+ 26 +     assert_eq!(tinyagents_storage_kit::DocumentStore::capabilities(&docs), Capabilities::default());
+    |
+help: disambiguate the method for candidate #2
+    |
+ 26 -     assert_eq!(docs.capabilities(), Capabilities::default());
+ 26 +     assert_eq!(tinyagents_storage_kit::StreamStore::capabilities(&docs), Capabilities::default());
+    |
+
+error[E0308]: mismatched types
+  --> crates/tinyagents-session/src/port/drivers/schema_tests.rs:13:5
+   |
+12 |   fn agent_storage(backend: &Arc<dyn StorageBackend>) -> ScopedStorage {
+   |                                                          ------------- expected `tinyagents_storage_kit::ScopedStorage` because of return type
+13 | /     backend
+14 | |         .for_scope(&Scope::new("local/agent:planner").unwrap())
+15 | |         .unwrap()
+   | |_________________^ expected `ScopedStorage`, found `Storage`
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/schema_tests.rs:239:20
+    |
+239 |     let provider = DriverSessionStores::new(backend, Scope::new("local").unwrap()).unwrap();
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^          ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+   --> crates/tinyagents-session/src/port/drivers/schema_tests.rs:239:45
+    |
+239 |     let provider = DriverSessionStores::new(backend, Scope::new("local").unwrap()).unwrap();
+    |                                             ^^^^^^^
+    = note: expected struct `Arc<(dyn f...tatic)>`
+               found struct `Arc<dyn PortStorageBackend>`
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^ ----------------------------
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: remove the extra argument
+    |
+239 -     let provider = DriverSessionStores::new(backend, Scope::new("local").unwrap()).unwrap();
+239 +     let provider = DriverSessionStores::new(/* Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync> */).unwrap();
+    |
+
+error[E0308]: mismatched types
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:192:41
+    |
+192 |     DriverSessionStores::new(Arc::clone(&backend), Scope::new("local").unwrap())
+    |                              ---------- ^^^^^^^^ expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+    |                              |
+    |                              arguments to this function are incorrect
+    |
+    = note: expected reference `&Arc<dyn fo...+ Sync>`
+               found reference `&Arc<dyn PortStorageBackend>`
+note: method defined here
+   --> /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/clone.rs:236:7
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-346595815041076240.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:192:5
+    |
+192 |     DriverSessionStores::new(Arc::clone(&backend), Scope::new("local").unwrap())
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^                       ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+192 -     DriverSessionStores::new(Arc::clone(&backend), Scope::new("local").unwrap())
+192 +     DriverSessionStores::new(Arc::clone(&backend))
+    |
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:198:20
+    |
+198 |     let reopened = DriverSessionStores::new(backend, Scope::new("local").unwrap())
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^          ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:198:45
+    |
+198 |     let reopened = DriverSessionStores::new(backend, Scope::new("local").unwrap())
+    |                                             ^^^^^^^
+    = note: expected struct `Arc<(dyn f...tatic)>`
+               found struct `Arc<dyn PortStorageBackend>`
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^ ----------------------------
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: remove the extra argument
+    |
+198 -     let reopened = DriverSessionStores::new(backend, Scope::new("local").unwrap())
+198 +     let reopened = DriverSessionStores::new(/* Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync> */)
+    |
+
+error[E0308]: mismatched types
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:223:45
+    |
+223 |         DriverSessionStores::new(Arc::clone(&backend), Scope::new("local").unwrap()).unwrap();
+    |                                  ---------- ^^^^^^^^ expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+    |                                  |
+    |                                  arguments to this function are incorrect
+    |
+    = note: expected reference `&Arc<dyn fo...+ Sync>`
+               found reference `&Arc<dyn PortStorageBackend>`
+note: method defined here
+   --> /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/clone.rs:236:7
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-15915760837792399891.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:223:9
+    |
+223 |         DriverSessionStores::new(Arc::clone(&backend), Scope::new("local").unwrap()).unwrap();
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^                       ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+223 -         DriverSessionStores::new(Arc::clone(&backend), Scope::new("local").unwrap()).unwrap();
+223 +         DriverSessionStores::new(Arc::clone(&backend)).unwrap();
+    |
+
+error[E0308]: mismatched types
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:231:45
+    |
+231 |         DriverSessionStores::new(Arc::clone(&backend), Scope::new("local").unwrap()).unwrap();
+    |                                  ---------- ^^^^^^^^ expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+    |                                  |
+    |                                  arguments to this function are incorrect
+    |
+    = note: expected reference `&Arc<dyn fo...+ Sync>`
+               found reference `&Arc<dyn PortStorageBackend>`
+note: method defined here
+   --> /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/clone.rs:236:7
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-2917160910421268394.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:231:9
+    |
+231 |         DriverSessionStores::new(Arc::clone(&backend), Scope::new("local").unwrap()).unwrap();
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^                       ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+231 -         DriverSessionStores::new(Arc::clone(&backend), Scope::new("local").unwrap()).unwrap();
+231 +         DriverSessionStores::new(Arc::clone(&backend)).unwrap();
+    |
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:244:22
+    |
+244 |     let recovering = DriverSessionStores::new(backend, Scope::new("local").unwrap())
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^          ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:244:47
+    |
+244 |     let recovering = DriverSessionStores::new(backend, Scope::new("local").unwrap())
+    |                                               ^^^^^^^
+    = note: expected struct `Arc<(dyn f...tatic)>`
+               found struct `Arc<dyn PortStorageBackend>`
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^ ----------------------------
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: remove the extra argument
+    |
+244 -     let recovering = DriverSessionStores::new(backend, Scope::new("local").unwrap())
+244 +     let recovering = DriverSessionStores::new(/* Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync> */)
+    |
+
+error[E0277]: expected an `Fn(&str)` closure, found `Unbindable`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:289:34
+    |
+289 |         DriverSessionStores::new(Arc::new(Unbindable), Scope::new("local").unwrap()).unwrap();
+    |                                  ^^^^^^^^^^^^^^^^^^^^ expected an `Fn(&str)` closure, found `Unbindable`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `Unbindable`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:274:1
+    |
+274 | struct Unbindable;
+    | ^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<Unbindable>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:289:9
+    |
+289 |         DriverSessionStores::new(Arc::new(Unbindable), Scope::new("local").unwrap()).unwrap();
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^                       ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+289 -         DriverSessionStores::new(Arc::new(Unbindable), Scope::new("local").unwrap()).unwrap();
+289 +         DriverSessionStores::new(Arc::new(Unbindable)).unwrap();
+    |
+
+error[E0599]: no variant, associated function, or constant named `Fencing` found for enum `tinyagents_storage_kit::Capability` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:353:55
+    |
+353 |                 tinystoragedrivers_types::Capability::Fencing,
+    |                                                       ^^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::Capability`
+
+error[E0599]: no method named `queues` found for struct `tinyagents_storage_kit::ScopedStorage` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:468:30
+    |
+468 |             Arc::clone(inner.queues()),
+    |                              ^^^^^^ method not found in `tinyagents_storage_kit::ScopedStorage`
+
+error[E0599]: no method named `secrets` found for struct `tinyagents_storage_kit::ScopedStorage` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:469:30
+    |
+469 |             Arc::clone(inner.secrets()),
+    |                              ^^^^^^^ method not found in `tinyagents_storage_kit::ScopedStorage`
+
+error[E0277]: expected an `Fn(&str)` closure, found `Flaky`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:478:9
+    |
+478 | /         Arc::new(Flaky {
+479 | |             storage: MemoryStorage::new(),
+480 | |             down: Arc::clone(&down),
+481 | |             reject_declaration: false,
+482 | |         }),
+    | |__________^ expected an `Fn(&str)` closure, found `Flaky`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `Flaky`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:335:1
+    |
+335 | struct Flaky {
+    | ^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<Flaky>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:477:20
+    |
+477 |     let provider = DriverSessionStores::new(
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+483 |         Scope::new("local").unwrap(),
+    |         ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+482 -         }),
+483 -         Scope::new("local").unwrap(),
+482 +         }),
+    |
+
+error[E0599]: no associated function or constant named `fenced` found for struct `tinyagents_storage_kit::StorageError` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:540:27
+    |
+540 |         Err(StorageError::fenced("scope rejected").with_source(self.marker.clone()))
+    |                           ^^^^^^ associated function or constant not found in `tinyagents_storage_kit::StorageError`
+    |
+note: if you're trying to build a new `tinyagents_storage_kit::StorageError` consider using one of the following associated functions:
+      tinyagents_storage_kit::StorageError::new
+      tinyagents_storage_kit::StorageError::not_found
+      tinyagents_storage_kit::StorageError::conflict
+      tinyagents_storage_kit::StorageError::already_exists
+      and 6 others
+   --> /home/enamakel/.cargo/git/checkouts/tinystoragedrivers-4366c648b31853f0/cd89b83/crates/tinystoragedrivers-types/src/error.rs:60:5
+    |
+ 60 |     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 75 |     pub fn not_found(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 80 |     pub fn conflict(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 85 |     pub fn already_exists(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0277]: expected an `Fn(&str)` closure, found `NativeRefusal`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:551:13
+    |
+551 | /             Arc::new(NativeRefusal {
+552 | |                 marker: marker.clone(),
+553 | |             }),
+    | |______________^ expected an `Fn(&str)` closure, found `NativeRefusal`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `NativeRefusal`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:530:1
+    |
+530 | struct NativeRefusal {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<NativeRefusal>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:550:9
+    |
+550 |         DriverSessionStores::new(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+554 |             Scope::new("local").unwrap(),
+    |             ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+553 -             }),
+554 -             Scope::new("local").unwrap(),
+553 +             }),
+    |
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:561:71
+    |
+561 |         assert_eq!(error.kind(), tinystoragedrivers_types::ErrorKind::Fenced);
+    |                                                                       ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0277]: expected an `Fn(&str)` closure, found `Flaky`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:577:9
+    |
+577 | /         Arc::new(Flaky {
+578 | |             storage: MemoryStorage::new(),
+579 | |             down: down.clone(),
+580 | |             reject_declaration: false,
+581 | |         }),
+    | |__________^ expected an `Fn(&str)` closure, found `Flaky`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `Flaky`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:335:1
+    |
+335 | struct Flaky {
+    | ^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<Flaky>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:576:20
+    |
+576 |     let provider = DriverSessionStores::new(
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+582 |         Scope::new("local").unwrap(),
+    |         ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+581 -         }),
+582 -         Scope::new("local").unwrap(),
+581 +         }),
+    |
+
+error[E0599]: no variant, associated function, or constant named `Fencing` found for enum `tinyagents_storage_kit::Capability` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:590:51
+    |
+590 |             tinystoragedrivers_types::Capability::Fencing
+    |                                                   ^^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::Capability`
+
+error[E0277]: expected an `Fn(&str)` closure, found `Flaky`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:607:9
+    |
+607 | /         Arc::new(Flaky {
+608 | |             storage: MemoryStorage::new(),
+609 | |             down: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+610 | |             reject_declaration: true,
+611 | |         }),
+    | |__________^ expected an `Fn(&str)` closure, found `Flaky`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `Flaky`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:335:1
+    |
+335 | struct Flaky {
+    | ^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<Flaky>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:606:20
+    |
+606 |     let provider = DriverSessionStores::new(
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+612 |         Scope::new("local").unwrap(),
+    |         ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^
+help: remove the extra argument
+    |
+611 -         }),
+612 -         Scope::new("local").unwrap(),
+611 +         }),
+    |
+
+error[E0599]: no variant, associated function, or constant named `Fencing` found for enum `tinyagents_storage_kit::Capability` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:620:51
+    |
+620 |             tinystoragedrivers_types::Capability::Fencing
+    |                                                   ^^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::Capability`
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:633:18
+    |
+633 |         Arc::new(DriverSessionStores::new(backend.clone(), Scope::new("local").unwrap()).unwrap());
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^                  ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:633:43
+    |
+633 |         Arc::new(DriverSessionStores::new(backend.clone(), Scope::new("local").unwrap()).unwrap());
+    |                                           ^^^^^^^^^^^^^^^
+    = note: expected struct `Arc<(dyn f...tatic)>`
+               found struct `Arc<dyn PortStorageBackend>`
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^ ----------------------------
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: remove the extra argument
+    |
+633 -         Arc::new(DriverSessionStores::new(backend.clone(), Scope::new("local").unwrap()).unwrap());
+633 +         Arc::new(DriverSessionStores::new(/* Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync> */).unwrap());
+    |
+
+error[E0308]: mismatched types
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:637:39
+    |
+637 |     let rebound = provider.bind_actor(backend).unwrap().unwrap();
+    |                            ---------- ^^^^^^^ expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+    |                            |
+    |                            arguments to this method are incorrect
+    |
+    = note: expected struct `Arc<(dyn f...tatic)>`
+               found struct `Arc<dyn PortStorageBackend>`
+note: method defined here
+   --> crates/tinyagents-session/src/port/mod.rs:117:8
+    |
+117 |     fn bind_actor(
+    |        ^^^^^^^^^^
+118 |         &self,
+119 |         _factory: AgentStorageFactory,
+    |         -----------------------------
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `Fn(&str)` closure, found `NativeRefusal`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:657:21
+    |
+657 |           .bind_actor(Arc::new(NativeRefusal {
+    |  _____________________^
+658 | |             marker: marker.clone(),
+659 | |         }))
+    | |__________^ expected an `Fn(&str)` closure, found `NativeRefusal`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `NativeRefusal`
+   --> crates/tinyagents-session/src/port/drivers/mod_tests.rs:530:1
+    |
+530 | struct NativeRefusal {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<NativeRefusal>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0599]: no associated function or constant named `fenced` found for struct `tinyagents_storage_kit::StorageError` in the current scope
+  --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:41:36
+   |
+41 |             2 => Err(StorageError::fenced("retired actor").with_source(Retired)),
+   |                                    ^^^^^^ associated function or constant not found in `tinyagents_storage_kit::StorageError`
+   |
+note: if you're trying to build a new `tinyagents_storage_kit::StorageError` consider using one of the following associated functions:
+      tinyagents_storage_kit::StorageError::new
+      tinyagents_storage_kit::StorageError::not_found
+      tinyagents_storage_kit::StorageError::conflict
+      tinyagents_storage_kit::StorageError::already_exists
+      and 6 others
+  --> /home/enamakel/.cargo/git/checkouts/tinystoragedrivers-4366c648b31853f0/cd89b83/crates/tinystoragedrivers-types/src/error.rs:60:5
+   |
+60 |     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+75 |     pub fn not_found(message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+80 |     pub fn conflict(message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+85 |     pub fn already_exists(message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:169:20
+    |
+169 |     let provider = DriverSessionStores::new_with_schema_admission(
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+170 |         backend,
+171 |         Scope::new("local").unwrap(),
+    |         ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:170:9
+    |
+170 |         backend,
+    |         ^^^^^^^
+    = note: expected struct `Arc<(dyn f...tatic)>`
+               found struct `Arc<dyn PortStorageBackend>`
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:98:12
+    |
+ 98 |     pub fn new_with_schema_admission(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+ 99 |         factory: AgentStorageFactory,
+    |         ----------------------------
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: remove the extra argument
+    |
+170 -         backend,
+171 -         Scope::new("local").unwrap(),
+170 +         /* Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync> */,
+    |
+
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:192:20
+    |
+192 |     let provider = DriverSessionStores::new_with_schema_admission(
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+193 |         backend,
+194 |         Scope::new("local").unwrap(),
+    |         ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:193:9
+    |
+193 |         backend,
+    |         ^^^^^^^
+    = note: expected struct `Arc<(dyn f...tatic)>`
+               found struct `Arc<dyn PortStorageBackend>`
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:98:12
+    |
+ 98 |     pub fn new_with_schema_admission(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+ 99 |         factory: AgentStorageFactory,
+    |         ----------------------------
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: remove the extra argument
+    |
+193 -         backend,
+194 -         Scope::new("local").unwrap(),
+193 +         /* Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync> */,
+    |
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:203:24
+    |
+203 |         (2, ErrorKind::Fenced),
+    |                        ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:225:9
+    |
+225 |         DriverSessionStores::new(backend.clone(), Scope::new("local").unwrap())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^                  ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:225:34
+    |
+225 |         DriverSessionStores::new(backend.clone(), Scope::new("local").unwrap())
+    |                                  ^^^^^^^^^^^^^^^
+    = note: expected struct `Arc<(dyn f...tatic)>`
+               found struct `Arc<dyn PortStorageBackend>`
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:82:12
+    |
+ 82 |     pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+    |            ^^^ ----------------------------
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: remove the extra argument
+    |
+225 -         DriverSessionStores::new(backend.clone(), Scope::new("local").unwrap())
+225 +         DriverSessionStores::new(/* Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync> */)
+    |
+
+error[E0308]: mismatched types
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:231:43
+    |
+231 |         .bind_actor_with_schema_admission(backend, SchemaAdmission::ValidateOnly)
+    |          -------------------------------- ^^^^^^^ expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+    |          |
+    |          arguments to this method are incorrect
+    |
+    = note: expected struct `Arc<(dyn f...tatic)>`
+               found struct `Arc<dyn PortStorageBackend>`
+note: method defined here
+   --> crates/tinyagents-session/src/port/mod.rs:152:8
+    |
+152 |     fn bind_actor_with_schema_admission(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+153 |         &self,
+154 |         factory: AgentStorageFactory,
+    |         ----------------------------
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0599]: no method named `prepare_schema` found for struct `std::sync::Arc<dyn PortStorageBackend>` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:249:17
+    |
+249 |         storage.prepare_schema().await.unwrap();
+    |                 ^^^^^^^^^^^^^^ method not found in `std::sync::Arc<dyn PortStorageBackend>`
+
+error[E0599]: no method named `existing_schema` found for struct `std::sync::Arc<dyn PortStorageBackend>` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:263:21
+    |
+263 |             storage.existing_schema().unwrap(),
+    |                     ^^^^^^^^^^^^^^^ method not found in `std::sync::Arc<dyn PortStorageBackend>`
+
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:262:24
+    |
+262 |         let provider = DriverSessionStores::new_with_schema_admission(
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+263 |             storage.existing_schema().unwrap(),
+264 |             Scope::new("local").unwrap(),
+    |             ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:98:12
+    |
+ 98 |     pub fn new_with_schema_admission(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+    |
+263 -             storage.existing_schema().unwrap(),
+264 -             Scope::new("local").unwrap(),
+263 +             storage.existing_schema().unwrap(),
+    |
+
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:298:9
+    |
+298 |         DriverSessionStores::new_with_schema_admission(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+299 |             backend.clone(),
+300 |             Scope::new("local").unwrap(),
+    |             ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:299:13
+    |
+299 |             backend.clone(),
+    |             ^^^^^^^^^^^^^^^
+    = note: expected struct `Arc<(dyn f...tatic)>`
+               found struct `Arc<dyn PortStorageBackend>`
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:98:12
+    |
+ 98 |     pub fn new_with_schema_admission(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+ 99 |         factory: AgentStorageFactory,
+    |         ----------------------------
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: remove the extra argument
+    |
+299 -             backend.clone(),
+300 -             Scope::new("local").unwrap(),
+299 +             /* Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync> */,
+    |
+
+error[E0308]: mismatched types
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:306:37
+    |
+306 |     let actor = original.bind_actor(backend.clone()).unwrap().unwrap();
+    |                          ---------- ^^^^^^^^^^^^^^^ expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+    |                          |
+    |                          arguments to this method are incorrect
+    |
+    = note: expected struct `Arc<(dyn f...tatic)>`
+               found struct `Arc<dyn PortStorageBackend>`
+note: method defined here
+   --> crates/tinyagents-session/src/port/mod.rs:117:8
+    |
+117 |     fn bind_actor(
+    |        ^^^^^^^^^^
+118 |         &self,
+119 |         _factory: AgentStorageFactory,
+    |         -----------------------------
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0308]: mismatched types
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:309:36
+    |
+309 |     let rebound = actor.bind_actor(backend).unwrap().unwrap();
+    |                         ---------- ^^^^^^^ expected trait `for<'a> Fn(&'a str) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, tinyagents_storage_kit::StorageError> + std::marker::Send + Sync`, found trait `PortStorageBackend`
+    |                         |
+    |                         arguments to this method are incorrect
+    |
+    = note: expected struct `Arc<(dyn f...tatic)>`
+               found struct `Arc<dyn PortStorageBackend>`
+note: method defined here
+   --> crates/tinyagents-session/src/port/mod.rs:117:8
+    |
+117 |     fn bind_actor(
+    |        ^^^^^^^^^^
+118 |         &self,
+119 |         _factory: AgentStorageFactory,
+    |         -----------------------------
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0599]: no method named `prepare_schema` found for struct `std::sync::Arc<dyn PortStorageBackend>` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:317:13
+    |
+317 |     storage.prepare_schema().await.unwrap();
+    |             ^^^^^^^^^^^^^^ method not found in `std::sync::Arc<dyn PortStorageBackend>`
+
+error[E0599]: no method named `existing_schema` found for struct `std::sync::Arc<dyn PortStorageBackend>` in the current scope
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:329:24
+    |
+329 |         inner: storage.existing_schema().unwrap(),
+    |                        ^^^^^^^^^^^^^^^ method not found in `std::sync::Arc<dyn PortStorageBackend>`
+
+error[E0277]: expected an `Fn(&str)` closure, found `ProbeBackend`
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:333:9
+    |
+333 |         backend,
+    |         ^^^^^^^ expected an `Fn(&str)` closure, found `ProbeBackend`
+    |
+help: the trait `for<'a> Fn(&'a str)` is not implemented for `ProbeBackend`
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:120:1
+    |
+120 | struct ProbeBackend {
+    | ^^^^^^^^^^^^^^^^^^^
+    = note: required for the cast from `std::sync::Arc<ProbeBackend>` to `Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError> + Send + Sync>`
+    = note: the full name for the type has been written to '/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/target/debug/deps/tinyagents_session-42f45447a4fec9ba.long-type-5172609639813534716.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied
+   --> crates/tinyagents-session/src/port/drivers/schema_admission_tests.rs:332:20
+    |
+332 |     let provider = DriverSessionStores::new_with_schema_admission(
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+333 |         backend,
+334 |         Scope::new("local").unwrap(),
+    |         ---------------------------- unexpected argument #2 of type `tinyagents_storage_kit::Scope`
+    |
+note: associated function defined here
+   --> crates/tinyagents-session/src/port/drivers/mod.rs:98:12
+    |
+ 98 |     pub fn new_with_schema_admission(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+    |
+333 -         backend,
+334 -         Scope::new("local").unwrap(),
+333 +         backend,
+    |
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+  --> crates/tinyagents-session/src/port/mod_tests.rs:98:67
+   |
+98 |     assert_eq!(error.kind(), tinystoragedrivers_types::ErrorKind::Fenced);
+   |                                                                   ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0599]: no associated function or constant named `fenced` found for struct `tinyagents_storage_kit::StorageError` in the current scope
+  --> crates/tinyagents-session/src/port/mod_tests.rs:88:57
+   |
+88 |                 tinystoragedrivers_types::StorageError::fenced("actor refused")
+   |                                                         ^^^^^^ associated function or constant not found in `tinyagents_storage_kit::StorageError`
+   |
+note: if you're trying to build a new `tinyagents_storage_kit::StorageError` consider using one of the following associated functions:
+      tinyagents_storage_kit::StorageError::new
+      tinyagents_storage_kit::StorageError::not_found
+      tinyagents_storage_kit::StorageError::conflict
+      tinyagents_storage_kit::StorageError::already_exists
+      and 6 others
+  --> /home/enamakel/.cargo/git/checkouts/tinystoragedrivers-4366c648b31853f0/cd89b83/crates/tinystoragedrivers-types/src/error.rs:60:5
+   |
+60 |     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+75 |     pub fn not_found(message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+80 |     pub fn conflict(message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+85 |     pub fn already_exists(message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+   --> crates/tinyagents-session/src/port/mod_tests.rs:228:67
+    |
+228 |     assert_eq!(error.kind(), tinystoragedrivers_types::ErrorKind::Fenced);
+    |                                                                   ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0599]: no associated function or constant named `fenced` found for struct `tinyagents_storage_kit::StorageError` in the current scope
+   --> crates/tinyagents-session/src/port/mod_tests.rs:212:57
+    |
+212 |             Err(tinystoragedrivers_types::StorageError::fenced(
+    |                                                         ^^^^^^ associated function or constant not found in `tinyagents_storage_kit::StorageError`
+    |
+note: if you're trying to build a new `tinyagents_storage_kit::StorageError` consider using one of the following associated functions:
+      tinyagents_storage_kit::StorageError::new
+      tinyagents_storage_kit::StorageError::not_found
+      tinyagents_storage_kit::StorageError::conflict
+      tinyagents_storage_kit::StorageError::already_exists
+      and 6 others
+   --> /home/enamakel/.cargo/git/checkouts/tinystoragedrivers-4366c648b31853f0/cd89b83/crates/tinystoragedrivers-types/src/error.rs:60:5
+    |
+ 60 |     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 75 |     pub fn not_found(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 80 |     pub fn conflict(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 85 |     pub fn already_exists(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `in_memory` found for struct `driver::DriverConversationStore` in the current scope
+   --> crates/tinyagents-session/src/port/mod_tests.rs:254:48
+    |
+254 |             .block_on(DriverConversationStore::in_memory()),
+    |                                                ^^^^^^^^^ associated function or constant not found in `driver::DriverConversationStore`
+    |
+   ::: crates/tinyagents-session/src/threads/driver.rs:85:1
+    |
+ 85 | pub struct DriverConversationStore {
+    | ---------------------------------- associated function or constant `in_memory` not found for this struct
+    |
+note: if you're trying to build a new `driver::DriverConversationStore` consider using one of the following associated functions:
+      driver::DriverConversationStore::new
+      driver::DriverConversationStore::new_validate_only
+   --> crates/tinyagents-session/src/threads/driver.rs:97:5
+    |
+ 97 |     pub fn new(scoped: ScopedStorage) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+111 |     pub fn new_validate_only(scoped: ScopedStorage) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+   --> crates/tinyagents-session/src/port/mod_tests.rs:299:42
+    |
+299 |     assert_eq!(native.kind(), ErrorKind::Fenced);
+    |                                          ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0599]: no associated function or constant named `fenced` found for struct `tinyagents_storage_kit::StorageError` in the current scope
+   --> crates/tinyagents-session/src/port/mod_tests.rs:287:31
+    |
+287 |             Err(StorageError::fenced("retired profile").into())
+    |                               ^^^^^^ associated function or constant not found in `tinyagents_storage_kit::StorageError`
+    |
+note: if you're trying to build a new `tinyagents_storage_kit::StorageError` consider using one of the following associated functions:
+      tinyagents_storage_kit::StorageError::new
+      tinyagents_storage_kit::StorageError::not_found
+      tinyagents_storage_kit::StorageError::conflict
+      tinyagents_storage_kit::StorageError::already_exists
+      and 6 others
+   --> /home/enamakel/.cargo/git/checkouts/tinystoragedrivers-4366c648b31853f0/cd89b83/crates/tinystoragedrivers-types/src/error.rs:60:5
+    |
+ 60 |     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 75 |     pub fn not_found(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 80 |     pub fn conflict(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 85 |     pub fn already_exists(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+  --> crates/tinyagents-session/src/run_ledger/drivers/schema_tests.rs:19:5
+   |
+18 |   fn agent_storage(backend: &Arc<dyn StorageBackend>) -> ScopedStorage {
+   |                                                          ------------- expected `tinyagents_storage_kit::ScopedStorage` because of return type
+19 | /     backend
+20 | |         .for_scope(&Scope::new("local/agent:planner").unwrap())
+21 | |         .unwrap()
+   | |_________________^ expected `ScopedStorage`, found `Storage`
+
+error[E0599]: no method named `for_scope_fenced` found for struct `MemoryStorage` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/mod_tests.rs:735:47
+    |
+735 |     let ledger = DriverRunLedger::new(backend.for_scope_fenced(&scope, &fence).unwrap());
+    |                                               ^^^^^^^^^^^^^^^^
+    |
+   ::: crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ------------------------------- method `for_scope_fenced` not found for this struct
+    |
+help: there is a method `for_scope` with a similar name, but with different arguments
+   --> crates/tinyagents-session/src/testkit/mod.rs:70:5
+    |
+ 70 | /     pub(crate) fn for_scope(
+ 71 | |         &self,
+ 72 | |         scope: &tinyagents_storage_kit::Scope,
+ 73 | |     ) -> tinyagents_storage_kit::error::Result<tinyagents_storage_kit::ScopedStorage> {
+    | |_____________________________________________________________________________________^
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/mod_tests.rs:747:70
+    |
+747 |         LedgerError::Driver(ref error) if error.kind() == ErrorKind::Fenced)
+    |                                                                      ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/mod_tests.rs:751:70
+    |
+751 |         LedgerError::Driver(ref error) if error.kind() == ErrorKind::Fenced)
+    |                                                                      ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0599]: no associated function or constant named `fenced` found for struct `tinyagents_storage_kit::StorageError` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/agent_tests.rs:221:27
+    |
+221 |         Err(StorageError::fenced("projection grant expired"))
+    |                           ^^^^^^ associated function or constant not found in `tinyagents_storage_kit::StorageError`
+    |
+note: if you're trying to build a new `tinyagents_storage_kit::StorageError` consider using one of the following associated functions:
+      tinyagents_storage_kit::StorageError::new
+      tinyagents_storage_kit::StorageError::not_found
+      tinyagents_storage_kit::StorageError::conflict
+      tinyagents_storage_kit::StorageError::already_exists
+      and 6 others
+   --> /home/enamakel/.cargo/git/checkouts/tinystoragedrivers-4366c648b31853f0/cd89b83/crates/tinystoragedrivers-types/src/error.rs:60:5
+    |
+ 60 |     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 75 |     pub fn not_found(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 80 |     pub fn conflict(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 85 |     pub fn already_exists(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 5 arguments were supplied
+   --> crates/tinyagents-session/src/run_ledger/drivers/agent_tests.rs:254:19
+    |
+254 |     let refused = ScopedStorage::new(
+    |                   ^^^^^^^^^^^^^^^^^^
+255 |         scope.clone(),
+    |         ------------- argument #1 of type `tinyagents_storage_kit::Storage` is missing
+256 |         "memory",
+    |         -------- unexpected argument #2 of type `&'static str`
+257 |         native.documents().clone(),
+    |         -------------------------- unexpected argument #3 of type `std::sync::Arc<dyn tinyagents_storage_kit::DocumentStore>`
+258 |         Arc::new(RefusingProjection(native.streams().clone())),
+    |         ------------------------------------------------------ unexpected argument #4 of type `std::sync::Arc<RefusingProjection>`
+259 |         native.blobs().clone(),
+    |         ---------------------- unexpected argument #5 of type `std::sync::Arc<dyn BlobStore>`
+    |
+note: associated function defined here
+   --> crates/tinyagents-storage-kit/src/lib.rs:21:12
+    |
+ 21 |     pub fn new(storage: Storage, scope: tinystoragedrivers_types::Scope) -> Self {
+    |            ^^^
+help: did you mean
+    |
+254 -     let refused = ScopedStorage::new(
+255 -         scope.clone(),
+256 -         "memory",
+257 -         native.documents().clone(),
+258 -         Arc::new(RefusingProjection(native.streams().clone())),
+259 -         native.blobs().clone(),
+260 -     );
+254 +     let refused = ScopedStorage::new(/* Storage */, scope.clone());
+    |
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/agent_tests.rs:278:161
+    |
+278 | ...es::ErrorKind::Fenced)
+    |                   ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0599]: no method named `existing_schema` found for struct `MemoryStorage` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/agent_tests.rs:472:30
+    |
+472 |     let restricted = backend.existing_schema().unwrap();
+    |                              ^^^^^^^^^^^^^^^ method not found in `MemoryStorage`
+    |
+   ::: crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ------------------------------- method `existing_schema` not found for this struct
+
+error[E0599]: no method named `existing_schema` found for struct `MemoryStorage` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/agent_tests.rs:490:30
+    |
+490 |     let restricted = backend.existing_schema().unwrap();
+    |                              ^^^^^^^^^^^^^^^ method not found in `MemoryStorage`
+    |
+   ::: crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ------------------------------- method `existing_schema` not found for this struct
+
+error[E0599]: no associated function or constant named `fenced` found for struct `tinyagents_storage_kit::StorageError` in the current scope
+  --> crates/tinyagents-session/src/run_ledger/drivers/agent_fault_tests.rs:29:38
+   |
+29 |             return Err(StorageError::fenced(
+   |                                      ^^^^^^ associated function or constant not found in `tinyagents_storage_kit::StorageError`
+   |
+note: if you're trying to build a new `tinyagents_storage_kit::StorageError` consider using one of the following associated functions:
+      tinyagents_storage_kit::StorageError::new
+      tinyagents_storage_kit::StorageError::not_found
+      tinyagents_storage_kit::StorageError::conflict
+      tinyagents_storage_kit::StorageError::already_exists
+      and 6 others
+  --> /home/enamakel/.cargo/git/checkouts/tinystoragedrivers-4366c648b31853f0/cd89b83/crates/tinystoragedrivers-types/src/error.rs:60:5
+   |
+60 |     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+75 |     pub fn not_found(message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+80 |     pub fn conflict(message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+85 |     pub fn already_exists(message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 5 arguments were supplied
+   --> crates/tinyagents-session/src/run_ledger/drivers/agent_fault_tests.rs:105:26
+    |
+105 |       DriverRunLedger::new(ScopedStorage::new(
+    |                            ^^^^^^^^^^^^^^^^^^
+106 |           native.scope().clone(),
+    |           ---------------------- argument #1 of type `tinyagents_storage_kit::Storage` is missing
+107 |           "memory",
+    |           -------- unexpected argument #2 of type `&'static str`
+108 | /         Arc::new(NoPostCommitReads {
+109 | |             inner: native.documents().clone(),
+110 | |             committed: AtomicBool::new(false),
+111 | |             telemetry_race: None,
+112 | |             raced: AtomicBool::new(false),
+113 | |         }),
+    | |__________- unexpected argument #3 of type `std::sync::Arc<NoPostCommitReads>`
+114 |           native.streams().clone(),
+    |           ------------------------ unexpected argument #4 of type `std::sync::Arc<dyn tinyagents_storage_kit::StreamStore>`
+115 |           native.blobs().clone(),
+    |           ---------------------- unexpected argument #5 of type `std::sync::Arc<dyn BlobStore>`
+    |
+note: associated function defined here
+   --> crates/tinyagents-storage-kit/src/lib.rs:21:12
+    |
+ 21 |     pub fn new(storage: Storage, scope: tinystoragedrivers_types::Scope) -> Self {
+    |            ^^^
+help: did you mean
+    |
+105 -     DriverRunLedger::new(ScopedStorage::new(
+106 -         native.scope().clone(),
+107 -         "memory",
+108 -         Arc::new(NoPostCommitReads {
+109 -             inner: native.documents().clone(),
+110 -             committed: AtomicBool::new(false),
+111 -             telemetry_race: None,
+112 -             raced: AtomicBool::new(false),
+113 -         }),
+114 -         native.streams().clone(),
+115 -         native.blobs().clone(),
+116 -     ))
+105 +     DriverRunLedger::new(ScopedStorage::new(/* Storage */, native.scope().clone()))
+    |
+
+error[E0061]: this function takes 2 arguments but 5 arguments were supplied
+   --> crates/tinyagents-session/src/run_ledger/drivers/agent_fault_tests.rs:205:43
+    |
+205 |         let ledger = DriverRunLedger::new(ScopedStorage::new(
+    |                                           ^^^^^^^^^^^^^^^^^^
+206 |             native.scope().clone(),
+    |             ---------------------- argument #1 of type `tinyagents_storage_kit::Storage` is missing
+207 |             "memory",
+    |             -------- unexpected argument #2 of type `&'static str`
+208 |             documents.clone(),
+    |             ----------------- unexpected argument #3 of type `std::sync::Arc<NoPostCommitReads>`
+209 |             native.streams().clone(),
+    |             ------------------------ unexpected argument #4 of type `std::sync::Arc<dyn tinyagents_storage_kit::StreamStore>`
+210 |             native.blobs().clone(),
+    |             ---------------------- unexpected argument #5 of type `std::sync::Arc<dyn BlobStore>`
+    |
+note: associated function defined here
+   --> crates/tinyagents-storage-kit/src/lib.rs:21:12
+    |
+ 21 |     pub fn new(storage: Storage, scope: tinystoragedrivers_types::Scope) -> Self {
+    |            ^^^
+help: did you mean
+    |
+205 -         let ledger = DriverRunLedger::new(ScopedStorage::new(
+206 -             native.scope().clone(),
+207 -             "memory",
+208 -             documents.clone(),
+209 -             native.streams().clone(),
+210 -             native.blobs().clone(),
+211 -         ));
+205 +         let ledger = DriverRunLedger::new(ScopedStorage::new(/* Storage */, native.scope().clone()));
+    |
+
+error[E0599]: no associated function or constant named `fenced` found for struct `tinyagents_storage_kit::StorageError` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/entry_tree_tests.rs:287:38
+    |
+287 |             return Err(StorageError::fenced("postcommit read refused"));
+    |                                      ^^^^^^ associated function or constant not found in `tinyagents_storage_kit::StorageError`
+    |
+note: if you're trying to build a new `tinyagents_storage_kit::StorageError` consider using one of the following associated functions:
+      tinyagents_storage_kit::StorageError::new
+      tinyagents_storage_kit::StorageError::not_found
+      tinyagents_storage_kit::StorageError::conflict
+      tinyagents_storage_kit::StorageError::already_exists
+      and 6 others
+   --> /home/enamakel/.cargo/git/checkouts/tinystoragedrivers-4366c648b31853f0/cd89b83/crates/tinystoragedrivers-types/src/error.rs:60:5
+    |
+ 60 |     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 75 |     pub fn not_found(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 80 |     pub fn conflict(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 85 |     pub fn already_exists(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `fenced` found for struct `tinyagents_storage_kit::StorageError` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/entry_tree_tests.rs:311:38
+    |
+311 |             return Err(StorageError::fenced("postcommit query refused"));
+    |                                      ^^^^^^ associated function or constant not found in `tinyagents_storage_kit::StorageError`
+    |
+note: if you're trying to build a new `tinyagents_storage_kit::StorageError` consider using one of the following associated functions:
+      tinyagents_storage_kit::StorageError::new
+      tinyagents_storage_kit::StorageError::not_found
+      tinyagents_storage_kit::StorageError::conflict
+      tinyagents_storage_kit::StorageError::already_exists
+      and 6 others
+   --> /home/enamakel/.cargo/git/checkouts/tinystoragedrivers-4366c648b31853f0/cd89b83/crates/tinystoragedrivers-types/src/error.rs:60:5
+    |
+ 60 |     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 75 |     pub fn not_found(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 80 |     pub fn conflict(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 85 |     pub fn already_exists(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `fenced` found for struct `tinyagents_storage_kit::StorageError` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/entry_tree_tests.rs:341:42
+    |
+341 |                 return Err(StorageError::fenced("tree commit refused")
+    |                                          ^^^^^^ associated function or constant not found in `tinyagents_storage_kit::StorageError`
+    |
+note: if you're trying to build a new `tinyagents_storage_kit::StorageError` consider using one of the following associated functions:
+      tinyagents_storage_kit::StorageError::new
+      tinyagents_storage_kit::StorageError::not_found
+      tinyagents_storage_kit::StorageError::conflict
+      tinyagents_storage_kit::StorageError::already_exists
+      and 6 others
+   --> /home/enamakel/.cargo/git/checkouts/tinystoragedrivers-4366c648b31853f0/cd89b83/crates/tinystoragedrivers-types/src/error.rs:60:5
+    |
+ 60 |     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 75 |     pub fn not_found(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 80 |     pub fn conflict(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 85 |     pub fn already_exists(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 5 arguments were supplied
+   --> crates/tinyagents-session/src/run_ledger/drivers/entry_tree_tests.rs:364:5
+    |
+364 |       ScopedStorage::new(
+    |       ^^^^^^^^^^^^^^^^^^
+365 |           native.scope().clone(),
+    |           ---------------------- argument #1 of type `tinyagents_storage_kit::Storage` is missing
+366 |           "memory",
+    |           -------- unexpected argument #2 of type `&'static str`
+367 | /         Arc::new(TreeBoundary {
+368 | |             inner: native.documents().clone(),
+369 | |             barrier: barrier.then(|| tokio::sync::Barrier::new(2)),
+370 | |             calls: AtomicUsize::new(0),
+...   |
+373 | |             committed: AtomicBool::new(false),
+374 | |         }),
+    | |__________- unexpected argument #3 of type `std::sync::Arc<TreeBoundary>`
+375 |           native.streams().clone(),
+    |           ------------------------ unexpected argument #4 of type `std::sync::Arc<dyn tinyagents_storage_kit::StreamStore>`
+376 |           native.blobs().clone(),
+    |           ---------------------- unexpected argument #5 of type `std::sync::Arc<dyn BlobStore>`
+    |
+note: associated function defined here
+   --> crates/tinyagents-storage-kit/src/lib.rs:21:12
+    |
+ 21 |     pub fn new(storage: Storage, scope: tinystoragedrivers_types::Scope) -> Self {
+    |            ^^^
+help: did you mean
+    |
+364 -     ScopedStorage::new(
+365 -         native.scope().clone(),
+366 -         "memory",
+367 -         Arc::new(TreeBoundary {
+368 -             inner: native.documents().clone(),
+369 -             barrier: barrier.then(|| tokio::sync::Barrier::new(2)),
+370 -             calls: AtomicUsize::new(0),
+371 -             refuse,
+372 -             reject_post_commit_reads,
+373 -             committed: AtomicBool::new(false),
+374 -         }),
+375 -         native.streams().clone(),
+376 -         native.blobs().clone(),
+377 -     )
+364 +     ScopedStorage::new(/* Storage */, native.scope().clone())
+    |
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/entry_tree_tests.rs:429:103
+    |
+429 |             matches!(&error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+    |                                                                                                       ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0599]: no method named `existing_schema` found for struct `MemoryStorage` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/entry_tree_tests.rs:486:30
+    |
+486 |     let restricted = backend.existing_schema().unwrap();
+    |                              ^^^^^^^^^^^^^^^ method not found in `MemoryStorage`
+    |
+   ::: crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ------------------------------- method `existing_schema` not found for this struct
+
+error[E0599]: no associated function or constant named `fenced` found for struct `tinyagents_storage_kit::StorageError` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/retention_tests.rs:195:38
+    |
+195 |             return Err(StorageError::fenced("retention admission expired")
+    |                                      ^^^^^^ associated function or constant not found in `tinyagents_storage_kit::StorageError`
+    |
+note: if you're trying to build a new `tinyagents_storage_kit::StorageError` consider using one of the following associated functions:
+      tinyagents_storage_kit::StorageError::new
+      tinyagents_storage_kit::StorageError::not_found
+      tinyagents_storage_kit::StorageError::conflict
+      tinyagents_storage_kit::StorageError::already_exists
+      and 6 others
+   --> /home/enamakel/.cargo/git/checkouts/tinystoragedrivers-4366c648b31853f0/cd89b83/crates/tinystoragedrivers-types/src/error.rs:60:5
+    |
+ 60 |     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 75 |     pub fn not_found(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 80 |     pub fn conflict(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 85 |     pub fn already_exists(message: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 5 arguments were supplied
+   --> crates/tinyagents-session/src/run_ledger/drivers/retention_tests.rs:214:18
+    |
+214 |     let scoped = ScopedStorage::new(
+    |                  ^^^^^^^^^^^^^^^^^^
+215 |         native.scope().clone(),
+    |         ---------------------- argument #1 of type `tinyagents_storage_kit::Storage` is missing
+216 |         "memory",
+    |         -------- unexpected argument #2 of type `&'static str`
+217 |         boundary.clone(),
+    |         ---------------- unexpected argument #3 of type `std::sync::Arc<RetentionBoundary>`
+218 |         native.streams().clone(),
+    |         ------------------------ unexpected argument #4 of type `std::sync::Arc<dyn tinyagents_storage_kit::StreamStore>`
+219 |         native.blobs().clone(),
+    |         ---------------------- unexpected argument #5 of type `std::sync::Arc<dyn BlobStore>`
+    |
+note: associated function defined here
+   --> crates/tinyagents-storage-kit/src/lib.rs:21:12
+    |
+ 21 |     pub fn new(storage: Storage, scope: tinystoragedrivers_types::Scope) -> Self {
+    |            ^^^
+help: did you mean
+    |
+214 -     let scoped = ScopedStorage::new(
+215 -         native.scope().clone(),
+216 -         "memory",
+217 -         boundary.clone(),
+218 -         native.streams().clone(),
+219 -         native.blobs().clone(),
+220 -     );
+214 +     let scoped = ScopedStorage::new(/* Storage */, native.scope().clone());
+    |
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/retention_tests.rs:271:99
+    |
+271 |         matches!(&error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+    |                                                                                                   ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/retention_tests.rs:294:98
+    |
+294 |         matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+    |                                                                                                  ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0061]: this function takes 2 arguments but 5 arguments were supplied
+   --> crates/tinyagents-session/src/run_ledger/drivers/events_bson_tests.rs:106:26
+    |
+106 |       DriverRunLedger::new(ScopedStorage::new(
+    |                            ^^^^^^^^^^^^^^^^^^
+107 |           native.scope().clone(),
+    |           ---------------------- argument #1 of type `tinyagents_storage_kit::Storage` is missing
+108 |           "mongo-bson-fixture",
+    |           -------------------- unexpected argument #2 of type `&'static str`
+109 | /         Arc::new(SignedBsonDocuments {
+110 | |             inner: native.documents().clone(),
+111 | |         }),
+    | |__________- unexpected argument #3 of type `std::sync::Arc<SignedBsonDocuments>`
+112 |           native.streams().clone(),
+    |           ------------------------ unexpected argument #4 of type `std::sync::Arc<dyn tinyagents_storage_kit::StreamStore>`
+113 |           native.blobs().clone(),
+    |           ---------------------- unexpected argument #5 of type `std::sync::Arc<dyn BlobStore>`
+    |
+note: associated function defined here
+   --> crates/tinyagents-storage-kit/src/lib.rs:21:12
+    |
+ 21 |     pub fn new(storage: Storage, scope: tinystoragedrivers_types::Scope) -> Self {
+    |            ^^^
+help: did you mean
+    |
+106 -     DriverRunLedger::new(ScopedStorage::new(
+107 -         native.scope().clone(),
+108 -         "mongo-bson-fixture",
+109 -         Arc::new(SignedBsonDocuments {
+110 -             inner: native.documents().clone(),
+111 -         }),
+112 -         native.streams().clone(),
+113 -         native.blobs().clone(),
+114 -     ))
+106 +     DriverRunLedger::new(ScopedStorage::new(/* Storage */, native.scope().clone()))
+    |
+
+error[E0599]: no associated function or constant named `fenced` found for struct `tinyagents_storage_kit::StorageError` in the current scope
+  --> crates/tinyagents-session/src/run_ledger/drivers/events_query_tests.rs:49:42
+   |
+49 |                 return Err(StorageError::fenced("event admission refused"));
+   |                                          ^^^^^^ associated function or constant not found in `tinyagents_storage_kit::StorageError`
+   |
+note: if you're trying to build a new `tinyagents_storage_kit::StorageError` consider using one of the following associated functions:
+      tinyagents_storage_kit::StorageError::new
+      tinyagents_storage_kit::StorageError::not_found
+      tinyagents_storage_kit::StorageError::conflict
+      tinyagents_storage_kit::StorageError::already_exists
+      and 6 others
+  --> /home/enamakel/.cargo/git/checkouts/tinystoragedrivers-4366c648b31853f0/cd89b83/crates/tinystoragedrivers-types/src/error.rs:60:5
+   |
+60 |     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+75 |     pub fn not_found(message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+80 |     pub fn conflict(message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+85 |     pub fn already_exists(message: impl Into<String>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 5 arguments were supplied
+   --> crates/tinyagents-session/src/run_ledger/drivers/events_query_tests.rs:186:38
+    |
+186 |     let actor = DriverRunLedger::new(ScopedStorage::new(
+    |                                      ^^^^^^^^^^^^^^^^^^
+187 |         scoped.scope().clone(),
+    |         ---------------------- argument #1 of type `tinyagents_storage_kit::Storage` is missing
+188 |         "query-budget",
+    |         -------------- unexpected argument #2 of type `&'static str`
+189 |         documents.clone(),
+    |         ----------------- unexpected argument #3 of type `std::sync::Arc<BoundedQueries>`
+190 |         scoped.streams().clone(),
+    |         ------------------------ unexpected argument #4 of type `std::sync::Arc<dyn tinyagents_storage_kit::StreamStore>`
+191 |         scoped.blobs().clone(),
+    |         ---------------------- unexpected argument #5 of type `std::sync::Arc<dyn BlobStore>`
+    |
+note: associated function defined here
+   --> crates/tinyagents-storage-kit/src/lib.rs:21:12
+    |
+ 21 |     pub fn new(storage: Storage, scope: tinystoragedrivers_types::Scope) -> Self {
+    |            ^^^
+help: did you mean
+    |
+186 -     let actor = DriverRunLedger::new(ScopedStorage::new(
+187 -         scoped.scope().clone(),
+188 -         "query-budget",
+189 -         documents.clone(),
+190 -         scoped.streams().clone(),
+191 -         scoped.blobs().clone(),
+192 -     ));
+186 +     let actor = DriverRunLedger::new(ScopedStorage::new(/* Storage */, scoped.scope().clone()));
+    |
+
+error[E0061]: this function takes 2 arguments but 5 arguments were supplied
+   --> crates/tinyagents-session/src/run_ledger/drivers/events_query_tests.rs:219:38
+    |
+219 |     let actor = DriverRunLedger::new(ScopedStorage::new(
+    |                                      ^^^^^^^^^^^^^^^^^^
+220 |         scoped.scope().clone(),
+    |         ---------------------- argument #1 of type `tinyagents_storage_kit::Storage` is missing
+221 |         "query-budget",
+    |         -------------- unexpected argument #2 of type `&'static str`
+222 |         documents,
+    |         --------- unexpected argument #3 of type `std::sync::Arc<BoundedQueries>`
+223 |         scoped.streams().clone(),
+    |         ------------------------ unexpected argument #4 of type `std::sync::Arc<dyn tinyagents_storage_kit::StreamStore>`
+224 |         scoped.blobs().clone(),
+    |         ---------------------- unexpected argument #5 of type `std::sync::Arc<dyn BlobStore>`
+    |
+note: associated function defined here
+   --> crates/tinyagents-storage-kit/src/lib.rs:21:12
+    |
+ 21 |     pub fn new(storage: Storage, scope: tinystoragedrivers_types::Scope) -> Self {
+    |            ^^^
+help: did you mean
+    |
+219 -     let actor = DriverRunLedger::new(ScopedStorage::new(
+220 -         scoped.scope().clone(),
+221 -         "query-budget",
+222 -         documents,
+223 -         scoped.streams().clone(),
+224 -         scoped.blobs().clone(),
+225 -     ));
+219 +     let actor = DriverRunLedger::new(ScopedStorage::new(/* Storage */, scoped.scope().clone()));
+    |
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+   --> crates/tinyagents-session/src/run_ledger/drivers/events_query_tests.rs:235:96
+    |
+235 |         matches!(error, super::super::LedgerError::Driver(error) if error.kind() == ErrorKind::Fenced)
+    |                                                                                                ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0061]: this function takes 2 arguments but 5 arguments were supplied
+   --> crates/tinyagents-session/src/run_ledger/drivers/events_query_tests.rs:249:38
+    |
+249 |     let actor = DriverRunLedger::new(ScopedStorage::new(
+    |                                      ^^^^^^^^^^^^^^^^^^
+250 |         scoped.scope().clone(),
+    |         ---------------------- argument #1 of type `tinyagents_storage_kit::Storage` is missing
+251 |         "arriving-receipts",
+    |         ------------------- unexpected argument #2 of type `&'static str`
+252 |         scoped.documents().clone(),
+    |         -------------------------- unexpected argument #3 of type `std::sync::Arc<dyn tinyagents_storage_kit::DocumentStore>`
+253 |         streams,
+    |         ------- unexpected argument #4 of type `std::sync::Arc<ArrivingReceipts>`
+254 |         scoped.blobs().clone(),
+    |         ---------------------- unexpected argument #5 of type `std::sync::Arc<dyn BlobStore>`
+    |
+note: associated function defined here
+   --> crates/tinyagents-storage-kit/src/lib.rs:21:12
+    |
+ 21 |     pub fn new(storage: Storage, scope: tinystoragedrivers_types::Scope) -> Self {
+    |            ^^^
+help: did you mean
+    |
+249 -     let actor = DriverRunLedger::new(ScopedStorage::new(
+250 -         scoped.scope().clone(),
+251 -         "arriving-receipts",
+252 -         scoped.documents().clone(),
+253 -         streams,
+254 -         scoped.blobs().clone(),
+255 -     ));
+249 +     let actor = DriverRunLedger::new(ScopedStorage::new(/* Storage */, scoped.scope().clone()));
+    |
+
+error[E0308]: mismatched types
+  --> crates/tinyagents-session/src/run_ledger/drivers/team_tests.rs:6:26
+   |
+ 6 |     DriverRunLedger::new(backend.for_scope(&Scope::new(scope).unwrap()).unwrap())
+   |     -------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `ScopedStorage`, found `Storage`
+   |     |
+   |     arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> crates/tinyagents-session/src/run_ledger/drivers/mod.rs:59:12
+   |
+59 |     pub fn new(scoped: ScopedStorage) -> Self {
+   |            ^^^ ---------------------
+
+error[E0308]: mismatched types
+  --> crates/tinyagents-session/src/run_ledger/drivers/history_tests.rs:15:26
+   |
+15 |     DriverRunLedger::new(backend.for_scope(&Scope::new(scope).unwrap()).unwrap())
+   |     -------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `ScopedStorage`, found `Storage`
+   |     |
+   |     arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> crates/tinyagents-session/src/run_ledger/drivers/mod.rs:59:12
+   |
+59 |     pub fn new(scoped: ScopedStorage) -> Self {
+   |            ^^^ ---------------------
+
+error[E0308]: mismatched types
+  --> crates/tinyagents-session/src/run_ledger/mod_tests.rs:15:9
+   |
+14 |     Arc::new(DriverRunLedger::new(
+   |              -------------------- arguments to this function are incorrect
+15 |         backend.for_scope(&Scope::new(scope).unwrap()).unwrap(),
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `ScopedStorage`, found `Storage`
+   |
+note: associated function defined here
+  --> crates/tinyagents-session/src/run_ledger/drivers/mod.rs:59:12
+   |
+59 |     pub fn new(scoped: ScopedStorage) -> Self {
+   |            ^^^ ---------------------
+
+error[E0308]: mismatched types
+  --> crates/tinyagents-session/src/threads/schema_tests.rs:22:5
+   |
+20 | fn storage() -> ScopedStorage {
+   |                 ------------- expected `tinyagents_storage_kit::ScopedStorage` because of return type
+21 |     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+22 |     backend.for_scope(&Scope::new("local").unwrap()).unwrap()
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `ScopedStorage`, found `Storage`
+
+error[E0599]: no method named `for_scope_fenced` found for struct `MemoryStorage` in the current scope
+   --> crates/tinyagents-session/src/threads/driver_tests.rs:268:54
+    |
+268 |     let store = DriverConversationStore::new(backend.for_scope_fenced(&profile, &fence).unwrap());
+    |                                                      ^^^^^^^^^^^^^^^^
+    |
+   ::: crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ------------------------------- method `for_scope_fenced` not found for this struct
+    |
+help: there is a method `for_scope` with a similar name, but with different arguments
+   --> crates/tinyagents-session/src/testkit/mod.rs:70:5
+    |
+ 70 | /     pub(crate) fn for_scope(
+ 71 | |         &self,
+ 72 | |         scope: &tinyagents_storage_kit::Scope,
+ 73 | |     ) -> tinyagents_storage_kit::error::Result<tinyagents_storage_kit::ScopedStorage> {
+    | |_____________________________________________________________________________________^
+
+error[E0599]: no variant, associated function, or constant named `Fenced` found for enum `tinyagents_storage_kit::ErrorKind` in the current scope
+   --> crates/tinyagents-session/src/threads/driver_tests.rs:276:134
+    |
+276 | ... == ErrorKind::Fenced)
+    |                   ^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::ErrorKind`
+
+error[E0061]: this function takes 2 arguments but 5 arguments were supplied
+   --> crates/tinyagents-session/src/threads/driver_tests.rs:321:42
+    |
+321 |     let a = DriverConversationStore::new(ScopedStorage::new(
+    |                                          ^^^^^^^^^^^^^^^^^^
+322 |         scope.clone(),
+    |         ------------- argument #1 of type `tinyagents_storage_kit::Storage` is missing
+323 |         "test",
+    |         ------ unexpected argument #2 of type `&'static str`
+324 |         docs.clone(),
+    |         ------------ unexpected argument #3 of type `std::sync::Arc<ConflictingDocs>`
+325 |         ports.streams().clone(),
+    |         ----------------------- unexpected argument #4 of type `std::sync::Arc<dyn tinyagents_storage_kit::StreamStore>`
+326 |         ports.blobs().clone(),
+    |         --------------------- unexpected argument #5 of type `std::sync::Arc<dyn BlobStore>`
+    |
+note: associated function defined here
+   --> crates/tinyagents-storage-kit/src/lib.rs:21:12
+    |
+ 21 |     pub fn new(storage: Storage, scope: tinystoragedrivers_types::Scope) -> Self {
+    |            ^^^
+help: did you mean
+    |
+321 -     let a = DriverConversationStore::new(ScopedStorage::new(
+322 -         scope.clone(),
+323 -         "test",
+324 -         docs.clone(),
+325 -         ports.streams().clone(),
+326 -         ports.blobs().clone(),
+327 -     ));
+321 +     let a = DriverConversationStore::new(ScopedStorage::new(/* Storage */, scope.clone()));
+    |
+
+error[E0061]: this function takes 2 arguments but 5 arguments were supplied
+   --> crates/tinyagents-session/src/threads/driver_tests.rs:328:42
+    |
+328 |     let b = DriverConversationStore::new(ScopedStorage::new(
+    |                                          ^^^^^^^^^^^^^^^^^^
+329 |         scope,
+    |         ----- argument #1 of type `tinyagents_storage_kit::Storage` is missing
+330 |         "test",
+    |         ------ unexpected argument #2 of type `&'static str`
+331 |         docs.clone(),
+    |         ------------ unexpected argument #3 of type `std::sync::Arc<ConflictingDocs>`
+332 |         ports.streams().clone(),
+    |         ----------------------- unexpected argument #4 of type `std::sync::Arc<dyn tinyagents_storage_kit::StreamStore>`
+333 |         ports.blobs().clone(),
+    |         --------------------- unexpected argument #5 of type `std::sync::Arc<dyn BlobStore>`
+    |
+note: associated function defined here
+   --> crates/tinyagents-storage-kit/src/lib.rs:21:12
+    |
+ 21 |     pub fn new(storage: Storage, scope: tinystoragedrivers_types::Scope) -> Self {
+    |            ^^^
+help: did you mean
+    |
+328 -     let b = DriverConversationStore::new(ScopedStorage::new(
+329 -         scope,
+330 -         "test",
+331 -         docs.clone(),
+332 -         ports.streams().clone(),
+333 -         ports.blobs().clone(),
+334 -     ));
+328 +     let b = DriverConversationStore::new(ScopedStorage::new(/* Storage */, scope));
+    |
+
+error[E0061]: this function takes 2 arguments but 5 arguments were supplied
+   --> crates/tinyagents-session/src/threads/driver_tests.rs:412:46
+    |
+412 |     let store = DriverConversationStore::new(ScopedStorage::new(
+    |                                              ^^^^^^^^^^^^^^^^^^
+413 |         scope,
+    |         ----- argument #1 of type `tinyagents_storage_kit::Storage` is missing
+414 |         "refused",
+    |         --------- unexpected argument #2 of type `&'static str`
+415 |         docs,
+    |         ---- unexpected argument #3 of type `std::sync::Arc<ConflictingDocs>`
+416 |         ports.streams().clone(),
+    |         ----------------------- unexpected argument #4 of type `std::sync::Arc<dyn tinyagents_storage_kit::StreamStore>`
+417 |         ports.blobs().clone(),
+    |         --------------------- unexpected argument #5 of type `std::sync::Arc<dyn BlobStore>`
+    |
+note: associated function defined here
+   --> crates/tinyagents-storage-kit/src/lib.rs:21:12
+    |
+ 21 |     pub fn new(storage: Storage, scope: tinystoragedrivers_types::Scope) -> Self {
+    |            ^^^
+help: did you mean
+    |
+412 -     let store = DriverConversationStore::new(ScopedStorage::new(
+413 -         scope,
+414 -         "refused",
+415 -         docs,
+416 -         ports.streams().clone(),
+417 -         ports.blobs().clone(),
+418 -     ));
+412 +     let store = DriverConversationStore::new(ScopedStorage::new(/* Storage */, scope));
+    |
+
+error[E0599]: no method named `prepare_schema` found for struct `MemoryStorage` in the current scope
+   --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:115:13
+    |
+115 |     backend.prepare_schema().await.unwrap();
+    |             ^^^^^^^^^^^^^^ method not found in `MemoryStorage`
+    |
+   ::: crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 | pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    | ------------------------------- method `prepare_schema` not found for this struct
+
+error[E0599]: no method named `existing_schema` found for struct `MemoryStorage` in the current scope
+   --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:122:10
+    |
+121 |       let restricted = backend
+    |  ______________________-
+122 | |         .existing_schema()
+    | |         -^^^^^^^^^^^^^^^ method not found in `MemoryStorage`
+    | |_________|
+    |
+    |
+   ::: crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 |   pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    |   ------------------------------- method `existing_schema` not found for this struct
+
+error[E0599]: no method named `existing_schema` found for struct `MemoryStorage` in the current scope
+   --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:183:14
+    |
+182 | /         backend
+183 | |             .existing_schema()
+    | |             -^^^^^^^^^^^^^^^ method not found in `MemoryStorage`
+    | |_____________|
+    |
+    |
+   ::: crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 |   pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    |   ------------------------------- method `existing_schema` not found for this struct
+
+error[E0599]: no method named `existing_schema` found for struct `MemoryStorage` in the current scope
+   --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:203:10
+    |
+202 |       let actor = backend
+    |  _________________-
+203 | |         .existing_schema()
+    | |         -^^^^^^^^^^^^^^^ method not found in `MemoryStorage`
+    | |_________|
+    |
+    |
+   ::: crates/tinyagents-session/src/testkit/mod.rs:62:1
+    |
+ 62 |   pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+    |   ------------------------------- method `existing_schema` not found for this struct
+
+error[E0599]: no variant, associated function, or constant named `ExistingSchema` found for enum `tinyagents_storage_kit::Capability` in the current scope
+   --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:212:70
+    |
+212 |         ErrorKind::Unsupported(tinystoragedrivers_types::Capability::ExistingSchema)
+    |                                                                      ^^^^^^^^^^^^^^ variant, associated function, or constant not found in `tinyagents_storage_kit::Capability`
+
+error[E0599]: no method named `for_agent` found for struct `memory::InMemorySessionStores` in the current scope
+  --> crates/tinyagents-session/src/transcript/test_locator.rs:34:70
+   |
+34 |     let locator = Arc::new(crate::port::InMemorySessionStores::new().for_agent("fixture").transcripts);
+   |                                                                      ^^^^^^^^^
+   |
+  ::: crates/tinyagents-session/src/port/memory/mod.rs:32:1
+   |
+32 | pub struct InMemorySessionStores {
+   | -------------------------------- method `for_agent` not found for this struct
+   |
+  ::: crates/tinyagents-session/src/port/mod.rs:87:8
+   |
+87 |     fn for_agent(&self, agent_id: &str) -> AgentStores;
+   |        --------- the method is available for `memory::InMemorySessionStores` here
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `SessionStoreProvider` which provides `for_agent` is implemented but not in scope; perhaps you want to import it
+   |
+ 4 + use crate::port::SessionStoreProvider;
+   |
+help: there is a method `try_for_agent` with a similar name
+   |
+34 |     let locator = Arc::new(crate::port::InMemorySessionStores::new().try_for_agent("fixture").transcripts);
+   |                                                                      ++++
+
+warning: unused import: `tinystoragedrivers_api::StorageBackend`
+  --> crates/tinyagents-session/src/port/drivers/mod.rs:39:5
+   |
+39 | use tinystoragedrivers_api::StorageBackend;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `ws`
+   --> crates/tinyagents-session/src/run_ledger/drivers/entry_tree_tests.rs:130:9
+    |
+130 |     let ws = tempfile::tempdir().unwrap();
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_ws`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `root`
+   --> crates/tinyagents-session/src/run_ledger/drivers/retention_tests.rs:104:9
+    |
+104 |     let root = tempfile::tempdir().unwrap();
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_root`
+
+warning: unused variable: `root`
+   --> crates/tinyagents-session/src/run_ledger/drivers/team_tests.rs:170:9
+    |
+170 |     let root = tempfile::tempdir().unwrap();
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_root`
+
+warning: unused variable: `root`
+   --> crates/tinyagents-session/src/run_ledger/drivers/history_tests.rs:238:9
+    |
+238 |     let root = tempfile::tempdir().unwrap();
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_root`
+
+warning: unused variable: `root`
+   --> crates/tinyagents-session/src/run_ledger/drivers/history_tests.rs:320:9
+    |
+320 |     let root = tempfile::tempdir().unwrap();
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_root`
+
+warning: unused variable: `path`
+  --> crates/tinyagents-session/src/run_ledger/mod_tests.rs:79:9
+   |
+79 |     let path = dir.path().join("effects.sqlite");
+   |         ^^^^ help: if this is intentional, prefix it with an underscore: `_path`
+
+warning: unused variable: `dir`
+   --> crates/tinyagents-session/src/run_ledger/mod_tests.rs:101:9
+    |
+101 |     let dir = tempfile::tempdir().unwrap();
+    |         ^^^ help: if this is intentional, prefix it with an underscore: `_dir`
+
+warning: unused variable: `path`
+   --> crates/tinyagents-session/src/threads/driver_tests.rs:287:9
+    |
+287 |     let path = dir.path().join("conversation.db");
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_path`
+
+warning: unused variable: `dir`
+  --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:91:9
+   |
+91 |     let dir = tempfile::tempdir().unwrap();
+   |         ^^^ help: if this is intentional, prefix it with an underscore: `_dir`
+
+warning: unused variable: `dir`
+   --> crates/tinyagents-session/src/threads/driver_schema_tests.rs:102:9
+    |
+102 |     let dir = tempfile::tempdir().unwrap();
+    |         ^^^ help: if this is intentional, prefix it with an underscore: `_dir`
+
+warning: unused variable: `dir`
+   --> crates/tinyagents-session/src/threads/driver_append_tests.rs:122:9
+    |
+122 |     let dir = tempfile::tempdir().unwrap();
+    |         ^^^ help: if this is intentional, prefix it with an underscore: `_dir`
+
+warning: unused variable: `dir`
+   --> crates/tinyagents-session/src/threads/driver_append_tests.rs:185:13
+    |
+185 |         let dir = tempfile::tempdir().unwrap();
+    |             ^^^ help: if this is intentional, prefix it with an underscore: `_dir`
+
+warning: unused variable: `dir`
+   --> crates/tinyagents-session/src/threads/driver_append_tests.rs:411:9
+    |
+411 |     let dir = tempfile::tempdir().unwrap();
+    |         ^^^ help: if this is intentional, prefix it with an underscore: `_dir`
+
+Some errors have detailed explanations: E0034, E0061, E0277, E0308, E0432, E0433, E0599.
+For more information about an error, try `rustc --explain E0034`.
+warning: `tinyagents-session` (lib test) generated 15 warnings
+error: could not compile `tinyagents-session` (lib test) due to 159 previous errors; 15 warnings emitted
