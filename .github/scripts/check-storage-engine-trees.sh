@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-blocked='rusqlite|libsqlite3-sys|mongodb|bson|aws-sdk-s3|lapin|amq-protocol|sqlx|redb|sled|rocksdb|^tinystoragedrivers$|tinystoragedrivers-(core|sqlite|document|kv|blob|queue|secrets|connect)'
+blocked='rusqlite|libsqlite3-sys|mongodb|bson|aws-sdk-s3|lapin|amq-protocol|sqlx|redb|sled|rocksdb|^tinystoragedrivers$|tinystoragedrivers-(core|sqlite|mongodb|document|kv|blob|queue|secrets|connect)'
 root=$(pwd -P)
 
 has_blocked_dependency() {
@@ -19,6 +19,7 @@ self_test() {
   forbidden=$(printf '%s\n' \
     'rusqlite v0.31.0' \
     'tinystoragedrivers v2.0.0' \
+    'tinystoragedrivers-mongodb v1.0.0' \
     'tinystoragedrivers-document v2.0.0')
   if has_blocked_dependency <<<"$benign" >/dev/null; then
     echo 'storage-engine dependency check rejected a port or testkit crate' >&2
