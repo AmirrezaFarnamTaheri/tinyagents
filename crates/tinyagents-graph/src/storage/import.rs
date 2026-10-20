@@ -66,6 +66,16 @@ fn v1_lease_thread(id: &str) -> Option<&str> {
 /// The first storage error; the import resumes on the next call because the
 /// legacy collections are removed only after every lease was carried over.
 pub async fn import_legacy_leases(storage: &ScopedStorage) -> Result<u64> {
+    tinyagents_storage_kit::with_migration_lease(storage, "graph", |lease| async move {
+        import_legacy_leases_with_lease(storage, &lease).await
+    })
+    .await
+}
+
+pub(crate) async fn import_legacy_leases_with_lease(
+    storage: &ScopedStorage,
+    lease: &tinyagents_storage_kit::MigrationLease,
+) -> Result<u64> {
     let migrations = Migrations::new(storage);
     if migrations.done(LEASE_OWNER, "lease_import").await? {
         tracing::debug!("[graph-storage] lease import already done");
@@ -92,6 +102,7 @@ pub async fn import_legacy_leases(storage: &ScopedStorage) -> Result<u64> {
             if expires <= now {
                 continue;
             }
+            lease.renew().await?;
             let held = leases
                 .acquire(
                     LEASE_OWNER,
@@ -104,12 +115,13 @@ pub async fn import_legacy_leases(storage: &ScopedStorage) -> Result<u64> {
         }
     }
     for legacy in &LEGACY {
+        lease.renew().await?;
         storage
             .documents()
             .delete_where(legacy.leases, &Filter::default())
             .await?;
     }
-    migrations.mark_done(LEASE_OWNER, "lease_import").await?;
+    lease.mark_done(LEASE_OWNER, "lease_import").await?;
     tracing::debug!(carried, "[graph-storage] lease import complete");
     Ok(carried)
 }
@@ -126,6 +138,16 @@ pub async fn import_legacy_leases(storage: &ScopedStorage) -> Result<u64> {
 ///
 /// The first storage error; the import resumes on the next call.
 pub async fn import_legacy_task_cache(storage: &ScopedStorage) -> Result<u64> {
+    tinyagents_storage_kit::with_migration_lease(storage, "graph", |lease| async move {
+        import_legacy_task_cache_with_lease(storage, &lease).await
+    })
+    .await
+}
+
+pub(crate) async fn import_legacy_task_cache_with_lease(
+    storage: &ScopedStorage,
+    lease: &tinyagents_storage_kit::MigrationLease,
+) -> Result<u64> {
     const LEGACY_COLLECTION: &str = "graph_task_cache";
     const STEP: &str = "kv_import_graph_task_cache";
     let migrations = Migrations::new(storage);
@@ -160,6 +182,7 @@ pub async fn import_legacy_task_cache(storage: &ScopedStorage) -> Result<u64> {
             options = options.expires_ms(at);
         }
         let body = serde_json::json!({"owner": KV_OWNER, "ns": ns, "key": key, "value": value});
+        lease.renew().await?;
         match storage
             .documents()
             .put_with(primitives::KV, &id, body, Precondition::Absent, options)
@@ -171,11 +194,12 @@ pub async fn import_legacy_task_cache(storage: &ScopedStorage) -> Result<u64> {
             Err(error) => return Err(error),
         }
     }
+    lease.renew().await?;
     storage
         .documents()
         .delete_where(LEGACY_COLLECTION, &Filter::default())
         .await?;
-    migrations.mark_done(KV_OWNER, STEP).await?;
+    lease.mark_done(KV_OWNER, STEP).await?;
     tracing::debug!(written, "[graph-storage] task cache import complete");
     Ok(written)
 }

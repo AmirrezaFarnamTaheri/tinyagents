@@ -13,6 +13,7 @@ use tinyagents_storage_kit::{
 
 pub(crate) use kv::{CACHE_NS_PREFIX, KV, KvEntry, NAMESPACED_NS_PREFIX, kv_id};
 pub use kv_import::{LegacyKv, import_legacy_kv};
+pub(crate) use kv_import::import_legacy_kv_with_lease;
 
 /// The body version of every harness collection a v1 -> v2 step produces.
 pub(crate) const SCHEMA_VERSION: u32 = 2;
@@ -106,7 +107,9 @@ pub fn collections() -> Vec<CollectionSpec> {
 pub async fn open_storage(
     storage: ScopedStorage,
 ) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
-    tinyagents_storage_kit::with_migration_lease(&storage, "harness", |lease| async move {
+    let owned_storage = storage.clone();
+    tinyagents_storage_kit::with_migration_lease(&storage, "harness", move |lease| async move {
+        let storage = owned_storage;
         let registry = Registry::compose([storage_schema()])?;
         for spec in collections() {
             storage.documents().ensure_collection(&spec).await?;

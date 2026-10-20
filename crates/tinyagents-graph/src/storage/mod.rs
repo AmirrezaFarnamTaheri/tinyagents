@@ -12,6 +12,7 @@ use tinyagents_storage_kit::{
 };
 
 pub use import::{import_legacy_leases, import_legacy_task_cache};
+pub(crate) use import::{import_legacy_leases_with_lease, import_legacy_task_cache_with_lease};
 pub(crate) use types::{
     CheckpointBody, ThreadBody, WritesBody, checkpoint_id_key, lease_key, subgraph_key,
     thread_id_key, writes_id_key,
@@ -125,20 +126,25 @@ pub fn collections() -> Vec<CollectionSpec> {
 pub async fn open_storage(
     storage: ScopedStorage,
 ) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
-    let registry = Registry::compose([storage_schema()])?;
-    for spec in collections() {
-        storage.documents().ensure_collection(&spec).await?;
-    }
-    for spec in [
-        primitives::leases_collection_spec(),
-        primitives::kv_collection_spec(),
-    ] {
-        storage.documents().ensure_collection(&spec).await?;
-    }
-    registry.migrate(&storage, &MigrateOptions::new()).await?;
-    import_legacy_leases(&storage).await?;
-    import_legacy_task_cache(&storage).await?;
-    Ok(storage)
+    let owned_storage = storage.clone();
+    tinyagents_storage_kit::with_migration_lease(&storage, "graph", move |lease| async move {
+        let storage = owned_storage;
+        let registry = Registry::compose([storage_schema()])?;
+        for spec in collections() {
+            storage.documents().ensure_collection(&spec).await?;
+        }
+        for spec in [
+            primitives::leases_collection_spec(),
+            primitives::kv_collection_spec(),
+        ] {
+            storage.documents().ensure_collection(&spec).await?;
+        }
+        registry.migrate(&storage, &MigrateOptions::new()).await?;
+        import_legacy_leases_with_lease(&storage, &lease).await?;
+        import_legacy_task_cache_with_lease(&storage, &lease).await?;
+        Ok(storage)
+    })
+    .await
 }
 
 #[cfg(test)]

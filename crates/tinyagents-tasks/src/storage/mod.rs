@@ -86,12 +86,18 @@ pub fn collections() -> Vec<CollectionSpec> {
 pub async fn open_storage(
     storage: ScopedStorage,
 ) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
-    let registry = Registry::compose([storage_schema()])?;
-    for spec in collections() {
-        storage.documents().ensure_collection(&spec).await?;
-    }
-    registry.migrate(&storage, &MigrateOptions::new()).await?;
-    Ok(storage)
+    let owned_storage = storage.clone();
+    tinyagents_storage_kit::with_migration_lease(&storage, "tasks", move |lease| async move {
+        let storage = owned_storage;
+        let registry = Registry::compose([storage_schema()])?;
+        for spec in collections() {
+            storage.documents().ensure_collection(&spec).await?;
+        }
+        registry.migrate(&storage, &MigrateOptions::new()).await?;
+        lease.renew().await?;
+        Ok(storage)
+    })
+    .await
 }
 
 #[cfg(test)]
