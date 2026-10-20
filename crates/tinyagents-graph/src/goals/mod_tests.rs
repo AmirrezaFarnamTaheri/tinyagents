@@ -10,26 +10,26 @@ fn schema_string_values(root: &serde_json::Value, mut schema: &serde_json::Value
         schema = root.pointer(pointer).expect("schema reference resolves");
     }
 
-    let mut values = if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array)
-    {
-        values
-            .iter()
-            .map(|value| value.as_str().expect("string enum value").to_owned())
-            .collect()
-    } else {
-        schema
-            .get("oneOf")
-            .and_then(serde_json::Value::as_array)
-            .expect("string enum or oneOf schema")
-            .iter()
-            .map(|variant| {
-                variant["const"]
-                    .as_str()
-                    .expect("string oneOf const")
-                    .to_owned()
-            })
-            .collect()
-    };
+    let mut values: Vec<String> =
+        if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array) {
+            values
+                .iter()
+                .map(|value| value.as_str().expect("string enum value").to_owned())
+                .collect()
+        } else {
+            schema
+                .get("oneOf")
+                .and_then(serde_json::Value::as_array)
+                .expect("string enum or oneOf schema")
+                .iter()
+                .map(|variant| {
+                    variant["const"]
+                        .as_str()
+                        .expect("string oneOf const")
+                        .to_owned()
+                })
+                .collect()
+        };
     values.sort();
     values
 }
