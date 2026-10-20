@@ -9,6 +9,30 @@ struct ChargedModel;
 
 struct MalformedBuyerChargeModel;
 
+struct UntrackedProvider(std::sync::atomic::AtomicUsize);
+
+struct RefuseBeforeDispatch;
+
+#[async_trait]
+impl ChatModel<()> for UntrackedProvider {
+    async fn invoke(
+        &self,
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(ModelResponse::assistant("unexpected provider call"))
+    }
+}
+
+impl tinyinference_llm::model::budget::BeforeDispatch for RefuseBeforeDispatch {
+    fn check(&self) -> tinyinference_llm::Result<()> {
+        Err(tinyinference_llm::Error::Validation(
+            "dispatch refused".to_owned(),
+        ))
+    }
+}
+
 #[async_trait]
 impl ChatModel<()> for ChargedModel {
     async fn invoke(
@@ -170,6 +194,50 @@ async fn wrapped_model_settles_the_reported_charge_once_into_shared_ledger() {
             cost_micros: 7,
         }
     );
+}
+
+#[tokio::test]
+async fn gateway_wrappers_preserve_pre_dispatch_refund_for_untracked_provider() {
+    let budget = ModelBudget::new(
+        Budget::new(SpendLimits::default()),
+        CallBudget {
+            input_tokens: 5_000,
+            output_tokens: 32,
+            cost_micros: 100,
+        },
+    );
+    let provider = Arc::new(UntrackedProvider(std::sync::atomic::AtomicUsize::new(0)));
+    let dispatch_checked = Arc::new(tinyinference_llm::model::DispatchCheckedModel::new(
+        provider.clone(),
+        Arc::new(RefuseBeforeDispatch),
+    ));
+    let wrapped = budget.wrap_model(dispatch_checked);
+
+    assert!(matches!(
+        wrapped.invoke(&(), ModelRequest::default()).await,
+        Err(tinyinference_llm::Error::Validation(message)) if message == "dispatch refused"
+    ));
+    assert_eq!(provider.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(budget.ledger.snapshot().spent.cost_micros, 0);
+    assert_eq!(budget.ledger.snapshot().spent.tokens, 0);
+    assert_eq!(budget.ledger.snapshot().reserved.cost_micros, 0);
+}
+
+#[test]
+fn gateway_wrappers_preserve_native_physical_attempt_tracking() {
+    let budget = ModelBudget::new(
+        Budget::new(SpendLimits::default()),
+        CallBudget {
+            input_tokens: 5_000,
+            output_tokens: 32,
+            cost_micros: 100,
+        },
+    );
+    let wrapped = budget.wrap_model(Arc::new(
+        tinyinference_llm::providers::openai::OpenAiModel::new("fixture"),
+    ));
+
+    assert!(ChatModel::tracks_physical_attempts(wrapped.as_ref()));
 }
 
 #[tokio::test]
