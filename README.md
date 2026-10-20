@@ -140,11 +140,11 @@ use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::openai::OpenAiModel;
 
 let model = OpenAiModel::from_env()?;
-let mut harness: AgentHarness<()> = AgentHarness::new()
-    .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named(
-        "openai",
-        Arc::new(model),
-    )));
+let mut harness: AgentHarness<()> = AgentHarness::new();
+harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named(
+    "openai",
+    Arc::new(model),
+)));
 
 let run = harness
     .invoke_default(&(), vec![Message::user("What is a Rust trait?")])

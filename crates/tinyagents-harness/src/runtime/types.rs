@@ -728,10 +728,11 @@ impl Default for RunPolicy {
 /// ```
 /// use std::sync::Arc;
 /// use tinyinference_llm::providers::MockModel;
+/// use tinyagents_harness::host::FixedModelResolver;
 /// use tinyagents_harness::runtime::AgentHarness;
 ///
 /// let mut harness: AgentHarness<()> = AgentHarness::new();
-/// harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("hello")))));
+/// harness.with_model_resolver(Arc::new(FixedModelResolver::named("mock", Arc::new(MockModel::constant("hello")))));
 /// ```
 pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// Host-supplied resolver for local SDK turns.

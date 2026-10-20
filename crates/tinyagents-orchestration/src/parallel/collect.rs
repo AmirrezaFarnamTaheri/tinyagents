@@ -1,6 +1,6 @@
 //! Aggregating branch results and detecting cross-branch overlap.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -61,10 +61,10 @@ pub fn overlap_warnings<R: BranchReport>(results: &[R]) -> Vec<OverlapWarning> {
             )
         })
         .collect();
-    let mut overlaps = BTreeMap::<PathBuf, Vec<String>>::new();
+    let mut overlaps = BTreeMap::<PathBuf, BTreeSet<String>>::new();
     for (worker, files) in per_worker {
         for file in files {
-            overlaps.entry(file).or_default().push(worker.clone());
+            overlaps.entry(file).or_default().insert(worker.clone());
         }
     }
     overlaps
@@ -72,7 +72,7 @@ pub fn overlap_warnings<R: BranchReport>(results: &[R]) -> Vec<OverlapWarning> {
         .filter(|(_, workers)| workers.len() > 1)
         .map(|(file, workers)| OverlapWarning {
             file: file.to_string_lossy().into_owned(),
-            workers,
+            workers: workers.into_iter().collect(),
         })
         .collect()
 }
