@@ -336,6 +336,16 @@ fn options(
         .observer(Some(Arc::new(TestObserver(counts.clone()))))
 }
 
+fn text_request() -> ModelRequest {
+    ModelRequest::new(vec![tinyinference_llm::message::Message::User(
+        tinyinference_llm::message::UserMessage {
+            content: vec![tinyinference_llm::message::ContentBlock::Text(
+                "fixture prompt".to_owned(),
+            )],
+        },
+    )])
+}
+
 fn model(counts: &Arc<Counts>, behavior: ModelBehavior) -> Arc<dyn ChatModel<()>> {
     let profile = ModelProfile {
         model: Some("dispatch-test-model".to_owned()),
@@ -1032,7 +1042,7 @@ async fn monetarily_budgeted_stream_releases_admission_at_terminal_item() {
             options(Some(admission.clone()), Some(budget), &counts),
         );
         let mut stream = controlled
-            .stream_controlled(&(), ModelRequest::default())
+            .stream_controlled(&(), text_request())
             .await
             .expect("budgeted stream is admitted");
 
@@ -1070,7 +1080,7 @@ async fn monetarily_budgeted_pending_stream_keeps_admission_until_drop() {
         options(Some(admission.clone()), Some(budget), &counts),
     );
     let stream = controlled
-        .stream_controlled(&(), ModelRequest::default())
+        .stream_controlled(&(), text_request())
         .await
         .expect("budgeted stream is admitted");
 
