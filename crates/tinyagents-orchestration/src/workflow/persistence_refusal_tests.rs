@@ -3,7 +3,7 @@ use serde_json::Value;
 use tinyagents_session::run_ledger::DriverRunLedger;
 use tinyagents_storage_kit::{
     Capabilities, Capability, CollectionSpec, DocumentStore, ErrorKind, Filter, Page, Precondition,
-    Query, Scope, ScopedStorage, Sort, StorageBackend, StorageError, Version, Versioned,
+    Query, Scope, ScopedStorage, Sort, Storage, StorageBackend, StorageError, Version, Versioned,
 };
 use tinystoragedrivers_testkit::MemoryBackend;
 
@@ -83,18 +83,22 @@ async fn authoritative_refusals_preserve_native_kind_and_never_create_sqlite() {
     let existed_before = ambient_db.exists();
     for kind in [
         ErrorKind::Unavailable,
-        ErrorKind::Fenced,
+        ErrorKind::Conflict,
         ErrorKind::Unsupported(Capability::Transactions),
     ] {
         let memory = MemoryBackend::new();
         let scope = Scope::new("explicit-profile").unwrap();
         let handles = memory.for_scope(&scope).unwrap();
         let admitted = ScopedStorage::new(
+            Storage::new(
+                Arc::new(RefusedDocuments(kind)),
+                handles.streams().clone(),
+                handles.kv().clone(),
+                handles.blobs().clone(),
+                handles.queues().clone(),
+                handles.secrets().clone(),
+            ),
             scope,
-            "refused",
-            Arc::new(RefusedDocuments(kind)),
-            handles.streams().clone(),
-            handles.blobs().clone(),
         );
         let store = LedgerWorkflowStore::new(Arc::new(DriverRunLedger::new(admitted)));
         let outcomes = [

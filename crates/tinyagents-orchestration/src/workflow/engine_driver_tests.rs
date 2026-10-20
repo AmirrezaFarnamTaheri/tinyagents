@@ -1,8 +1,6 @@
 use super::*;
 use tinyagents_session::run_ledger::{DriverRunLedger, LedgerError};
-use tinyagents_storage_kit::{
-    CollectionSpec, ErrorKind, Fence, Precondition, Scope, ScopedStorage, StorageBackend,
-};
+use tinyagents_storage_kit::{ErrorKind, Scope, StorageBackend};
 use tinystoragedrivers_testkit::MemoryBackend;
 
 fn native_kind(error: &WorkflowPersistenceError) -> ErrorKind {
@@ -10,125 +8,6 @@ fn native_kind(error: &WorkflowPersistenceError) -> ErrorKind {
         WorkflowPersistenceError::Ledger(LedgerError::Driver(error)) => error.kind(),
         other => panic!("native source flattened: {other:?}"),
     }
-}
-
-async fn fenced_ledger() -> (DriverRunLedger, DriverRunLedger, ScopedStorage) {
-    let backend = MemoryBackend::new();
-    let owner_scope = Scope::new("owners").unwrap();
-    let owner = backend.for_scope(&owner_scope).unwrap();
-    owner
-        .documents()
-        .ensure_collection(&CollectionSpec::new("leases"))
-        .await
-        .unwrap();
-    owner
-        .documents()
-        .put(
-            "leases",
-            "profile",
-            json!({"epoch":1}),
-            Precondition::Absent,
-        )
-        .await
-        .unwrap();
-    let scope = Scope::new("profile-a").unwrap();
-    let fence = Fence::epoch(owner_scope, "leases", "profile", "epoch", 1);
-    (
-        DriverRunLedger::new(backend.for_scope_fenced(&scope, &fence).unwrap()),
-        DriverRunLedger::new(backend.for_scope(&scope).unwrap()),
-        owner,
-    )
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn native_profile_takeover_refuses_claim_without_running_children_or_sqlite_fallback() {
-    let (ledger, inspect, owner) = fenced_ledger().await;
-    let engine = WorkflowEngine::new_async(
-        Arc::new(LedgerWorkflowStore::new(Arc::new(ledger))),
-        Arc::new(RegisteredExecutor),
-    );
-    let definition = tests::definition();
-    let initial = engine
-        .initialise_async("run".into(), &definition, json!({}), None)
-        .await
-        .unwrap();
-    owner
-        .documents()
-        .put("leases", "profile", json!({"epoch":2}), Precondition::None)
-        .await
-        .unwrap();
-    let error = engine
-        .drive_async("run", &definition, CancellationToken::new())
-        .await
-        .unwrap_err();
-    assert_eq!(native_kind(&error), ErrorKind::Fenced);
-    assert_eq!(
-        inspect.get_workflow_run("run").await.unwrap(),
-        Some(initial)
-    );
-}
-
-struct BreakFenceDuringChild {
-    owner: ScopedStorage,
-    cancelled: parking_lot::Mutex<Vec<String>>,
-}
-#[async_trait]
-impl AsyncWorkflowExecutor for BreakFenceDuringChild {
-    async fn execute_async(
-        &self,
-        _: WorkflowChildRequest,
-        _: CancellationToken,
-        registration: Arc<dyn AsyncWorkflowChildRegistration>,
-    ) -> WorkflowPersistenceResult<WorkflowChildResult> {
-        registration.register_async("live-child".into()).await?;
-        self.owner
-            .documents()
-            .put("leases", "profile", json!({"epoch":2}), Precondition::None)
-            .await
-            .unwrap();
-        std::future::pending().await
-    }
-    async fn cancel_children(&self, ids: &[String]) {
-        self.cancelled.lock().extend_from_slice(ids);
-    }
-}
-
-#[tokio::test(flavor = "current_thread", start_paused = true)]
-async fn heartbeat_awaits_native_fence_and_cancels_committed_child_on_takeover() {
-    let (ledger, inspect, owner) = fenced_ledger().await;
-    let executor = Arc::new(BreakFenceDuringChild {
-        owner,
-        cancelled: parking_lot::Mutex::new(vec![]),
-    });
-    let engine = WorkflowEngine::new_async(
-        Arc::new(LedgerWorkflowStore::new(Arc::new(ledger))),
-        executor.clone(),
-    )
-    .with_lease_duration(Duration::from_secs(60));
-    let mut definition = tests::definition();
-    definition.phases.truncate(1);
-    engine
-        .initialise_async("run".into(), &definition, json!({}), None)
-        .await
-        .unwrap();
-    let error = tokio::time::timeout(
-        Duration::from_secs(30),
-        engine.drive_async("run", &definition, CancellationToken::new()),
-    )
-    .await
-    .expect("heartbeat must await its fenced authority")
-    .unwrap_err();
-    assert_eq!(native_kind(&error), ErrorKind::Fenced);
-    assert_eq!(*executor.cancelled.lock(), vec!["live-child"]);
-    assert_ne!(
-        inspect
-            .get_workflow_run("run")
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
-        WorkflowRunStatus::Completed
-    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -170,7 +49,7 @@ async fn registration_and_child_failures_retain_native_unavailable_kind() {
     // Invoke both owning regressions under the driver's native error variant.
     let error = refusal();
     assert_eq!(native_kind(&error), ErrorKind::Unavailable);
-    let workspace = tempfile::tempdir().unwrap();
+    let _workspace = tempfile::tempdir().unwrap();
     let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let store = Arc::new(RegistrationRefusal {
         inner: LedgerWorkflowStore::new(ledger),
@@ -326,17 +205,13 @@ async fn configured_refusal_never_uses_legacy_initialise_or_drive() {
             ),
             kind
         );
-        assert!(
-            engine
-                .initialise("legacy".into(), &definition, json!({}), None)
-                .is_err()
-        );
-        assert!(
-            engine
-                .drive("legacy", &definition, CancellationToken::new())
-                .await
-                .is_err()
-        );
+        assert!(engine
+            .initialise("legacy".into(), &definition, json!({}), None)
+            .is_err());
+        assert!(engine
+            .drive("legacy", &definition, CancellationToken::new())
+            .await
+            .is_err());
     }
     assert_eq!(
         ambient_db.exists(),

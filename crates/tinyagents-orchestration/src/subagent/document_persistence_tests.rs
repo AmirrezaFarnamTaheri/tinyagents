@@ -114,8 +114,8 @@ async fn reopened_store_preserves_pause_cas_terminal_and_scoped_task_index() {
 #[tokio::test]
 async fn tenant_documents_do_not_leak_between_identical_task_keys() {
     let backend = MemoryBackend::new();
-    let alice = open(&backend, &Scope::tenant("alice").unwrap());
-    let bob = open(&backend, &Scope::tenant("bob").unwrap());
+    let alice = open(&backend, &Scope::new("alice").unwrap());
+    let bob = open(&backend, &Scope::new("bob").unwrap());
     let key = key("same");
     alice
         .save_pause(pause(key.clone(), "secret"))
@@ -338,20 +338,16 @@ async fn pause_replacement_rejects_stale_continuations_and_invalid_imports() {
         store.pause_outcome(&task_key).unwrap().unwrap().output,
         "second"
     );
-    assert!(
-        store
-            .import_record(&key("other"), Some(pause(task_key.clone(), "bad")), None)
-            .is_err()
-    );
-    assert!(
-        store
-            .import_record_at(
-                "wrong-component",
-                Some(pause(task_key.clone(), "bad")),
-                None
-            )
-            .is_err()
-    );
+    assert!(store
+        .import_record(&key("other"), Some(pause(task_key.clone(), "bad")), None)
+        .is_err());
+    assert!(store
+        .import_record_at(
+            "wrong-component",
+            Some(pause(task_key.clone(), "bad")),
+            None
+        )
+        .is_err());
     let invalid = PersistedSubagentPause {
         key: task_key.clone(),
         outcome: SubagentOutcome::completed("task", "not a pause"),

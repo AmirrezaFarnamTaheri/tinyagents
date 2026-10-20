@@ -5,7 +5,7 @@ use tempfile::TempDir;
 use tinyagents_session::run_ledger::{AgentTeamMemberStatus, AgentTeamTaskStatus};
 use tinystoragedrivers_testkit::MemoryBackend;
 
-fn service(dir: &TempDir) -> TeamService<SessionTeamLedger> {
+fn service(_dir: &TempDir) -> TeamService<SessionTeamLedger> {
     let ledger_backend = MemoryBackend::new();
     TeamService::new(
         SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(&ledger_backend))).unwrap(),
@@ -194,18 +194,14 @@ async fn a_member_cannot_start_a_second_task_while_its_first_task_is_running() {
         after.members[0].current_task_id.as_deref(),
         Some(first_task.id.as_str())
     );
-    assert!(
-        after.members[0]
-            .worker_thread_id
-            .as_deref()
-            .is_some_and(|id| id.starts_with("team-worker-"))
-    );
-    assert!(
-        after.members[0]
-            .run_id
-            .as_deref()
-            .is_some_and(|id| id.starts_with("team-run-"))
-    );
+    assert!(after.members[0]
+        .worker_thread_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with("team-worker-")));
+    assert!(after.members[0]
+        .run_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with("team-run-")));
     let first_after = after
         .tasks
         .iter()
@@ -274,13 +270,11 @@ async fn started_callback_fires_after_claim_before_executor_finishes() {
         started.member.run_id.as_deref(),
         Some(started.run_id.as_str())
     );
-    assert!(
-        started
-            .member
-            .worker_thread_id
-            .as_deref()
-            .is_some_and(|id| id.starts_with("team-worker-"))
-    );
+    assert!(started
+        .member
+        .worker_thread_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with("team-worker-")));
     let durable = service.get_team(&team.team.id).unwrap().unwrap();
     assert_eq!(
         durable.members[0].run_id.as_deref(),
@@ -568,12 +562,10 @@ fn stale_claim_cleanup_cannot_release_a_successor_claim() {
     else {
         panic!("first generation should claim the task");
     };
-    assert!(
-        service
-            .ledger()
-            .release_task(&team.team.id, &task.id, &member.id, "first-generation")
-            .unwrap()
-    );
+    assert!(service
+        .ledger()
+        .release_task(&team.team.id, &task.id, &member.id, "first-generation")
+        .unwrap());
     let ClaimOutcome::Claimed(second_claim) = service
         .claim_task(&team.team.id, &task.id, &member.id, "successor-generation")
         .unwrap()
@@ -581,12 +573,10 @@ fn stale_claim_cleanup_cannot_release_a_successor_claim() {
         panic!("successor should claim the released task");
     };
 
-    assert!(
-        !service
-            .ledger()
-            .release_task(&team.team.id, &task.id, &member.id, "first-generation")
-            .unwrap()
-    );
+    assert!(!service
+        .ledger()
+        .release_task(&team.team.id, &task.id, &member.id, "first-generation")
+        .unwrap());
     let current = service
         .ledger()
         .list_tasks(&team.team.id)

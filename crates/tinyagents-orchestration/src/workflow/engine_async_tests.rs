@@ -28,7 +28,7 @@ impl AsyncWorkflowExecutor for RegisteredExecutor {
 #[tokio::test(flavor = "current_thread")]
 async fn authoritative_engine_awaits_registration_and_completes_on_current_thread() {
     let ledger_backend = MemoryBackend::new();
-    let workspace = tempfile::tempdir().unwrap();
+    let _workspace = tempfile::tempdir().unwrap();
     let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let engine = WorkflowEngine::new_async(
         Arc::new(LedgerWorkflowStore::new(ledger.clone())),
@@ -116,12 +116,10 @@ impl AsyncWorkflowExecutor for IgnoreFailedRegistration {
         _: CancellationToken,
         registration: Arc<dyn AsyncWorkflowChildRegistration>,
     ) -> WorkflowPersistenceResult<WorkflowChildResult> {
-        assert!(
-            registration
-                .register_async("real-child".into())
-                .await
-                .is_err()
-        );
+        assert!(registration
+            .register_async("real-child".into())
+            .await
+            .is_err());
         std::future::pending().await
     }
     async fn cancel_children(&self, ids: &[String]) {
@@ -139,7 +137,7 @@ fn innermost(error: &WorkflowPersistenceError) -> &WorkflowPersistenceError {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn ignored_registration_refusal_cancels_child_and_preserves_source_without_waiting() {
     let ledger_backend = MemoryBackend::new();
-    let workspace = tempfile::tempdir().unwrap();
+    let _workspace = tempfile::tempdir().unwrap();
     let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let store = Arc::new(RegistrationRefusal {
         inner: LedgerWorkflowStore::new(ledger.clone()),
@@ -165,11 +163,9 @@ async fn ignored_registration_refusal_cancels_child_and_preserves_source_without
         innermost(&error),
         WorkflowPersistenceError::Ledger(_)
     ));
-    assert!(
-        error
-            .to_string()
-            .contains("registration backend unavailable")
-    );
+    assert!(error
+        .to_string()
+        .contains("registration backend unavailable"));
     assert_eq!(*executor.cancelled.lock(), vec!["real-child"]);
     assert_ne!(
         ledger
@@ -202,7 +198,7 @@ impl AsyncWorkflowExecutor for UnregisteredExecutor {
 #[tokio::test(flavor = "current_thread")]
 async fn authoritative_success_cannot_substitute_for_committed_child_registration() {
     let ledger_backend = MemoryBackend::new();
-    let workspace = tempfile::tempdir().unwrap();
+    let _workspace = tempfile::tempdir().unwrap();
     let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let engine = WorkflowEngine::new_async(
         Arc::new(LedgerWorkflowStore::new(ledger.clone())),
@@ -220,17 +216,13 @@ async fn authoritative_success_cannot_substitute_for_committed_child_registratio
     let run = ledger.get_workflow_run("run").await.unwrap().unwrap();
     assert!(run.child_run_ids.is_empty());
     assert_ne!(run.status, WorkflowRunStatus::Completed);
-    assert!(
-        engine
-            .initialise("legacy".into(), &definition, json!({}), None)
-            .is_err()
-    );
-    assert!(
-        engine
-            .drive("run", &definition, CancellationToken::new())
-            .await
-            .is_err()
-    );
+    assert!(engine
+        .initialise("legacy".into(), &definition, json!({}), None)
+        .is_err());
+    assert!(engine
+        .drive("run", &definition, CancellationToken::new())
+        .await
+        .is_err());
 }
 
 struct RefusingChild;
@@ -254,7 +246,7 @@ impl AsyncWorkflowExecutor for RefusingChild {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn typed_child_failure_interrupts_parallel_waiters_without_string_flattening() {
     let ledger_backend = MemoryBackend::new();
-    let workspace = tempfile::tempdir().unwrap();
+    let _workspace = tempfile::tempdir().unwrap();
     let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let engine = WorkflowEngine::new_async(
         Arc::new(LedgerWorkflowStore::new(ledger.clone())),
@@ -278,11 +270,9 @@ async fn typed_child_failure_interrupts_parallel_waiters_without_string_flatteni
         innermost(&error),
         WorkflowPersistenceError::Ledger(_)
     ));
-    assert!(
-        error
-            .to_string()
-            .contains("registration backend unavailable")
-    );
+    assert!(error
+        .to_string()
+        .contains("registration backend unavailable"));
     assert_ne!(
         ledger
             .get_workflow_run("run")
@@ -312,7 +302,7 @@ impl AsyncWorkflowExecutor for SyncRegistrationAttempt {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn ignored_synchronous_registration_refusal_cannot_leave_authoritative_driver_waiting() {
     let ledger_backend = MemoryBackend::new();
-    let workspace = tempfile::tempdir().unwrap();
+    let _workspace = tempfile::tempdir().unwrap();
     let store = Arc::new(LedgerWorkflowStore::new(Arc::new(
         crate::test_support::ledger_in(&ledger_backend),
     )));
@@ -362,21 +352,15 @@ async fn authoritative_placeholder_callbacks_cannot_supply_legacy_fallback() {
     };
     assert!(marker.load("run").is_err());
     assert!(marker.upsert(row.clone()).is_err());
-    assert!(
-        marker
-            .claim("run", "owner", Duration::from_secs(30))
-            .is_err()
-    );
-    assert!(
-        marker
-            .compare_and_swap(row, 0, "owner", Duration::from_secs(30))
-            .is_err()
-    );
-    assert!(
-        marker
-            .renew("run", "owner", Duration::from_secs(30))
-            .is_err()
-    );
+    assert!(marker
+        .claim("run", "owner", Duration::from_secs(30))
+        .is_err());
+    assert!(marker
+        .compare_and_swap(row, 0, "owner", Duration::from_secs(30))
+        .is_err());
+    assert!(marker
+        .renew("run", "owner", Duration::from_secs(30))
+        .is_err());
     let request = WorkflowChildRequest {
         run_id: "run".into(),
         phase: "phase".into(),
@@ -384,16 +368,14 @@ async fn authoritative_placeholder_callbacks_cannot_supply_legacy_fallback() {
         index_in_phase: 0,
         prompt: String::new(),
     };
-    assert!(
-        marker
-            .execute(
-                request,
-                CancellationToken::new(),
-                Arc::new(RefusedLegacyRegistration)
-            )
-            .await
-            .is_err()
-    );
+    assert!(marker
+        .execute(
+            request,
+            CancellationToken::new(),
+            Arc::new(RefusedLegacyRegistration)
+        )
+        .await
+        .is_err());
     WorkflowExecutor::cancel_children(&marker, &[]).await;
 }
 

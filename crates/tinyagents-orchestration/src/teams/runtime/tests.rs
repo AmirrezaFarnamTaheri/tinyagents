@@ -1,5 +1,7 @@
 //! Tests for member prompt composition and message delivery.
 
+use std::sync::Arc;
+
 use tempfile::TempDir;
 use tinystoragedrivers_testkit::MemoryBackend;
 
@@ -39,12 +41,10 @@ fn delivery_selects_direct_and_broadcast_messages_once() {
     let first = deliver_pending_messages(&ledger, &team_id, &member_id).unwrap();
     assert_eq!(first.messages, ["direct", "broadcast"]);
     assert!(first.up_to_sequence.is_some());
-    assert!(
-        deliver_pending_messages(&ledger, &team_id, &member_id)
-            .unwrap()
-            .messages
-            .is_empty()
-    );
+    assert!(deliver_pending_messages(&ledger, &team_id, &member_id)
+        .unwrap()
+        .messages
+        .is_empty());
 }
 
 #[test]

@@ -21,7 +21,7 @@ fn row() -> WorkflowRunUpsert {
 #[tokio::test(flavor = "current_thread")]
 async fn authoritative_adapter_loads_persisted_ledger_without_runtime_bridge() {
     let ledger_backend = MemoryBackend::new();
-    let workspace = tempfile::tempdir().unwrap();
+    let _workspace = tempfile::tempdir().unwrap();
     let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let expected = ledger.upsert_workflow_run(row()).await.unwrap();
     let store: Arc<dyn AsyncWorkflowStore> = Arc::new(LedgerWorkflowStore::new(ledger));
@@ -31,7 +31,7 @@ async fn authoritative_adapter_loads_persisted_ledger_without_runtime_bridge() {
 #[tokio::test(flavor = "current_thread")]
 async fn independent_adapters_preserve_claim_revision_and_stale_owner_rules() {
     let ledger_backend = MemoryBackend::new();
-    let workspace = tempfile::tempdir().unwrap();
+    let _workspace = tempfile::tempdir().unwrap();
     let first = LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend)));
     let second =
         LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend)));
@@ -51,38 +51,30 @@ async fn independent_adapters_preserve_claim_revision_and_stale_owner_rules() {
             .unwrap(),
         WorkflowLeaseClaim::Busy(_)
     ));
-    assert!(
-        !second
-            .renew("workflow", "owner-b", Duration::from_secs(60))
-            .await
-            .unwrap()
-    );
-    assert!(
-        second
-            .compare_and_swap(row(), claimed.revision, "owner-b", Duration::from_secs(60))
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        first
-            .renew("workflow", "owner-a", Duration::from_secs(60))
-            .await
-            .unwrap()
-    );
+    assert!(!second
+        .renew("workflow", "owner-b", Duration::from_secs(60))
+        .await
+        .unwrap());
+    assert!(second
+        .compare_and_swap(row(), claimed.revision, "owner-b", Duration::from_secs(60))
+        .await
+        .unwrap()
+        .is_none());
+    assert!(first
+        .renew("workflow", "owner-a", Duration::from_secs(60))
+        .await
+        .unwrap());
     let updated = first
         .compare_and_swap(row(), claimed.revision, "owner-a", Duration::from_secs(60))
         .await
         .unwrap()
         .unwrap();
     assert_eq!(updated.revision, claimed.revision + 1);
-    assert!(
-        first
-            .compare_and_swap(row(), claimed.revision, "owner-a", Duration::from_secs(60))
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(first
+        .compare_and_swap(row(), claimed.revision, "owner-a", Duration::from_secs(60))
+        .await
+        .unwrap()
+        .is_none());
 }
 
 struct AuthoritativeRegistration;
@@ -129,7 +121,7 @@ mod refusal_tests;
 #[tokio::test(flavor = "current_thread")]
 async fn invalid_lease_duration_refuses_before_touching_the_ledger() {
     let ledger_backend = MemoryBackend::new();
-    let workspace = tempfile::tempdir().unwrap();
+    let _workspace = tempfile::tempdir().unwrap();
     let store = LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend)));
     let lease = Duration::MAX;
     assert!(matches!(
@@ -180,7 +172,7 @@ async fn explicit_legacy_registration_preserves_callback_results() {
 #[tokio::test(flavor = "current_thread")]
 async fn expired_owner_takeover_fences_prior_owner_without_sleeping() {
     let ledger_backend = MemoryBackend::new();
-    let workspace = tempfile::tempdir().unwrap();
+    let _workspace = tempfile::tempdir().unwrap();
     let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     ledger.upsert_workflow_run(row()).await.unwrap();
     let WorkflowLeaseClaim::Acquired(expired) = ledger
@@ -199,28 +191,22 @@ async fn expired_owner_takeover_fences_prior_owner_without_sleeping() {
         panic!("expired takeover refused")
     };
     assert!(replacement.revision > expired.revision);
-    assert!(
-        !store
-            .renew("workflow", "old-owner", Duration::from_secs(60))
-            .await
-            .unwrap()
-    );
-    assert!(
-        store
-            .compare_and_swap(
-                row(),
-                replacement.revision,
-                "old-owner",
-                Duration::from_secs(60)
-            )
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        store
-            .renew("workflow", "new-owner", Duration::from_secs(60))
-            .await
-            .unwrap()
-    );
+    assert!(!store
+        .renew("workflow", "old-owner", Duration::from_secs(60))
+        .await
+        .unwrap());
+    assert!(store
+        .compare_and_swap(
+            row(),
+            replacement.revision,
+            "old-owner",
+            Duration::from_secs(60)
+        )
+        .await
+        .unwrap()
+        .is_none());
+    assert!(store
+        .renew("workflow", "new-owner", Duration::from_secs(60))
+        .await
+        .unwrap());
 }
