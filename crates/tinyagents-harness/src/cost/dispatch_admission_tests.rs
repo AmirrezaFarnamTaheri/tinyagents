@@ -282,9 +282,11 @@ impl ChatModel<()> for TestModel {
         let stream: std::pin::Pin<
             Box<dyn futures::Stream<Item = tinyinference_llm::model::ModelStreamItem> + Send>,
         > = match self.behavior {
-            ModelBehavior::CompletedStream => Box::pin(futures::stream::iter([
-                ModelStreamItem::Completed(ModelResponse::assistant("ok")),
-            ])),
+            ModelBehavior::CompletedStream => {
+                Box::pin(futures::stream::iter([ModelStreamItem::Completed(
+                    ModelResponse::assistant("ok"),
+                )]))
+            }
             ModelBehavior::EmptyStream => Box::pin(futures::stream::empty()),
             ModelBehavior::PendingStream => Box::pin(futures::stream::pending()),
             ModelBehavior::FailedStream => {
@@ -439,7 +441,10 @@ async fn physical_attempt_refusal_is_forwarded_through_controlled_model() {
     ));
     assert_eq!(sent.load(Ordering::SeqCst), 1);
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
-    assert_eq!(admission.permits.physical_attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        admission.permits.physical_attempts.load(Ordering::SeqCst),
+        2
+    );
 }
 
 #[tokio::test]
@@ -1091,11 +1096,14 @@ async fn monetarily_budgeted_stream_releases_admission_at_terminal_item() {
     ] {
         let counts = Arc::new(Counts::default());
         let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
-        let budget = ModelBudget::new(Budget::new(SpendLimits::default()), CallBudget {
-            input_tokens: 10_000,
-            output_tokens: 10,
-            cost_micros: 100,
-        });
+        let budget = ModelBudget::new(
+            Budget::new(SpendLimits::default()),
+            CallBudget {
+                input_tokens: 10_000,
+                output_tokens: 10,
+                cost_micros: 100,
+            },
+        );
         let controlled = ControlledChatModel::new(
             model(&counts, behavior),
             options(Some(admission.clone()), Some(budget), &counts),
@@ -1129,11 +1137,14 @@ async fn monetarily_budgeted_stream_releases_admission_at_terminal_item() {
 async fn monetarily_budgeted_pending_stream_keeps_admission_until_drop() {
     let counts = Arc::new(Counts::default());
     let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
-    let budget = ModelBudget::new(Budget::new(SpendLimits::default()), CallBudget {
-        input_tokens: 10_000,
-        output_tokens: 10,
-        cost_micros: 100,
-    });
+    let budget = ModelBudget::new(
+        Budget::new(SpendLimits::default()),
+        CallBudget {
+            input_tokens: 10_000,
+            output_tokens: 10,
+            cost_micros: 100,
+        },
+    );
     let controlled = ControlledChatModel::new(
         model(&counts, ModelBehavior::PendingStream),
         options(Some(admission.clone()), Some(budget), &counts),
