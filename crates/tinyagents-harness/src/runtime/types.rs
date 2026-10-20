@@ -733,9 +733,12 @@ impl Default for RunPolicy {
 /// let mut harness: AgentHarness<()> = AgentHarness::new();
 /// harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("hello")))));
 /// ```
-pub struct AgentHarness<'model, State: Send + Sync, Ctx: Send + Sync = ()> {
+pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// Host-supplied resolver for local SDK turns.
-    pub(crate) model_resolver: Option<Arc<dyn ModelResolver<State> + 'model>>,
+    pub(crate) model_resolver: Option<Arc<dyn ModelResolver<State>>>,
+    /// One directly supplied model, supporting borrowed state without
+    /// imposing an object lifetime on the routing trait.
+    pub(crate) fixed_model: Option<Arc<dyn tinyinference_llm::model::ChatModel<State>>>,
     /// Name-keyed registry of tools exposed to the model.
     pub(crate) tools: ToolRegistry<State, Ctx>,
     /// Ordered middleware stack wrapping agent, model, and tool execution.

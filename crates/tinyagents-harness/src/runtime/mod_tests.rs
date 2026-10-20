@@ -3092,7 +3092,7 @@ async fn retryable_classifier_changes_the_model_visible_result_without_redispatc
 async fn explicit_model_paths_accept_borrowed_state() {
     async fn exercise<'state>(state: &'state str) {
         let mut harness: AgentHarness<&'state str> = AgentHarness::new();
-        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(BorrowedStateModel))));
+        harness.with_model(Arc::new(BorrowedStateModel));
 
         let unary = harness
             .invoke(

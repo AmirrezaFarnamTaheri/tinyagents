@@ -58,12 +58,13 @@ pub fn install_depth<State: Send + Sync, Ctx: Send + Sync>(
     harness.with_policy(policy);
 }
 
-impl<'model, State: Send + Sync, Ctx: Send + Sync> AgentHarness<'model, State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Creates an empty harness with default policy and no models, tools, or
     /// middleware registered.
     pub fn new() -> Self {
         Self {
             model_resolver: None,
+            fixed_model: None,
             tools: ToolRegistry::new(),
             middleware: MiddlewareStack::new(),
             policy: RunPolicy::default(),
@@ -80,9 +81,20 @@ impl<'model, State: Send + Sync, Ctx: Send + Sync> AgentHarness<'model, State, C
     /// continue to use their invocation-local host resolver.
     pub fn with_model_resolver(
         &mut self,
-        resolver: Arc<dyn ModelResolver<State> + 'model>,
+        resolver: Arc<dyn ModelResolver<State>>,
     ) -> &mut Self {
         self.model_resolver = Some(resolver);
+        self
+    }
+
+    /// Supplies a single model directly when the state type carries a
+    /// non-static borrow and therefore cannot be used through the resolver
+    /// trait object.
+    pub fn with_model(
+        &mut self,
+        model: Arc<dyn tinyinference_llm::model::ChatModel<State>>,
+    ) -> &mut Self {
+        self.fixed_model = Some(model);
         self
     }
 

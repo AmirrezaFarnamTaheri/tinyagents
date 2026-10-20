@@ -66,10 +66,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             crate::runtime::host_invocation_binding::<State, Ctx>(ctx),
             Ok(None)
         );
-        let eligible = if hosted { false } else if let Some(resolver) = self.model_resolver.as_ref() {
+        let candidate = if hosted {
+            None
+        } else if let Some(resolver) = self.model_resolver.as_ref() {
             resolver.resolve_named(&requested).await.ok().flatten()
-                .is_some_and(|model| model_is_eligible(model.as_ref(), request.required_capabilities.as_ref()))
-        } else { false };
+        } else {
+            self.fixed_model.clone().filter(|model| model.profile()
+                .and_then(|profile| profile.model.as_deref()) == Some(requested.as_str()))
+        };
+        let eligible = candidate.as_ref().is_some_and(|model| {
+            model_is_eligible(model.as_ref(), request.required_capabilities.as_ref())
+        });
         if eligible {
             if request.model.as_deref() != Some(requested.as_str()) {
                 match request.model.as_deref() {
@@ -96,6 +103,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         let resolved = self.model_resolver.as_ref()
             .and_then(|resolver| resolver.preview(&super::model_call::local_resolve_request(request)))
+            .or_else(|| self.fixed_model.clone())
             .and_then(|model| model.profile().and_then(|p| p.model.clone()))
             .unwrap_or_else(|| "<default>".to_string());
         tracing::warn!(
