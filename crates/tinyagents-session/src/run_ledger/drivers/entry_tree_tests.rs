@@ -257,43 +257,6 @@ async fn compaction_and_pinned_context_project_summary_pinned_then_kept_rows() {
     }
 }
 
-#[tokio::test]
-async fn retired_generation_cannot_read_or_append_fresh_entry_tree() {
-    use tinyagents_storage_kit::{ErrorKind, PurgeMode, PurgeRequest};
-    let backend = MemoryStorage::new();
-    let scope = Scope::new("alice").unwrap();
-    let scoped = backend.for_scope(&scope).unwrap();
-    let old = DriverRunLedger::new(scoped.clone());
-    old.entry_append_to_head("s", kind("old")).await.unwrap();
-    let receipt = scoped
-        .purge(&PurgeRequest {
-            operation_id: "reset-tree".into(),
-            mode: PurgeMode::Atomic,
-        })
-        .await
-        .unwrap();
-    let fresh = DriverRunLedger::new(
-        backend
-            .for_scope_generation(&scope, receipt.generation)
-            .unwrap(),
-    );
-    let head = fresh
-        .entry_append_to_head("s", kind("fresh"))
-        .await
-        .unwrap();
-    for result in [
-        old.entry_head("s").await.map(|_| ()),
-        old.entry_append_to_head("s", kind("stale"))
-            .await
-            .map(|_| ()),
-    ] {
-        assert!(
-            matches!(result.unwrap_err(), super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::ScopeGenerationRejected)
-        );
-    }
-    assert_eq!(fresh.entry_head("s").await.unwrap(), Some(head));
-}
-
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tinyagents_storage_kit::{

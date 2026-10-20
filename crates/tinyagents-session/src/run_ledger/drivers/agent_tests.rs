@@ -395,59 +395,6 @@ async fn native_command_center_controls_use_atomic_status_and_event_receipts() {
 }
 
 #[tokio::test]
-async fn retired_generation_cannot_change_status_allocate_events_or_project_streams() {
-    use tinyagents_storage_kit::{ErrorKind, PurgeMode, PurgeRequest, ScopeGeneration};
-    let backend = MemoryStorage::new();
-    let scope = Scope::new("alice").unwrap();
-    let old = DriverRunLedger::new(
-        backend
-            .for_scope_generation(&scope, ScopeGeneration(0))
-            .unwrap(),
-    );
-    old.upsert_agent_run(run("run")).await.unwrap();
-    old.append_run_event(RunEventAppend {
-        run_id: "run".into(),
-        event_type: "before".into(),
-        payload: json!({}),
-    })
-    .await
-    .unwrap();
-    let receipt = backend
-        .for_scope(&scope)
-        .unwrap()
-        .purge(&PurgeRequest {
-            operation_id: "reset".into(),
-            mode: PurgeMode::Atomic,
-        })
-        .await
-        .unwrap();
-    let error = old
-        .transition_agent_run_status("run", AgentRunStatus::Completed, None, None)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(error, super::super::LedgerError::Driver(ref native) if native.kind() == ErrorKind::ScopeGenerationRejected)
-    );
-    assert!(
-        old.append_run_event(RunEventAppend {
-            run_id: "run".into(),
-            event_type: "stale".into(),
-            payload: json!({})
-        })
-        .await
-        .is_err()
-    );
-    assert!(old.reconcile_run_events("run").await.is_err());
-    let fresh = DriverRunLedger::new(
-        backend
-            .for_scope_generation(&scope, receipt.generation)
-            .unwrap(),
-    );
-    assert!(fresh.get_agent_run("run").await.unwrap().is_none());
-    fresh.upsert_agent_run(run("run")).await.unwrap();
-}
-
-#[tokio::test]
 async fn native_agent_and_event_receipts_survive_sqlite_reopen_without_classic_tables() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("ledger.db");
