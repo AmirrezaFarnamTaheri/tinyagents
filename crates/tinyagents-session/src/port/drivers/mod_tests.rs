@@ -1,8 +1,8 @@
 use super::*;
 use crate::testkit::conformance::{session_store_conformance, session_store_isolation_conformance};
 use crate::turn_state::{TurnLifecycle, TurnState};
-use tinystoragedrivers_types::MemoryStorage;
 use tinystoragedrivers_sqlite::SqliteStorage;
+use tinystoragedrivers_types::MemoryStorage;
 
 fn memory() -> DriverSessionStores {
     DriverSessionStores::new(
@@ -706,7 +706,8 @@ fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
     use std::error::Error;
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let provider: Arc<dyn SessionStoreProvider> = Arc::new(
-        DriverSessionStores::new(backend.clone(), tinystoragedrivers_types::Scope::local()).unwrap(),
+        DriverSessionStores::new(backend.clone(), tinystoragedrivers_types::Scope::local())
+            .unwrap(),
     );
     let first = provider.try_for_agent("agent").unwrap();
     let cached = provider.try_for_agent("agent").unwrap();
@@ -838,7 +839,8 @@ async fn prepared_restricted_actor_recovers_and_uses_sqlite_stores() {
 async fn the_journal_lives_in_the_harness_journal_stream_family() {
     let backend = Arc::new(MemoryStorage::new());
     let provider =
-        DriverSessionStores::new(backend.clone(), tinystoragedrivers_types::Scope::local()).unwrap();
+        DriverSessionStores::new(backend.clone(), tinystoragedrivers_types::Scope::local())
+            .unwrap();
     let stores = provider.for_agent("agent-1");
     stores
         .journal

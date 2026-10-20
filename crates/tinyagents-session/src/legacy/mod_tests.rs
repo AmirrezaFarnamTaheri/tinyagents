@@ -5,8 +5,8 @@ use super::*;
 use crate::run_ledger::{DriverRunLedger, RunEventAppend, RunLedgerStore, SessionHistoryStore};
 use crate::types::SessionSearchParams;
 use std::path::Path;
-use tinystoragedrivers_types::{MemoryStorage, Scope, StorageBackend};
 use tinystoragedrivers_sqlite::rusqlite::{Connection, params};
+use tinystoragedrivers_types::{MemoryStorage, Scope, StorageBackend};
 
 const T0: &str = "2026-01-01T00:00:00+00:00";
 const T1: &str = "2026-01-02T00:00:00+00:00";

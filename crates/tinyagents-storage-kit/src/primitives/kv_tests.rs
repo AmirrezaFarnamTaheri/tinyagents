@@ -16,16 +16,20 @@ async fn update_reads_and_replaces_a_namespaced_value_atomically() {
     let kv = Kv::ns(storage.documents(), "harness", "claude-code").unwrap();
 
     assert_eq!(
-        kv.update("session", |current: Option<u64>| Ok(Some(current.unwrap_or(0) + 1)))
-            .await
-            .unwrap(),
+        kv.update("session", |current: Option<u64>| Ok(Some(
+            current.unwrap_or(0) + 1
+        )))
+        .await
+        .unwrap(),
         Some(1)
     );
     assert_eq!(kv.get::<u64>("session").await.unwrap(), Some(1));
     assert_eq!(
-        kv.update("session", |current: Option<u64>| Ok(Some(current.unwrap() + 1)))
-            .await
-            .unwrap(),
+        kv.update("session", |current: Option<u64>| Ok(Some(
+            current.unwrap() + 1
+        )))
+        .await
+        .unwrap(),
         Some(2)
     );
 }

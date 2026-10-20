@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
-use tinystoragedrivers_types::StorageBackend;
 use tinystoragedrivers_sqlite::SqliteStorage;
+use tinystoragedrivers_types::StorageBackend;
 
 use super::AgentStores;
 use super::types::WorkspaceInner;

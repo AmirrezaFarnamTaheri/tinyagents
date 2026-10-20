@@ -82,7 +82,10 @@ fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
             _: Arc<dyn tinystoragedrivers_types::StorageBackend>,
         ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError>
         {
-            Err(tinystoragedrivers_types::StorageError::fenced("actor refused").with_source(Retired))
+            Err(
+                tinystoragedrivers_types::StorageError::fenced("actor refused")
+                    .with_source(Retired),
+            )
         }
     }
     let provider: Arc<dyn SessionStoreProvider> = Arc::new(RefusingProvider);
