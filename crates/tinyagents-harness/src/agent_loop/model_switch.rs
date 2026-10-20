@@ -14,6 +14,7 @@
 //! [`AgentEvent::ModelOverrideSkipped`] diagnostic.
 
 use super::*;
+use super::model_call::model_is_eligible;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// The run's sticky steered model name, when one is pending and the run is
