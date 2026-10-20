@@ -132,8 +132,7 @@ async fn memory_entry_tree_branches_forks_and_context() {
 }
 
 #[tokio::test]
-async fn sqlite_entry_tree_branches_forks_and_context() {
-    let ws = tempfile::tempdir().unwrap();
+async fn reconstructed_memory_entry_tree_branches_forks_and_context() {
     let backend = MemoryStorage::new();
     branches_forks_and_context(&backend).await;
 }

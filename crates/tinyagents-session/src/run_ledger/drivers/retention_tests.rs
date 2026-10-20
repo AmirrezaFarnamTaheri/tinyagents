@@ -106,8 +106,7 @@ async fn memory_telemetry_retention_preserves_cutoff_and_other_scopes() {
 }
 
 #[tokio::test]
-async fn sqlite_telemetry_retention_preserves_cutoff_and_other_scopes() {
-    let root = tempfile::tempdir().unwrap();
+async fn reconstructed_memory_telemetry_retention_preserves_cutoff_and_other_scopes() {
     let backend = MemoryStorage::new();
     prunes_only_old_telemetry(&backend).await;
 }

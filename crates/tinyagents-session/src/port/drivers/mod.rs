@@ -35,8 +35,6 @@ use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission}
 use tinyagents_storage_kit::Scope;
 use tinyagents_storage_kit::{Blocking, ScopedStorage};
 use tinystoragedrivers_api::DocumentStore;
-#[cfg(test)]
-use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_types::{CollectionSpec, StorageError};
 
 use super::{AgentStorageFactory, AgentStores, SessionStoreProvider};
