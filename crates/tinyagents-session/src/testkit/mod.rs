@@ -64,9 +64,38 @@ pub(crate) fn scoped_storage_factory(
 ) -> crate::port::AgentStorageFactory {
     let scopes = labels
         .into_iter()
-        .map(|(agent, label)| (agent, tinyagents_storage_kit::Scope::new(label).unwrap()))
+        .map(|(agent, label)| (agent, tinyagents_storage_kit::Scope::new(&label).unwrap()))
         .collect();
     mapped_storage_factory(backend, scopes)
+}
+
+/// Rebuilds a test scope with a decorated document port and all other real
+/// ports forwarded unchanged.
+#[cfg(test)]
+pub(crate) fn with_documents(
+    native: &tinyagents_storage_kit::ScopedStorage,
+    documents: std::sync::Arc<dyn tinystoragedrivers_api::DocumentStore>,
+) -> tinyagents_storage_kit::ScopedStorage {
+    with_documents_and_streams(native, documents, native.streams().clone())
+}
+
+/// Rebuilds a test scope with decorated document/stream ports while forwarding
+/// the remaining real ports unchanged.
+#[cfg(test)]
+pub(crate) fn with_documents_and_streams(
+    native: &tinyagents_storage_kit::ScopedStorage,
+    documents: std::sync::Arc<dyn tinystoragedrivers_api::DocumentStore>,
+    streams: std::sync::Arc<dyn tinystoragedrivers_api::StreamStore>,
+) -> tinyagents_storage_kit::ScopedStorage {
+    let storage = tinystoragedrivers_api::Storage::new(
+        documents,
+        streams,
+        native.kv().clone(),
+        native.blobs().clone(),
+        native.queues().clone(),
+        native.secrets().clone(),
+    );
+    tinyagents_storage_kit::ScopedStorage::new(storage, native.scope().clone())
 }
 
 /// Test-only replacement for a fixed backend/scope pair. The finite identity
