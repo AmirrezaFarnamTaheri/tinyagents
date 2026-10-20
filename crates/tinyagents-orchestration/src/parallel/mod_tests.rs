@@ -260,3 +260,14 @@ fn collected_counts_failures_and_reports_overlaps() {
         }]
     );
 }
+
+#[test]
+fn duplicate_files_from_one_branch_do_not_create_a_cross_branch_overlap() {
+    let warnings = overlap_warnings(&[R {
+        id: "same-worker",
+        ok: true,
+        files: vec!["x.rs".into(), "x.rs".into()],
+    }]);
+
+    assert!(warnings.is_empty(), "one branch cannot overlap with itself");
+}
