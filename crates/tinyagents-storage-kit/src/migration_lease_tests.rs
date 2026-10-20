@@ -3,15 +3,14 @@ use crate::{Scope, StorageBackend};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tinystoragedrivers_testkit::MemoryBackend;
 
-fn storage() -> ScopedStorage {
-    MemoryBackend::new()
-        .for_scope(&Scope::new("local").unwrap())
-        .unwrap()
+fn scoped(backend: &MemoryBackend) -> ScopedStorage {
+    backend.for_scope(&Scope::new("local").unwrap()).unwrap()
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn same_owner_open_sequences_are_serialized() {
-    let storage = storage();
+    let backend = MemoryBackend::new();
+    let storage = scoped(&backend);
     let active = Arc::new(AtomicUsize::new(0));
     let max_active = Arc::new(AtomicUsize::new(0));
     let release_first = Arc::new(tokio::sync::Notify::new());
@@ -29,7 +28,7 @@ async fn same_owner_open_sequences_are_serialized() {
         .await
     });
 
-    let storage = storage();
+    let storage = scoped(&backend);
     let second_started = Arc::new(tokio::sync::Notify::new());
     let second_signal = second_started.clone();
     let second_active = active.clone();
@@ -55,7 +54,7 @@ async fn same_owner_open_sequences_are_serialized() {
 
 #[tokio::test]
 async fn a_failed_open_releases_its_lease_for_retry() {
-    let storage = storage();
+    let storage = scoped(&MemoryBackend::new());
     let failed = with_migration_lease(&storage, "graph", |_| async {
         Err::<(), _>(StorageError::backend("injected migration failure"))
     })
@@ -68,7 +67,7 @@ async fn a_failed_open_releases_its_lease_for_retry() {
 
 #[tokio::test]
 async fn a_stale_lease_cannot_mark_owner_migration_complete() {
-    let storage = storage();
+    let storage = scoped(&MemoryBackend::new());
     let now = Arc::new(AtomicU64::new(1_000));
     let clock_now = now.clone();
     let leases = Leases::new(storage.documents())
