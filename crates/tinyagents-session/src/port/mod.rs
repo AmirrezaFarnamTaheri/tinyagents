@@ -1,4 +1,3 @@
-use tinystoragedrivers_api::StorageBackend;
 //! The session store port: where a host plugs in its own storage.
 //!
 //! Everything an agent persists while it runs — its transcripts, its

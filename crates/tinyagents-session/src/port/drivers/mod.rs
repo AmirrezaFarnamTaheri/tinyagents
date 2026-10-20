@@ -1,12 +1,8 @@
 //! A [`SessionStoreProvider`] over `tinystoragedrivers` ports.
 //!
-//! A host opens one storage backend (SQLite on a desktop, MongoDB in the
-//! cloud, memory in tests) and hands it, with the tenant [`Scope`] it serves,
-//! to [`DriverSessionStores`]. Each agent's stores then live in that backend
-//! under the agent's own principal scope (`tenant.agent(id)`), so one shared
-//! database serves every tenant and agent and the driver, not this crate,
-//! keeps them apart: a handle bound to one scope cannot name another scope's
-//! records.
+//! The host supplies an agent-to-`ScopedStorage` factory to
+//! [`DriverSessionStores`]. Identity resolution, authorization, and scope
+//! construction remain host responsibilities.
 //!
 //! # What goes where
 //!
@@ -25,15 +21,6 @@
 //! dedicated runtime thread, which works from any caller (inside a tokio
 //! runtime or not) and never needs `block_in_place`.
 //!
-//! # Scopes
-//!
-//! The provider is constructed with a **tenant** [`Scope`] (`local`, or
-//! `u:<id>`; see [`Scope::tenant`]) and derives each agent's scope itself with
-//! [`Scope::agent`]: `local/agent:<id>`. It never uses a raw agent id as a
-//! scope. An id that is too long or holds characters outside the scope
-//! grammar is hashed by [`Scope::agent`] (the segment only, so the agent
-//! stays under its tenant and its fence); an empty id has no scope.
-
 mod rebound;
 mod refused;
 mod schema;
