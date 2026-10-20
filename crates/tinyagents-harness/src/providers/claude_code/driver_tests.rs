@@ -290,29 +290,28 @@ fn seatbelt_available_honors_opt_out() {
     }
 }
 
-#[test]
-fn full_access_defaults_off_and_opts_in_via_env() {
+#[tokio::test]
+async fn full_access_defaults_off_and_opts_in_via_env() {
     let _env = super::super::ENV_TEST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     // Empty workspace (no persisted toggle) → file layer resolves to OFF.
-    let ws = std::env::temp_dir().join("oh_cc_fullaccess_env_test");
-    let _ = std::fs::remove_dir_all(&ws);
+    let (_storage, _sessions, settings_store) = storage_pair("driver-settings-env");
     let key = "OPENHUMAN_CLAUDE_CODE_PERMISSION_MODE";
     let prev = std::env::var(key).ok();
     super::super::test_remove_env(key);
     assert!(
-        !claude_code_full_access(&ws),
+        !claude_code_full_access(&settings_store).await,
         "default posture must be acceptEdits (full access OFF)"
     );
     super::super::test_set_env(key, "bypass");
     assert!(
-        claude_code_full_access(&ws),
+        claude_code_full_access(&settings_store).await,
         "explicit opt-in (`bypass`) enables full access"
     );
     super::super::test_set_env(key, "acceptEdits");
     assert!(
-        !claude_code_full_access(&ws),
+        !claude_code_full_access(&settings_store).await,
         "acceptEdits env override keeps the default (limited) posture"
     );
     match prev {
@@ -321,29 +320,27 @@ fn full_access_defaults_off_and_opts_in_via_env() {
     }
 }
 
-#[test]
-fn full_access_reads_persisted_toggle_when_env_unset() {
+#[tokio::test]
+async fn full_access_reads_persisted_toggle_when_env_unset() {
     use super::super::settings::{self, ClaudeCodeSettings};
     let _env = super::super::ENV_TEST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let ws = std::env::temp_dir().join("oh_cc_fullaccess_file_test");
-    let _ = std::fs::remove_dir_all(&ws);
-    std::fs::create_dir_all(&ws).unwrap();
+    let (_storage, _sessions, settings_store) = storage_pair("driver-settings-persisted");
     let key = "OPENHUMAN_CLAUDE_CODE_PERMISSION_MODE";
     let prev = std::env::var(key).ok();
     super::super::test_remove_env(key);
 
-    settings::save(&ws, &ClaudeCodeSettings { full_access: true }).unwrap();
+    settings::save(&settings_store, &ClaudeCodeSettings { full_access: true }).await.unwrap();
     assert!(
-        claude_code_full_access(&ws),
+        claude_code_full_access(&settings_store).await,
         "persisted toggle ON must enable full access when env is unset"
     );
 
     // Env override beats the persisted toggle.
     super::super::test_set_env(key, "acceptEdits");
     assert!(
-        !claude_code_full_access(&ws),
+        !claude_code_full_access(&settings_store).await,
         "env override OFF must beat a persisted ON toggle"
     );
 
@@ -351,7 +348,6 @@ fn full_access_reads_persisted_toggle_when_env_unset() {
         Some(v) => super::super::test_set_env(key, v),
         None => super::super::test_remove_env(key),
     }
-    let _ = std::fs::remove_dir_all(&ws);
 }
 
 /// `String::truncate` takes a byte index and panics when it is not a character
@@ -466,6 +462,7 @@ async fn run_fake_claude(script_body: &str, api_key: Option<&str>) -> anyhow::Re
     std::fs::write(&bin, format!("#!/bin/sh\ncat >/dev/null\n{script_body}\n")).expect("script");
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     let messages = [ChatMessage::user("hello")];
+    let (_storage, session_store, settings_store) = storage_pair("driver-fake-claude");
     run_turn(TurnContext {
         bin_path: bin,
         workspace_dir: dir.path().join("ws"),
@@ -474,7 +471,8 @@ async fn run_fake_claude(script_body: &str, api_key: Option<&str>) -> anyhow::Re
         model: "sonnet".into(),
         append_system_prompt: None,
         messages: &messages,
-        session_store: Arc::new(SessionStore::open(&dir.path().join("ws"))),
+        session_store,
+        settings_store,
         stream: None,
         anthropic_api_key: api_key.map(str::to_string),
         persist_session: false,
@@ -628,8 +626,8 @@ mod structured_exit {
     async fn nonzero_exit_with_structured_missing_session_error_retries() {
         let dir = tempfile::tempdir().unwrap();
         let saved = "11111111-1111-4111-8111-111111111111";
-        let store = Arc::new(SessionStore::open(dir.path()));
-        store.set("t1", saved).unwrap();
+        let (_storage, store, settings_store) = storage_pair("driver-structured-exit");
+        store.set("t1", saved).await.unwrap();
         let bin = dir.path().join("claude");
         let script = format!(
             "#!/bin/sh\ncat >/dev/null\ncase \"$*\" in *--resume*) echo '{{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"errors\":[\"No conversation found with session ID: {saved}\"]}}'; exit 1;; esac\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\"}}'\n"
@@ -647,13 +645,14 @@ mod structured_exit {
             append_system_prompt: None,
             messages: &messages,
             session_store: store.clone(),
+            settings_store,
             stream: None,
             anthropic_api_key: None,
             mcp_provider: None,
         })
         .await
         .expect("retry succeeds");
-        assert_ne!(store.get("t1").as_deref(), Some(saved));
+        assert_ne!(store.get("t1").await.unwrap().as_deref(), Some(saved));
     }
 }
 
@@ -703,7 +702,7 @@ async fn shared_session_receives_a_pending_user_turn_once() {
     )
     .expect("script");
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    let store = Arc::new(SessionStore::open(&dir.path().join("ws")));
+    let (_storage, store, settings_store) = storage_pair("driver-shared-session");
     let messages = [ChatMessage::user("UNIQUE-PENDING-TURN")];
 
     for _ in 0..3 {
@@ -717,6 +716,7 @@ async fn shared_session_receives_a_pending_user_turn_once() {
             append_system_prompt: None,
             messages: &messages,
             session_store: store.clone(),
+            settings_store: settings_store.clone(),
             stream: None,
             anthropic_api_key: None,
             mcp_provider: None,
