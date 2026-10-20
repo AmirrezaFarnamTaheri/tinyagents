@@ -18,6 +18,7 @@ use crate::runtime::AgentHarness;
 use async_trait::async_trait;
 use futures::StreamExt;
 use std::collections::VecDeque;
+use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
@@ -274,20 +275,31 @@ impl ChatModel<()> for TestModel {
     }
 }
 
-struct LazyHttpModel {
-    endpoint: std::net::SocketAddr,
+struct ArmLateRefusalAfterStreamConstruction {
+    inner: Arc<tinyinference_llm::providers::openai::OpenAiModel>,
     permit_state: Arc<PermitState>,
-    counts: Arc<Counts>,
 }
 
 #[async_trait]
-impl ChatModel<()> for LazyHttpModel {
+impl ChatModel<()> for ArmLateRefusalAfterStreamConstruction {
+    fn profile(&self) -> Option<&ModelProfile> {
+        self.inner.profile()
+    }
+
+    fn supports_input(&self, modality: InputModality, mime: &str, source: InputSource) -> bool {
+        self.inner.supports_input(modality, mime, source)
+    }
+
+    fn cache_identity(&self) -> Option<String> {
+        self.inner.cache_identity()
+    }
+
     async fn invoke(
         &self,
-        _: &(),
-        _: ModelRequest,
+        state: &(),
+        request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
-        unreachable!("lazy HTTP fixture is used through its streaming path")
+        self.inner.invoke(state, request).await
     }
 
     async fn stream(
@@ -301,29 +313,17 @@ impl ChatModel<()> for LazyHttpModel {
         self.permit_state
             .refuse_recheck
             .store(true, Ordering::SeqCst);
-        let endpoint = self.endpoint;
-        let counts = self.counts.clone();
-        let mut connect = Box::pin(tokio::net::TcpStream::connect(endpoint));
-        let mut finished = false;
-        let stream = futures::stream::poll_fn(move |cx| {
-            if finished {
-                return Poll::Ready(None);
-            }
-            match connect.as_mut().poll(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(Ok(connection)) => {
-                    drop(connection);
-                    finished = true;
-                    counts.provider.fetch_add(1, Ordering::SeqCst);
-                    Poll::Ready(Some(ModelStreamItem::Started))
-                }
-                Poll::Ready(Err(error)) => {
-                    finished = true;
-                    Poll::Ready(Some(ModelStreamItem::Failed(error.to_string())))
-                }
-            }
-        });
-        Ok(ModelStream::new(Box::pin(stream)))
+        let stream = self.inner.stream(state, request).await?;
+        // Arm only after the actual OpenAI adapter has returned its lazy
+        // stream. This makes the first-poll check, rather than stream setup,
+        // the only point where the test can observe the refusal.
+        self.permit_state
+            .stream_constructed
+            .store(true, Ordering::SeqCst);
+        self.permit_state
+            .refuse_recheck
+            .store(true, Ordering::SeqCst);
+        Ok(stream)
     }
 }
 
