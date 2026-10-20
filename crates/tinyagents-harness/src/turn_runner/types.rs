@@ -162,6 +162,20 @@ pub enum TerminalEvent {
     },
 }
 
+/// Neutral failure details passed from a host classifier to its event sink.
+/// Hosts may attach product-owned localized copy without putting channel or UI
+/// policy in the shared runner. The optional copy fields default when older
+/// serialized records omit them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailureClassification {
+    pub class: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_params: Option<serde_json::Value>,
+}
+
 /// Activity updates sent by the host so the idle guard distinguishes silence
 /// from a model or tool call that is still running.
 #[derive(Debug, Clone)]
@@ -228,12 +242,33 @@ where
 {
     async fn progress(&self, request: &TurnRequest<P>, event: AgentProgress);
     async fn terminal(&self, request: &TurnRequest<P>, event: TerminalEvent);
+    /// Receive structured classifier output with a failure. Existing sinks
+    /// remain source-compatible and continue receiving the original event.
+    async fn classified_failure(
+        &self,
+        request: &TurnRequest<P>,
+        event: TerminalEvent,
+        _classification: FailureClassification,
+    ) {
+        self.terminal(request, event).await;
+    }
     async fn suggestions(&self, _request: &TurnRequest<P>, _suggestions: Vec<String>) {}
     async fn collected(&self, _request: &TurnRequest<P>, _items: Vec<TurnRequest<P>>) {}
 }
 
 pub trait FailureClassifier: Send + Sync {
     fn classify(&self, error: &str) -> (String, String);
+
+    /// Classify an error while optionally retaining neutral copy metadata.
+    /// The default keeps existing implementations compatible.
+    fn classify_failure(&self, error: &str) -> FailureClassification {
+        let (class, message) = self.classify(error);
+        FailureClassification {
+            class,
+            message,
+            ..FailureClassification::default()
+        }
+    }
 }
 
 #[async_trait]

@@ -127,6 +127,7 @@ impl ReplyStore for Replies {
 struct Events {
     terminal: Mutex<Vec<TerminalEvent>>,
     collected: Mutex<Vec<Vec<String>>>,
+    classified_failures: Mutex<Vec<FailureClassification>>,
 }
 
 #[async_trait::async_trait]
@@ -134,6 +135,18 @@ impl EventSink for Events {
     async fn progress(&self, _request: &TurnRequest, _event: crate::progress::AgentProgress) {}
     async fn terminal(&self, _request: &TurnRequest, event: TerminalEvent) {
         self.terminal.lock().unwrap().push(event);
+    }
+    async fn classified_failure(
+        &self,
+        request: &TurnRequest,
+        event: TerminalEvent,
+        classification: FailureClassification,
+    ) {
+        self.classified_failures
+            .lock()
+            .unwrap()
+            .push(classification);
+        self.terminal(request, event).await;
     }
     async fn collected(&self, _request: &TurnRequest, items: Vec<TurnRequest>) {
         self.collected
@@ -2300,4 +2313,67 @@ async fn failed_terminal_event_carries_the_raw_error() {
         [TerminalEvent::Failed { error, message, class, .. }]
             if error == "host run failed" && message == "host run failed" && class == "internal"
     ));
+}
+
+struct StructuredFailures;
+
+impl FailureClassifier for StructuredFailures {
+    fn classify(&self, _error: &str) -> (String, String) {
+        ("rate_limited".into(), "safe fallback".into())
+    }
+
+    fn classify_failure(&self, _error: &str) -> FailureClassification {
+        FailureClassification {
+            class: "rate_limited".into(),
+            message: "safe fallback".into(),
+            copy_key: Some("chat_error.rate_limited".into()),
+            copy_params: Some(serde_json::json!({"retrySeconds": 12})),
+        }
+    }
+}
+
+#[tokio::test]
+async fn runner_preserves_structured_failure_copy_for_the_host_sink() {
+    let events = Arc::new(Events::default());
+    let runner = TurnRunner::new(
+        Arc::new(Host {
+            fail_run: true,
+            ..Host::default()
+        }),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        events.clone(),
+        Arc::new(StructuredFailures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    );
+
+    assert!(matches!(
+        runner
+            .run(request(QueueDisposition::Interrupt, false))
+            .await,
+        Err(TurnRunnerError::Failed(_))
+    ));
+
+    assert_eq!(
+        events.classified_failures.lock().unwrap().as_slice(),
+        &[FailureClassification {
+            class: "rate_limited".into(),
+            message: "safe fallback".into(),
+            copy_key: Some("chat_error.rate_limited".into()),
+            copy_params: Some(serde_json::json!({"retrySeconds": 12})),
+        }]
+    );
+}
+
+#[test]
+fn failure_copy_fields_default_when_reading_legacy_serialized_classification() {
+    let classification: FailureClassification = serde_json::from_value(serde_json::json!({
+        "class": "internal",
+        "message": "safe fallback"
+    }))
+    .unwrap();
+
+    assert_eq!(classification.copy_key, None);
+    assert_eq!(classification.copy_params, None);
 }
