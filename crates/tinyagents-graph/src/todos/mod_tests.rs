@@ -28,7 +28,13 @@ fn status_strings_match_serialized() {
 #[cfg(feature = "json-schema")]
 #[test]
 fn public_todo_schema_matches_the_serialized_item_shape() {
-    let schema = serde_json::to_value(schemars::schema_for!(TodoItem)).unwrap();
+    let schema = serde_json::to_value(
+        schemars::generate::SchemaSettings::draft2020_12()
+            .for_serialize()
+            .into_generator()
+            .into_root_schema_for::<TodoItem>(),
+    )
+    .unwrap();
     let properties = &schema["properties"];
     assert!(properties.get("content").is_some());
     assert!(properties.get("status").is_some());

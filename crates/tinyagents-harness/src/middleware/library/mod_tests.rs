@@ -1947,7 +1947,13 @@ async fn run_mode_handle_set_takes_effect_immediately_on_shared_clones() {
 #[cfg(feature = "json-schema")]
 #[test]
 fn run_mode_schema_and_serde_use_the_wire_discriminants() {
-    let schema = serde_json::to_value(schemars::schema_for!(RunMode)).unwrap();
+    let schema = serde_json::to_value(
+        schemars::generate::SchemaSettings::draft2020_12()
+            .for_serialize()
+            .into_generator()
+            .into_root_schema_for::<RunMode>(),
+    )
+    .unwrap();
     assert_eq!(schema["enum"], json!(["build", "plan"]));
     assert_eq!(
         serde_json::to_value(RunMode::Build).unwrap(),

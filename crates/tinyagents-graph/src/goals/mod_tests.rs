@@ -29,7 +29,13 @@ fn status_strings_match_serialized() {
 #[cfg(feature = "json-schema")]
 #[test]
 fn public_goal_schema_uses_the_serialized_camel_case_record() {
-    let schema = serde_json::to_value(schemars::schema_for!(ThreadGoal)).unwrap();
+    let schema = serde_json::to_value(
+        schemars::generate::SchemaSettings::draft2020_12()
+            .for_serialize()
+            .into_generator()
+            .into_root_schema_for::<ThreadGoal>(),
+    )
+    .unwrap();
     let properties = &schema["properties"];
     for field in [
         "threadId",
