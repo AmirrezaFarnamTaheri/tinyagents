@@ -455,7 +455,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 })
             });
             self.apply_steered_model_switch(
-                ctx, &mut request, &model_before_switch, switch_candidate,
+                ctx, &mut request, &model_before_switch, None,
             ).await?;
 
             // Known tool requirements must shape the hosted profile seen by
@@ -554,7 +554,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 })
             });
             self.apply_steered_model_switch(
-                ctx, &mut request, &model_before_switch, switch_candidate,
+                ctx, &mut request, &model_before_switch, None,
             ).await?;
 
             // Safe checkpoint: a control requested from `before_model_control`
