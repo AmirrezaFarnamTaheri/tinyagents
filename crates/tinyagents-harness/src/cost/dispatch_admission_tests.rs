@@ -186,6 +186,7 @@ impl PhysicalDispatchTerminal for TestTerminal {
 enum ModelBehavior {
     Succeed,
     Fail,
+    CompletedStream,
     EmptyStream,
     PendingStream,
     FailedStream,
@@ -250,6 +251,9 @@ impl ChatModel<()> for TestModel {
         let stream: std::pin::Pin<
             Box<dyn futures::Stream<Item = tinyinference_llm::model::ModelStreamItem> + Send>,
         > = match self.behavior {
+            ModelBehavior::CompletedStream => Box::pin(futures::stream::iter([
+                ModelStreamItem::Completed(ModelResponse::assistant("ok")),
+            ])),
             ModelBehavior::EmptyStream => Box::pin(futures::stream::empty()),
             ModelBehavior::PendingStream => Box::pin(futures::stream::pending()),
             ModelBehavior::FailedStream => {
@@ -1007,6 +1011,72 @@ async fn stream_failure_releases_admission() {
     assert!(stream.next().await.is_none());
     assert_eq!(admission.permits.active.load(Ordering::SeqCst), 0);
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn monetarily_budgeted_stream_releases_admission_at_terminal_item() {
+    for behavior in [
+        ModelBehavior::CompletedStream,
+        ModelBehavior::FailedStream,
+        ModelBehavior::EmptyStream,
+    ] {
+        let counts = Arc::new(Counts::default());
+        let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
+        let budget = ModelBudget::new(Budget::new(SpendLimits::default()), CallBudget {
+            input_tokens: 100,
+            output_tokens: 10,
+            cost_micros: 100,
+        });
+        let controlled = ControlledChatModel::new(
+            model(&counts, behavior),
+            options(Some(admission.clone()), Some(budget), &counts),
+        );
+        let mut stream = controlled
+            .stream_controlled(&(), ModelRequest::default())
+            .await
+            .expect("budgeted stream is admitted");
+
+        assert_eq!(admission.permits.active.load(Ordering::SeqCst), 1);
+        let terminal = stream.next().await;
+        match behavior {
+            ModelBehavior::CompletedStream => {
+                assert!(matches!(terminal, Some(ModelStreamItem::Completed(_))));
+            }
+            ModelBehavior::FailedStream => {
+                assert!(matches!(terminal, Some(ModelStreamItem::Failed(_))));
+            }
+            ModelBehavior::EmptyStream => assert!(terminal.is_none()),
+            _ => unreachable!("only terminal stream behaviors are tested"),
+        }
+        assert_eq!(
+            admission.permits.active.load(Ordering::SeqCst),
+            0,
+            "the host permit is released at terminal observation before another poll or drop"
+        );
+    }
+}
+
+#[tokio::test]
+async fn monetarily_budgeted_pending_stream_keeps_admission_until_drop() {
+    let counts = Arc::new(Counts::default());
+    let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
+    let budget = ModelBudget::new(Budget::new(SpendLimits::default()), CallBudget {
+        input_tokens: 100,
+        output_tokens: 10,
+        cost_micros: 100,
+    });
+    let controlled = ControlledChatModel::new(
+        model(&counts, ModelBehavior::PendingStream),
+        options(Some(admission.clone()), Some(budget), &counts),
+    );
+    let stream = controlled
+        .stream_controlled(&(), ModelRequest::default())
+        .await
+        .expect("budgeted stream is admitted");
+
+    assert_eq!(admission.permits.active.load(Ordering::SeqCst), 1);
+    drop(stream);
+    assert_eq!(admission.permits.active.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

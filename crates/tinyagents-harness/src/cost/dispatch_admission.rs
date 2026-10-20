@@ -180,4 +180,15 @@ pub trait PhysicalDispatchPermit: Send + Sync {
     /// stream EOF/drop. Cloning the `Arc` does not release the slot until the
     /// final clone is dropped.
     fn mark_dispatched(&self) -> Result<(), DispatchRefusal>;
+
+    /// Accounts a concrete physical provider send after `mark_dispatched`.
+    ///
+    /// This is called once for each native HTTP attempt, including provider
+    /// warm-up and retry sends. The first send is covered by the committed
+    /// invocation slot; hosts that enforce a physical-call ceiling should
+    /// charge each later send here. The default preserves existing permit
+    /// implementations that only limit logical invocations.
+    fn mark_physical_attempt(&self) -> Result<(), DispatchRefusal> {
+        Ok(())
+    }
 }
