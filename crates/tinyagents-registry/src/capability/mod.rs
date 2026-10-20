@@ -99,7 +99,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
 
     /// Replaces the [`ComponentMetadata`] recorded for `(kind, name)`.
     ///
-    /// Unlike [`record_meta`](Self::record_meta) (which only fills in a
+    /// Unlike `record_meta` (which only fills in a
     /// default the first time a name is registered), this overwrites whatever
     /// metadata is already there — so `with_description`/`with_tag` builders
     /// (`crate::component::ComponentMetadata`) actually reach a registered
@@ -203,7 +203,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     }
 
     /// Registers a model under `name` with explicit [`ComponentMetadata`]
-    /// instead of the bare default [`record_meta`](Self::record_meta) would
+    /// instead of the bare default `record_meta` would
     /// attach, so a description/tags are attached atomically with
     /// registration rather than needing a follow-up
     /// [`set_metadata`](Self::set_metadata) call.
