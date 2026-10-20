@@ -390,6 +390,17 @@ async fn chat_model_trait_consumer_observes_admission_refusal() {
     assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
 }
 
+#[test]
+fn controlled_chat_model_preserves_inner_attempt_tracking_capability() {
+    let counts = Arc::new(Counts::default());
+    let model: Arc<dyn ChatModel<()>> = Arc::new(
+        tinyinference_llm::providers::openai::OpenAiModel::new("fixture"),
+    );
+    let controlled = ControlledChatModel::new(model, options(None, None, &counts));
+
+    assert!(ChatModel::tracks_physical_attempts(&controlled));
+}
+
 #[tokio::test]
 async fn agent_turn_preserves_typed_admission_refusal_from_chat_model() {
     let counts = Arc::new(Counts::default());
