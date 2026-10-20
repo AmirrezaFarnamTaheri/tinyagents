@@ -71,7 +71,10 @@ pub async fn import_legacy_leases(storage: &ScopedStorage) -> Result<u64> {
         tracing::debug!("[graph-storage] lease import already done");
         return Ok(0);
     }
-    primitives::ensure(storage).await?;
+    storage
+        .documents()
+        .ensure_collection(&primitives::leases_collection_spec())
+        .await?;
     let leases = Leases::new(storage.documents());
     let now = now_ms() as i64;
     let mut carried = 0_u64;
@@ -130,7 +133,10 @@ pub async fn import_legacy_task_cache(storage: &ScopedStorage) -> Result<u64> {
         tracing::debug!("[graph-storage] task cache import already done");
         return Ok(0);
     }
-    primitives::ensure(storage).await?;
+    storage
+        .documents()
+        .ensure_collection(&primitives::kv_collection_spec())
+        .await?;
     let now = now_ms() as i64;
     let mut written = 0_u64;
     for row in legacy_rows(storage, LEGACY_COLLECTION).await? {
