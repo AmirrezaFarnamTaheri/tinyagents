@@ -41,12 +41,10 @@ struct PermitState {
 struct TestPermit {
     state: Arc<PermitState>,
     committed: std::sync::atomic::AtomicBool,
-    checks: AtomicUsize,
 }
 
 impl PhysicalDispatchPermit for TestPermit {
     fn mark_dispatched(&self) -> Result<(), DispatchRefusal> {
-        self.checks.fetch_add(1, Ordering::SeqCst);
         if self.state.refuse_commit.load(Ordering::SeqCst)
             || (self.committed.load(Ordering::SeqCst)
                 && self.state.refuse_recheck.load(Ordering::SeqCst))
@@ -156,7 +154,6 @@ impl PhysicalDispatchAdmission for ScriptedAdmission {
         Ok(Arc::new(TestPermit {
             state: self.permits.clone(),
             committed: std::sync::atomic::AtomicBool::new(false),
-            checks: AtomicUsize::new(0),
         }))
     }
 }
@@ -274,6 +271,49 @@ impl ChatModel<()> for TestModel {
         _: &DeferredHandle,
     ) -> tinyinference_llm::Result<DeferredStatus> {
         Ok(DeferredStatus::Pending)
+    }
+}
+
+struct ArmLateRefusalAfterStreamConstruction {
+    inner: Arc<tinyinference_llm::providers::openai::OpenAiModel>,
+    permit_state: Arc<PermitState>,
+}
+
+#[async_trait]
+impl ChatModel<()> for ArmLateRefusalAfterStreamConstruction {
+    fn profile(&self) -> Option<&ModelProfile> {
+        self.inner.profile()
+    }
+
+    fn supports_input(&self, modality: InputModality, mime: &str, source: InputSource) -> bool {
+        self.inner.supports_input(modality, mime, source)
+    }
+
+    fn cache_identity(&self) -> Option<String> {
+        self.inner.cache_identity()
+    }
+
+    async fn invoke(
+        &self,
+        state: &(),
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        self.inner.invoke(state, request).await
+    }
+
+    async fn stream(
+        &self,
+        state: &(),
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelStream> {
+        let stream = self.inner.stream(state, request).await?;
+        self.permit_state
+            .stream_constructed
+            .store(true, Ordering::SeqCst);
+        self.permit_state
+            .refuse_recheck
+            .store(true, Ordering::SeqCst);
+        Ok(stream)
     }
 }
 
@@ -520,11 +560,10 @@ async fn assert_lazy_openai_stream_rechecks_committed_admission(with_money_budge
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     let counts = Arc::new(Counts::default());
     let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
-    admission
-        .permits
-        .refuse_recheck
-        .store(true, Ordering::SeqCst);
-    let provider = Arc::new(OpenAiModel::new("test-key").with_base_url(endpoint));
+    let provider = Arc::new(ArmLateRefusalAfterStreamConstruction {
+        inner: Arc::new(OpenAiModel::new("test-key").with_base_url(endpoint)),
+        permit_state: admission.permits.clone(),
+    });
     let money_budget = with_money_budget.then(|| {
         ModelBudget::new(
             Budget::new(SpendLimits::default()),
@@ -570,6 +609,7 @@ async fn assert_lazy_openai_stream_rechecks_committed_admission(with_money_budge
             panic!("turn hung instead of returning the typed late admission refusal");
         }
     }
+    assert!(admission.permits.stream_constructed.load(Ordering::SeqCst));
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
     assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
 }
