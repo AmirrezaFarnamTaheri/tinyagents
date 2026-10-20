@@ -307,12 +307,6 @@ impl ChatModel<()> for ArmLateRefusalAfterStreamConstruction {
         state: &(),
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelStream> {
-        self.permit_state
-            .stream_constructed
-            .store(true, Ordering::SeqCst);
-        self.permit_state
-            .refuse_recheck
-            .store(true, Ordering::SeqCst);
         let stream = self.inner.stream(state, request).await?;
         // Arm only after the actual OpenAI adapter has returned its lazy
         // stream. This makes the first-poll check, rather than stream setup,
@@ -562,16 +556,17 @@ async fn lazy_stream_rechecks_budgeted_admission_before_local_http_dispatch() {
 }
 
 async fn assert_lazy_stream_rechecks_committed_admission(with_money_budget: bool) {
+    use tinyinference_llm::providers::openai::OpenAiModel;
+
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind local fake provider");
-    let endpoint = listener.local_addr().unwrap();
+    let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     let counts = Arc::new(Counts::default());
     let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
-    let provider = Arc::new(LazyHttpModel {
-        endpoint,
+    let provider = Arc::new(ArmLateRefusalAfterStreamConstruction {
+        inner: Arc::new(OpenAiModel::new("test-key").with_base_url(endpoint)),
         permit_state: admission.permits.clone(),
-        counts: counts.clone(),
     });
     let money_budget = with_money_budget.then(|| {
         ModelBudget::new(
