@@ -483,9 +483,9 @@ impl Leases {
     /// the old record and writes `epoch + 1`, so a stale holder's fence at the
     /// old epoch stays dead. The delete is conditional on holder and epoch, so
     /// it can only remove the very tenure the caller knows: any takeover bumps
-    /// the epoch, and a record that moved on is not touched. A [`Fence`] on a
-    /// removed record refuses every write (a missing fence document is a
-    /// failed check), so the tenure that was dropped is fenced out for good.
+    /// the epoch, and a record that moved on is not touched. Removing the
+    /// record also removes its epoch history, so compaction is only safe after
+    /// no resource can still rely on that tenure for exclusion.
     ///
     /// What the delete gives up is the epoch history: a later acquire of the
     /// same key would restart at epoch 1. The caller therefore must only

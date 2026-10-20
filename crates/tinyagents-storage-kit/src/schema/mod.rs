@@ -55,7 +55,8 @@
 //!
 //! Out of scope here: legacy-file importers (steps with no source) are run by
 //! the owner, which records completion through a [`MigrationLease`](crate::MigrationLease).
-//! A stream's [`SealPolicy`](crate::SealPolicy) is applied by [`Registry::maintain`].
+//! A stream's seal policy is declarative; its owner or host is responsible for
+//! enforcing it.
 
 mod compose;
 mod declaration;

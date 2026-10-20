@@ -1,4 +1,4 @@
-//! [`Registry::migrate`]: the resumable step runner.
+//! The resumable schema step runner.
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,7 +16,7 @@ use super::prepared::{PreparedBody as StepBody, PreparedStep, Transform};
 use super::types::{Expiry, Owner, SourceRecord, StepFn, TargetRecord};
 use super::{runner_blobs, runner_streams};
 
-/// How [`Registry::migrate`] runs.
+/// Options for running the schema migration steps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MigrateOptions {
     /// Records per batch: the page size read from the source, and the unit of
@@ -59,7 +59,7 @@ pub struct StepReport {
     pub written: u64,
 }
 
-/// What [`Registry::migrate`] did.
+/// Report of schema migration steps run in one call.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MigrationReport {
     /// Steps that ran to completion in this call, in order.

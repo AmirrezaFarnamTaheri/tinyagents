@@ -64,8 +64,7 @@ impl Blocking {
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::Backend`] when the runtime or
-    /// thread cannot be created.
+    /// A backend error when the runtime or thread cannot be created.
     pub fn new() -> Result<Self> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -106,8 +105,7 @@ impl Blocking {
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::Backend`] when called from the
-    /// bridge thread itself (which would deadlock), when the bridge has
+    /// A backend error when called from the bridge thread itself (which would deadlock), when the bridge has
     /// stopped, or when the future panicked.
     pub fn run<F, T>(&self, future: F) -> Result<T>
     where

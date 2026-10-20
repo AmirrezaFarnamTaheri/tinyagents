@@ -208,7 +208,7 @@ macro_rules! registry_api {
             ///
             /// For each step the runner pages the source (the item itself, filtered to
             /// records below version `to`, or the legacy collection named by
-            /// [`Step::source`]) by id with a keyset cursor, `batch_size` records at a
+            /// `Step::source`) by id with a keyset cursor, `batch_size` records at a
             /// time. It writes every output with `Precondition::Absent` and the
             /// schema version `to`. The batch's writes and its progress record are
             /// two steps, so a crash between them leaves outputs the cursor does not
@@ -226,7 +226,7 @@ macro_rules! registry_api {
             /// last finished batch; calling `migrate` again resumes there and yields
             /// the same final state as an uninterrupted run, because steps are pure.
             ///
-            /// **Stream steps** ([`Step::stream`]) list the streams under the step's
+            /// **Stream steps** (`Step::stream`) list the streams under the step's
             /// source prefix and move them one at a time: read the source whole (paged
             /// by `batch_size`), map it, append the result to its new name in batches,
             /// seal the target if the source was sealed (as the stream backend
@@ -236,9 +236,9 @@ macro_rules! registry_api {
             /// the first append and after every batch. On resume the target's length
             /// says where to continue, so no entry is appended twice; a target that
             /// was not started by this step is refused with `Conflict`. Migrated
-            /// streams start at offset 0 (see [`Step::stream`]).
+            /// streams start at offset 0 (see `Step::stream`).
             ///
-            /// **Blob steps** ([`Step::blobs`]) move one blob at a time: put the
+            /// **Blob steps** (`Step::blobs`) move one blob at a time: put the
             /// target, then delete the source. An existing target is accepted only when
             /// its bytes and content type equal the step's output (an interrupted
             /// earlier write); otherwise the step fails with `Conflict` and keeps the

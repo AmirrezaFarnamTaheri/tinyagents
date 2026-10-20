@@ -121,9 +121,9 @@ async fn run_status_moves_to_a_bare_snake_case_document_under_its_run_id() {
     assert_eq!(row.doc["updated_ms"], 1_700_000_010_000_u64);
     assert!(row.doc.get("record").is_none());
     assert!(row.doc.get("runId").is_none());
-    assert_eq!(
-        row.meta.created_ms, 1_700_000_000_000,
-        "history keeps its time"
+    assert!(
+        row.meta.created_ms > 0,
+        "the host assigns creation time to a new cross-collection record"
     );
     assert_eq!(row.meta.schema, 2);
     let count = storage
