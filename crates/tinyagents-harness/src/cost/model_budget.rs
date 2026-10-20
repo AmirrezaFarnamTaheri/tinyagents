@@ -271,6 +271,10 @@ impl ChatModel<()> for ControlledChatModel {
         self.model.cache_identity()
     }
 
+    fn tracks_physical_attempts(&self) -> bool {
+        self.model.tracks_physical_attempts()
+    }
+
     async fn invoke(
         &self,
         state: &(),

@@ -56,6 +56,10 @@ impl<State: Send + Sync> ChatModel<State> for ObservedChatModel<State> {
         self.inner.cache_identity()
     }
 
+    fn tracks_physical_attempts(&self) -> bool {
+        self.inner.tracks_physical_attempts()
+    }
+
     async fn invoke(
         &self,
         state: &State,
