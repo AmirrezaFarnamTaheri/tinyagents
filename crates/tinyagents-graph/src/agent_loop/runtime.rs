@@ -325,7 +325,7 @@ where
         .take()
         .ok_or_else(|| TinyAgentsError::Validation("model node ran with no pending plan".into()))?;
 
-    let binding = harness.resolve_model_for_request(&request).await?;
+    let binding = harness.resolve_model_for_request(ctx, &request).await?;
     let call_id = CallId::new(format!("{}-model-{}", ctx.run_id(), run.model_calls + 1));
 
     let mut request = request;
@@ -351,7 +351,7 @@ where
             app_state,
             &mut request,
             harness,
-            move |harness, _ctx, request| {
+            move |harness, run_ctx, request| {
                 let profile_cache = profile_cache.clone();
                 Box::pin(async move {
                     let key = (
@@ -367,7 +367,7 @@ where
                     {
                         return Ok(binding.1.profile().cloned());
                     }
-                    let binding = harness.resolve_model_for_request(request).await?;
+                    let binding = harness.resolve_model_for_request(run_ctx, request).await?;
                     let profile = binding.1.profile().cloned();
                     *profile_cache.lock().unwrap() = Some((key.0, key.1, key.2, binding));
                     Ok(profile)
@@ -397,7 +397,7 @@ where
         ;
     let binding = match binding {
         Some(binding) => binding,
-        None => harness.resolve_model_for_request(&request).await?,
+        None => harness.resolve_model_for_request(ctx, &request).await?,
     };
     ctx.model_profile = binding.1.profile().cloned();
     tinyagents_harness::middleware::library::rehome_ephemeral_system_instructions(

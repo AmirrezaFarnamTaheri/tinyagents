@@ -22,7 +22,7 @@ use crate::no_progress::StreamTextStallDetector;
 use crate::retry::{FailoverDecision, FailoverReason, FailoverState, decide};
 use tinyinference_llm::cache::CachePolicy;
 
-pub(super) fn local_resolve_request(request: &ModelRequest) -> crate::host::ModelResolveRequest {
+pub(crate) fn local_resolve_request(request: &ModelRequest) -> crate::host::ModelResolveRequest {
     let mut resolve = crate::host::ModelResolveRequest::new("local");
     if let Some(pin) = request.model.as_deref() {
         resolve = resolve.with_model_pin(pin);
@@ -168,7 +168,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }))
     }
 
-    pub(super) async fn resolve_local_model(
+    pub(crate) async fn resolve_local_model(
         &self,
         ctx: &RunContext<Ctx>,
         request: &ModelRequest,
@@ -187,7 +187,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 if let Some(required) = request.required_capabilities.clone() {
                     default_request = default_request.with_required_capabilities(required);
                 }
-                model = resolver.resolve(&default_request).await?;
+                let (budget, bound) = self.model_call_budget(ctx);
+                model = ctx.bounded(budget, resolver.resolve(&default_request), || {
+                    format!("local default model resolution for run `{}` exceeded its {bound}", ctx.run_id())
+                }).await?;
                 selected_name = resolver.selected_name(&default_request);
             }
             (model, selected_name)
@@ -1063,7 +1066,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let resolver = host.as_ref().map(|binding| &binding.host.models)
                 .or(self.model_resolver.as_ref());
             let next_model = if let Some(resolver) = resolver {
-                resolver.resolve_named(&name).await?
+                let (budget, bound) = self.model_call_budget(ctx);
+                ctx.bounded(budget, resolver.resolve_named(&name), || {
+                    format!("fallback model resolution for run `{}` exceeded its {bound}", ctx.run_id())
+                }).await?
             } else {
                 self.fixed_model.clone().filter(|model| model.profile()
                     .and_then(|profile| profile.model.as_deref()) == Some(name.as_str()))
@@ -1904,7 +1910,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
             return Ok(captured());
         }
         let binding = if let Some(resolver) = self.harness.model_resolver.as_ref() {
-            resolver.resolve_named(requested).await.ok().flatten()
+            let (budget, bound) = self.harness.model_call_budget(ctx);
+            ctx.bounded(budget, resolver.resolve_named(requested), || {
+                format!("model override resolution for run `{}` exceeded its {bound}", ctx.run_id())
+            }).await.ok().flatten()
                 .filter(|model| model_is_eligible(model.as_ref(), request.required_capabilities.as_ref()))
                 .map(|model| ModelBinding {
                     resolved: ResolvedModel { name: requested.to_owned(), requested: Some(requested.to_owned()), source: ModelResolutionSource::RequestOverride },
