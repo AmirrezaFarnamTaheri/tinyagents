@@ -1,5 +1,6 @@
 //! Aggregating branch results and detecting cross-branch overlap.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -60,8 +61,15 @@ pub fn overlap_warnings<R: BranchReport>(results: &[R]) -> Vec<OverlapWarning> {
             )
         })
         .collect();
-    tinyagents_harness::workspace::detect_worktree_overlaps(&per_worker)
+    let mut overlaps = BTreeMap::<PathBuf, Vec<String>>::new();
+    for (worker, files) in per_worker {
+        for file in files {
+            overlaps.entry(file).or_default().push(worker.clone());
+        }
+    }
+    overlaps
         .into_iter()
+        .filter(|(_, workers)| workers.len() > 1)
         .map(|(file, workers)| OverlapWarning {
             file: file.to_string_lossy().into_owned(),
             workers,
