@@ -17,7 +17,9 @@ use crate::middleware::{
 use crate::runtime::{AgentHarness, RunPolicy};
 use crate::testkit::ScriptedModel;
 use crate::tool::ToolRulePolicy;
-use crate::tool::packs::{PackCatalog, PackRegistryHandle, ToolPack, USE_SKILL, UseSkillTool};
+use tinyagents_harness_tools::skills::{
+    PackCatalog, PackRegistryHandle, ToolPack, USE_SKILL, UseSkillTool,
+};
 
 const CHECK: &str = "verify observed work";
 static PACKS: &[ToolPack] = &[ToolPack {

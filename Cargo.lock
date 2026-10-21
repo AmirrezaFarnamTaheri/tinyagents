@@ -2077,6 +2077,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tinyagents-definition",
+ "tinyagents-harness-tools",
  "tinyinference-core",
  "tinyinference-embeddings",
  "tinyinference-image",

@@ -84,6 +84,7 @@ tracing = ["tinytools-agent/tracing"]
 [dev-dependencies]
 png = "0.17"
 tinystoragedrivers-sqlite = { workspace = true }
+tinyagents-harness-tools = { path = "../tinyagents-harness-tools", version = "2.2.0" }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
 [lints]
