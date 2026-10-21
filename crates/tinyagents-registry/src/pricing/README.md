@@ -16,8 +16,9 @@ its validation remain independent; this additive API preserves the migrated
 consumer snapshot without silently changing existing seed lookups.
 
 Lookup first matches an exact canonical id, then an id with a leading vendor
-segment removed. Its fallback accepts only dated or preview snapshot decorations
-of a listed id, such as `gpt-5.4-mini-2026-05-01` or
+segment removed. Its fallback chooses the longest listed id extended only by
+date/version fragments or release-channel words (`latest`, `preview`, `exp`),
+such as `gpt-5.4-mini-2026-05-01` or
 `gemini-2.5-pro-preview-06-05`. Unlisted variants such as `gpt-4.1-nano` and
 `o3-pro` return `None`; they do not inherit the rates or context window of a
 listed base model.
