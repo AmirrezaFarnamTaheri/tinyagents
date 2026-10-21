@@ -17,7 +17,7 @@ use tinyagents_harness::tool::ToolDispatch;
 use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope, ToolTimeout};
 
 use tinyagents_orchestration::subagent::DriverJobRegistration;
-use tinyagents_orchestration::subagent::InlineJobGuard;
+use tinyagents_orchestration::subagent::JobSettleGuard;
 use tinyagents_orchestration::subagent::{
     SubAgentJobRegistry, SubagentDriver, SubagentError, SubagentOutcomeKind, SubagentRequest,
 };
@@ -105,14 +105,9 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             parameters: json!({
                 "type": "object",
                 "required": ["input"],
-                "properties": {
-                    "input": { "type": "string" },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["background", "inline"],
-                        "description": "Background returns a task id when a delivery target exists; otherwise it runs inline."
-                    }
-                }
+            "properties": {
+                "input": { "type": "string" }
+            }
             }),
             driver,
             request_factory: Arc::new(request_factory),
@@ -231,23 +226,6 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         self
     }
 
-    fn requested_mode(
-        args: &Value,
-    ) -> Result<tinyagents_orchestration::subagent::SubAgentMode, String> {
-        match args.get("mode") {
-            None | Some(Value::Null) => {
-                Ok(tinyagents_orchestration::subagent::SubAgentMode::Background)
-            }
-            Some(Value::String(mode)) if mode == "background" => {
-                Ok(tinyagents_orchestration::subagent::SubAgentMode::Background)
-            }
-            Some(Value::String(mode)) if mode == "inline" => {
-                Ok(tinyagents_orchestration::subagent::SubAgentMode::Inline)
-            }
-            Some(_) => Err("`mode` must be \"background\" or \"inline\"".into()),
-        }
-    }
-
     async fn execute_request(
         &self,
         mut request: SubagentRequest<Ctx, H>,
@@ -291,7 +269,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         let job_guard = bridged_job
             .as_ref()
             .filter(|(_, _, created)| *created)
-            .map(|(jobs, id, _)| InlineJobGuard::new(jobs.clone(), id.clone()));
+            .map(|(jobs, id, _)| JobSettleGuard::new(jobs.clone(), id.clone()));
         if let Some((jobs, id, false)) = &bridged_job {
             let job = if target.is_some() {
                 jobs.get(id.as_str())
@@ -461,19 +439,11 @@ where
         _options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
     ) -> anyhow::Result<ToolResult> {
-        let requested = match Self::requested_mode(&arguments) {
-            Ok(mode) => mode,
-            Err(error) => return Ok(ToolResult::error(error)),
-        };
         let request = match (self.request_factory)(state, parent, &arguments, &call_id) {
             Ok(request) => request,
             Err(error) => return Ok(ToolResult::error(format!("subagent request: {error}"))),
         };
-        let target = if requested == tinyagents_orchestration::subagent::SubAgentMode::Background {
-            (self.delivery_target)(&request)
-        } else {
-            None
-        };
+        let target = (self.delivery_target)(&request);
         self.execute_request(
             request,
             target,
