@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use tinyagents_harness::CancellationToken;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::retry::RetryPolicy;
-use tinyagents_runtime::ToolSnapshot;
+use tinyagents_harness::tool::ToolSnapshot;
 use tinyinference_llm::message::Message;
 
 use super::*;

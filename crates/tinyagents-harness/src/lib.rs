@@ -13,8 +13,6 @@
 //! # Cargo features
 //!
 //! - `sqlite` — retained as a no-op for compatibility; durable stores are the `Driver*` types over `tinystoragedrivers`.
-//! - `builtin-tools` — the bundled [`tools`] (currently the time tool). The
-//!   old name `tools` is kept as a deprecated alias.
 //! - `multimodal` — image/audio/binary content resolution ([`multimodal`]),
 //!   pulling in `reqwest` and `flate2`.
 //! - `claude-code` — the Claude Code CLI and Claude Agent SDK provider
@@ -104,8 +102,6 @@ pub mod testkit;
 pub mod title;
 pub mod token_estimation;
 pub mod tool;
-#[cfg(feature = "builtin-tools")]
-pub mod tools;
 pub mod turn_deadline;
 pub mod turn_outcome;
 pub mod turn_policy;
@@ -152,7 +148,9 @@ pub use observability::replay::{
 pub use observability::{
     AgentCallLatency, AgentLatencyMetrics, AgentObservation, FanOutSink, HarnessEventJournal,
     HarnessStatusStore, InMemoryEventJournal, InMemoryStatusStore, JournalSink, JsonlSink,
-    RedactingSink, StoreEventJournal,
+    ObservedChatModel, PhysicalDispatchGuard, PhysicalDispatchMetadata, PhysicalDispatchObserver,
+    PhysicalDispatchOutcome, PhysicalDispatchStatus, PhysicalDispatchTerminal,
+    PhysicalDispatchUsage, RedactingSink, StoreEventJournal,
 };
 pub use observability::{DriverStatusStore, mint_run_id, reap_orphaned_runs};
 #[cfg(feature = "langfuse")]
