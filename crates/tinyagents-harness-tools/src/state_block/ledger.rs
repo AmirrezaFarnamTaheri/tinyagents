@@ -7,6 +7,7 @@
 //! same command clears its failure.
 
 use serde_json::Value;
+use tinyagents_harness::summarization::{DefaultFileOpExtractor, FileOpExtractor, FileOperations};
 use tinyinference_llm::tool::ToolCall;
 
 use super::types::{CallRecord, Failure, RunLedger};
@@ -17,6 +18,8 @@ pub(super) const MAX_FAILURES: usize = 3;
 pub(super) const FAILURE_HORIZON_ROUNDS: usize = 4;
 /// Written paths kept, most recent last.
 pub(super) const MAX_FILES: usize = 6;
+/// Missing executable names shown in each request.
+pub(super) const MAX_MISSING: usize = 6;
 /// Longest argument summary, in characters.
 const MAX_SUMMARY_CHARS: usize = 100;
 /// Longest error line, in characters.
@@ -25,19 +28,21 @@ const MAX_ERROR_CHARS: usize = 160;
 /// Argument keys that carry a shell command.
 const COMMAND_KEYS: &[&str] = &["command", "cmd", "script"];
 /// Argument keys that carry a file path.
-const PATH_KEYS: &[&str] = &["path", "file_path", "filePath", "file", "target"];
-/// Tool-name fragments that mark a tool writing its path.
-const WRITE_TOOL_FRAGMENTS: &[&str] = &["write", "edit", "patch", "create", "replace"];
-
 /// What the ledger keeps of `call` while it runs.
 pub(super) fn call_record(call: &ToolCall) -> CallRecord {
     let command = string_arg(&call.arguments, COMMAND_KEYS);
-    let name = call.name.to_ascii_lowercase();
-    let written_path = WRITE_TOOL_FRAGMENTS
-        .iter()
-        .any(|fragment| name.contains(fragment))
-        .then(|| string_arg(&call.arguments, PATH_KEYS))
-        .flatten();
+    let mut file_operations = FileOperations::default();
+    DefaultFileOpExtractor.extract(call, &mut file_operations);
+    let mut written_paths: Vec<String> = file_operations
+        .modified()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    for path in patch_paths(&call.arguments) {
+        if !written_paths.contains(&path) {
+            written_paths.push(path);
+        }
+    }
     let summary = match &command {
         Some(command) => one_line(command, MAX_SUMMARY_CHARS),
         None => one_line(&call.arguments.to_string(), MAX_SUMMARY_CHARS),
@@ -46,7 +51,7 @@ pub(super) fn call_record(call: &ToolCall) -> CallRecord {
         tool: call.name.clone(),
         summary,
         command,
-        written_path,
+        written_paths,
     }
 }
 
@@ -65,6 +70,9 @@ pub(super) fn record_result(
         for name in missing_executables(output) {
             if !ledger.missing.iter().any(|(known, _)| known == &name) {
                 ledger.missing.push((name, round));
+                while ledger.missing.len() > MAX_MISSING {
+                    ledger.missing.remove(0);
+                }
             }
         }
         ledger.failures.push_back(Failure {
@@ -86,7 +94,7 @@ pub(super) fn record_result(
     ledger
         .failures
         .retain(|failure| !(failure.tool == call.tool && failure.summary == call.summary));
-    if let Some(path) = call.written_path {
+    for path in call.written_paths {
         ledger.files.retain(|known| known != &path);
         ledger.files.push(path);
         if ledger.files.len() > MAX_FILES {
@@ -125,6 +133,31 @@ pub(super) fn age_out(ledger: &mut RunLedger) {
     ledger
         .failures
         .retain(|failure| round.saturating_sub(failure.round) <= FAILURE_HORIZON_ROUNDS);
+    ledger
+        .missing
+        .retain(|(_, seen)| round.saturating_sub(*seen) <= FAILURE_HORIZON_ROUNDS);
+}
+
+/// Paths named in apply_patch envelopes or unified-diff headers.
+fn patch_paths(arguments: &Value) -> Vec<String> {
+    let Value::Object(map) = arguments else { return Vec::new() };
+    let mut paths = Vec::new();
+    for value in map.values().filter_map(Value::as_str) {
+        for line in value.lines() {
+            let path = ["*** Update File:", "*** Add File:", "*** Delete File:", "+++ b/"]
+                .iter()
+                .find_map(|prefix| line.strip_prefix(prefix))
+                .map(str::trim)
+                .filter(|path| !path.is_empty() && *path != "/dev/null");
+            if let Some(path) = path {
+                let path = one_line(path, MAX_SUMMARY_CHARS);
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+            }
+        }
+    }
+    paths
 }
 
 /// The error, shortened to one line: the exit code when the output states

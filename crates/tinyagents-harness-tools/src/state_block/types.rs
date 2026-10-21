@@ -51,8 +51,8 @@ pub(super) struct CallRecord {
     pub summary: String,
     /// The shell command, when the arguments carry one.
     pub command: Option<String>,
-    /// The path a write/edit tool targets.
-    pub written_path: Option<String>,
+    /// Paths a filesystem tool targets.
+    pub written_paths: Vec<String>,
 }
 
 /// One failed tool call, as the block reports it.

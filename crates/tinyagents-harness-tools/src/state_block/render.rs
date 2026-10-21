@@ -115,7 +115,16 @@ fn plan_section(items: &[TodoItem], ledger: &RunLedger) -> Option<String> {
         },
     };
     let mut lines = vec![header];
-    for (index, item) in items.iter().enumerate().take(MAX_STEPS_SHOWN) {
+    let active = items.iter().position(|item| item.status == TodoStatus::InProgress);
+    let mut displayed: Vec<usize> = (0..items.len().min(MAX_STEPS_SHOWN)).collect();
+    if let Some(active) = active
+        && active >= MAX_STEPS_SHOWN
+    {
+        displayed.pop();
+        displayed.push(active);
+    }
+    for index in displayed.iter().copied() {
+        let item = &items[index];
         let mark = match item.status {
             TodoStatus::Completed => "[x]",
             TodoStatus::InProgress => "[>]",
@@ -139,8 +148,9 @@ fn plan_section(items: &[TodoItem], ledger: &RunLedger) -> Option<String> {
         }
         lines.push(line);
     }
-    if total > MAX_STEPS_SHOWN {
-        lines.push(format!("  … {} more", total - MAX_STEPS_SHOWN));
+    let omitted = total - displayed.len();
+    if omitted > 0 {
+        lines.push(format!("  … {omitted} more"));
     }
     Some(lines.join("\n"))
 }
