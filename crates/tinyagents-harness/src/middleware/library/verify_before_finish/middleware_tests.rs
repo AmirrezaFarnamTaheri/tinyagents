@@ -1,9 +1,10 @@
-//! Tests for [`VerifyBeforeFinishMiddleware`].
+use super::*;
+
+// Tests for VerifyBeforeFinishMiddleware.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::*;
 use crate::context::{RunConfig, RunContext};
 use crate::limits::RunLimits;
 use crate::middleware::{AgentRun, Middleware};
@@ -439,7 +440,7 @@ async fn deferred_resume_does_not_repeat_an_existing_check() {
 #[tokio::test]
 async fn deferred_resume_restores_compacted_activity_and_check_provenance() {
     let mw = VerifyBeforeFinishMiddleware::new(CHECK)
-        .with_trigger(|activity| activity.tool_rounds >= 2 && activity.called("todo"));
+        .with_trigger(|activity| activity.tool_rounds >= 2 && activity.executed("todo"));
     let mut original = RunContext::new(RunConfig::new("original").with_max_model_calls(10), ());
     mw.after_model(&mut original, &(), &mut tool_round("c1", "todo"))
         .await
@@ -447,6 +448,13 @@ async fn deferred_resume_restores_compacted_activity_and_check_provenance() {
     mw.after_model(&mut original, &(), &mut tool_round("c2", "lookup"))
         .await
         .unwrap();
+    mw.observe_tool_execution(
+        &original,
+        &(),
+        &crate::middleware::ToolInvocationIdentity::new("c1", "todo"),
+        &FakeTool::returning("todo", "listed"),
+        &serde_json::json!({}),
+    );
     let mut run = AgentRun::new();
     run.deferred = Some(crate::tool::DeferredToolRequests::default());
     mw.after_agent(&mut original, &(), &mut run).await.unwrap();
