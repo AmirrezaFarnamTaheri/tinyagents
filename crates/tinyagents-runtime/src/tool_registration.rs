@@ -3,8 +3,10 @@
 //! The host decides *which* tools exist and how each is wrapped; this module
 //! owns the generic rules for which candidates register: de-duplication by
 //! name, an allowlist whose empty set denies everything, thread-scoped tools
-//! dropped on thread-less turns, and spawn/delegate tools never handed to a
-//! sub-agent run whatever the allowlist says.
+//! dropped on thread-less turns, and spawn/delegate tools withheld from
+//! sub-agent runs by default. A host may grant bounded nested spawning for a
+//! turn; those tools still need to pass the ordinary allowlist, and the host
+//! remains responsible for enforcing the depth ceiling when a child executes.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -119,7 +121,10 @@ pub struct ToolAdmission {
     pub has_thread: bool,
     /// Names of tools that cannot run without a thread.
     pub thread_scoped: HashSet<String>,
-    /// Names of spawn/delegate tools a sub-agent must never receive.
+    /// Names of spawn/delegate tools denied to sub-agents unless the host
+    /// supplies a [`NestedSpawnDepth`] grant that permits another child.
+    /// These tools must also pass `allowed`; the grant does not expand that
+    /// allowlist.
     pub spawn_tools: HashSet<String>,
     /// Explicit host grant for bounded nested spawning. `None` keeps the
     /// default leaf-subagent behavior.
