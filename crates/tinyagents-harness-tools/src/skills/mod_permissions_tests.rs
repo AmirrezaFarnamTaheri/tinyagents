@@ -65,14 +65,22 @@ impl Tool for CodeTool {
     }
 }
 
-fn tools() -> (PackRegistryHandle, Arc<Vec<Box<dyn Tool>>>, Arc<UseSkillTool>) {
+fn tools() -> (
+    PackRegistryHandle,
+    Arc<Vec<Box<dyn Tool>>>,
+    Arc<UseSkillTool>,
+) {
     let handle = PackRegistryHandle::default();
     let tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![
         Box::new(CodeTool("preview_patch")),
         Box::new(CodeTool("delete_source")),
     ]);
     handle.bind(Arc::downgrade(&tools));
-    (handle.clone(), tools, Arc::new(UseSkillTool::new(handle, CATALOG)))
+    (
+        handle.clone(),
+        tools,
+        Arc::new(UseSkillTool::new(handle, CATALOG)),
+    )
 }
 
 #[test]
@@ -135,9 +143,11 @@ fn shared_tool_adapter_preserves_packed_host_extension() {
     let adapter = CanonicalSharedToolAdapter::for_name(vec![tools], "preview_patch")
         .expect("registered packed tool");
 
-    assert!(adapter
-        .host_extension()
-        .is_some_and(|extension| extension.is::<PackExtension>()));
+    assert!(
+        adapter
+            .host_extension()
+            .is_some_and(|extension| extension.is::<PackExtension>())
+    );
 }
 
 #[test]
@@ -146,7 +156,6 @@ fn unresolved_named_calls_keep_the_ceiling_even_in_an_all_read_only_registry() {
     let tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![Box::new(CodeTool("preview_patch"))]);
     handle.bind(Arc::downgrade(&tools));
     let dispatcher = Arc::new(UseSkillTool::new(handle.clone(), CATALOG));
-
 
     for call in [
         json!({"skill": "code", "tool": "missing"}),
