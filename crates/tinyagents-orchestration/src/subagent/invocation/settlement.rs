@@ -77,12 +77,9 @@ impl SubAgentJobRegistry {
 
     pub(super) fn refresh_root_leases_locked(
         &self,
-        root_leases: &mut std::collections::HashMap<u64, super::types::RootLeaseRecord>,
-        controls: &mut std::collections::HashMap<SubAgentJobId, super::types::JobControl>,
+        _root_leases: &mut std::collections::HashMap<u64, super::types::RootLeaseRecord>,
+        _controls: &mut std::collections::HashMap<SubAgentJobId, super::types::JobControl>,
     ) {
-        for lease in root_leases.values_mut() {
-            Self::extend_root_lease_locked(lease, controls);
-        }
     }
 
     fn extend_root_lease_locked(
