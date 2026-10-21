@@ -64,6 +64,8 @@ pub(super) struct Failure {
     pub tool: String,
     /// The call's argument summary.
     pub summary: String,
+    /// Full shell command, when the failed call carried one.
+    pub command: Option<String>,
     /// The error, shortened to one line.
     pub error: String,
 }

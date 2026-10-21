@@ -79,6 +79,7 @@ pub(super) fn record_result(
             round,
             tool: call.tool,
             summary: call.summary,
+            command: call.command,
             error: error_line(output),
         });
         while ledger.failures.len() > MAX_FAILURES {
@@ -87,13 +88,16 @@ pub(super) fn record_result(
         return;
     }
     if let Some(command) = &call.command {
-        ledger
-            .missing
-            .retain(|(name, _)| !runs_executable(command, name));
+        ledger.missing.retain(|(name, _)| !runs_executable(command, name));
     }
-    ledger
-        .failures
-        .retain(|failure| !(failure.tool == call.tool && failure.summary == call.summary));
+    ledger.failures.retain(|failure| {
+        failure.tool != call.tool
+            || match (&failure.command, &call.command) {
+                (Some(failed), Some(succeeded)) => failed != succeeded,
+                (None, None) => failure.summary != call.summary,
+                _ => true,
+            }
+    });
     for path in call.written_paths {
         ledger.files.retain(|known| known != &path);
         ledger.files.push(path);
@@ -229,11 +233,25 @@ pub(super) fn missing_executables(output: &str) -> Vec<String> {
     names
 }
 
-/// Whether `command` runs `name` as a word (`python3 x.py`, `which python3`).
+/// Whether `command` invokes `name` in executable position or checks it with
+/// `which`/`type`, rather than merely mentioning it as an argument.
 fn runs_executable(command: &str, name: &str) -> bool {
     command
-        .split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '`'))
-        .any(|word| executable_name(word) == name)
+        .split(|c: char| matches!(c, '\n' | ';' | '&' | '|' | '(' | ')'))
+        .any(|part| {
+            let words: Vec<_> = part.split_whitespace().collect();
+            let Some(first) = words.first().map(|word| executable_name(word)) else {
+                return false;
+            };
+            if first == name {
+                return true;
+            }
+            if matches!(first.as_str(), "env" | "command") {
+                return words.get(1).is_some_and(|word| executable_name(word) == name);
+            }
+            matches!(first.as_str(), "which" | "type")
+                && words.iter().skip(1).any(|word| executable_name(word) == name)
+        })
 }
 
 fn exit_code(output: &str) -> Option<i64> {
