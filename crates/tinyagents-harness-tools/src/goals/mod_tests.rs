@@ -50,7 +50,7 @@ fn budget_helpers() {
 }
 
 #[test]
-fn context_block_present_only_for_active_and_budget_limited() {
+fn context_block_covers_active_paused_and_budget_limited_goals() {
     let active = goal(ThreadGoalStatus::Active, Some(500), 100);
     let block = active_goal_context_block(&active).expect("active goal has a context block");
     assert!(block.contains("ship the release"));

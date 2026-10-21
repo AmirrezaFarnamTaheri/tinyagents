@@ -160,7 +160,7 @@ impl GoalStore {
 pub struct GoalTurnPreparation {
     /// Current goal, if this thread has one.
     pub goal: Option<ThreadGoal>,
-    /// Prompt block to prepend for an active or budget-limited goal.
+    /// Prompt block to prepend for an active, paused, or budget-limited goal.
     pub context_block: Option<String>,
     /// Guard for a budgeted active goal, ready for a host stop hook.
     pub budget_guard: Option<GoalBudgetGuard>,
