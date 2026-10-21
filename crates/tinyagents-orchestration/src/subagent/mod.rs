@@ -61,7 +61,7 @@ pub use invocation::{
 };
 pub use persistence::SubagentPersistence;
 pub use planner::SubagentPlanner;
-pub use policy::{SubAgentBudget, SubAgentPolicy};
+pub use policy::{SubAgentBudget, SubAgentOutput, SubAgentPolicy};
 pub use result_policy::{
     AppliedResult, ArtifactStore, ResultOverflow, ResultPolicy, frame_unexecuted_outcome,
     is_safe_task_id, is_unexecuted_tool_call_stub, truncate_head_tail,

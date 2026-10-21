@@ -76,7 +76,6 @@ pub enum SandboxMode {
 /// declared, never to an inherited roster.
 pub const SPAWN_TOOL_NAMES: &[&str] = &[
     "spawn_subagent",
-    "spawn_async_subagent",
     "spawn_parallel_agents",
     "spawn_worker_thread",
 ];
