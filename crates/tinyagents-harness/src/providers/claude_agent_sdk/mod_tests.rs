@@ -260,7 +260,7 @@ printf '%s\n' '{"type":"result","result":"Calling.<tool_call>{\"name\":\"lookup\
 
 #[cfg(unix)]
 #[tokio::test]
-async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_frozen_auth() {
+async fn inspection_invocation_uses_supported_cli_flags_and_caps_output_with_frozen_auth() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().expect("tempdir");
