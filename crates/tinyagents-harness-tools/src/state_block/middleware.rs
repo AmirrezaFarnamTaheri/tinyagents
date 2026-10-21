@@ -235,7 +235,7 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
                     tool: invocation.tool_name().to_string(),
                     summary: String::new(),
                     command: None,
-                    written_path: None,
+                    written_paths: Vec::new(),
                 });
             ledger::record_result(ledger, record, is_error, &output);
         });

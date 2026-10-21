@@ -22,13 +22,13 @@ fn a_record_keeps_the_command_and_only_a_write_tools_path() {
         record.command.as_deref(),
         Some("python3   migrate.py\n--dry-run")
     );
-    assert_eq!(record.written_path, None);
+    assert!(record.written_paths.is_empty());
 
     let write = call_record(&call(
         "file_write",
         serde_json::json!({ "path": "/app/a.py", "content": "x" }),
     ));
-    assert_eq!(write.written_path.as_deref(), Some("/app/a.py"));
+    assert_eq!(write.written_paths, vec!["/app/a.py"]);
     assert_eq!(write.command, None);
     assert!(write.summary.contains("/app/a.py"), "{}", write.summary);
 
@@ -36,7 +36,39 @@ fn a_record_keeps_the_command_and_only_a_write_tools_path() {
         "file_read",
         serde_json::json!({ "path": "/app/a.py" }),
     ));
-    assert_eq!(read.written_path, None, "a read does not write");
+    assert!(read.written_paths.is_empty(), "a read does not write");
+}
+
+#[test]
+fn only_filesystem_tools_and_patch_envelopes_record_written_paths() {
+    let issue = call_record(&call(
+        "create_issue",
+        serde_json::json!({ "path": "/issues/1", "title": "Bug" }),
+    ));
+    assert!(issue.written_paths.is_empty());
+
+    let patch = call_record(&call(
+        "apply_patch",
+        serde_json::json!({
+            "patch": "*** Begin Patch\n*** Update File: src/main.rs\n@@\n-old\n+new\n*** Add File: src/new.rs\n+x\n*** End Patch"
+        }),
+    ));
+    assert_eq!(patch.written_paths, vec!["src/main.rs", "src/new.rs"]);
+}
+
+#[test]
+fn missing_executables_are_bounded_and_age_out() {
+    let mut ledger = RunLedger::default();
+    let output = (0..MAX_MISSING + 2)
+        .map(|n| format!("bash: missing{n}: command not found"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    record_result(&mut ledger, shell("probe"), true, &output);
+    assert_eq!(ledger.missing.len(), MAX_MISSING);
+    assert_eq!(ledger.missing[0].0, "missing2");
+    ledger.round = FAILURE_HORIZON_ROUNDS + 1;
+    age_out(&mut ledger);
+    assert!(ledger.missing.is_empty());
 }
 
 #[test]

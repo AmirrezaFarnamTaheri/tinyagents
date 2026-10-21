@@ -6,9 +6,9 @@
 //! paused one when the user's message continues it (`goal_resume`). Pause and
 //! clear are host-driven controls — constructible as tools for a host that
 //! wants to expose them, but not part of the default model-facing set returned
-//! by [`goal_tools`]. Resume is the model's because only the model reads the
-//! new message against the paused objective: a host that resumes on every turn
-//! revives the goal for unrelated messages too.
+//! by [`goal_tools`]. Resume is model-facing for the same reason: only the
+//! model reads the new message against the paused objective, so a host that
+//! resumes on every turn would revive the goal for unrelated messages too.
 //!
 //! Every control answers with the JSON `{ "goal": <ThreadGoal|null>, "text":
 //! <rendered block> }`: `goal` is the structured camelCase goal a UI can draw

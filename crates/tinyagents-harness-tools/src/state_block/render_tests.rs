@@ -65,6 +65,18 @@ fn a_long_plan_is_cut_with_a_count() {
 }
 
 #[test]
+fn a_long_plan_keeps_the_active_step_visible() {
+    let mut items: Vec<TodoItem> = (0..25)
+        .map(|n| item(&format!("step {n}"), TodoStatus::Completed))
+        .collect();
+    items[23].status = TodoStatus::InProgress;
+    let block = render(None, &items, &RunLedger::default()).unwrap();
+    assert!(block.contains("  [>] 24. step 23"), "{block}");
+    assert!(block.contains("  … 6 more"), "{block}");
+    assert!(!block.contains("  [x] 20."), "{block}");
+}
+
+#[test]
 fn facts_render_without_a_plan() {
     let mut ledger = RunLedger {
         round: 4,
