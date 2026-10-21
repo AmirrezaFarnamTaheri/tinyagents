@@ -170,7 +170,9 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
         // pushes its own note there lands after the block. Keep the block last:
         // it is the current state, and the tail is where a model attends most.
         if request.messages.last().is_some_and(|message| match message {
-            Message::System(system) => system.content.trim_end().ends_with(&block),
+            Message::System(system) => system.content.last().is_some_and(
+                |part| matches!(part, ContentBlock::Text(text) if text.trim_end().ends_with(&block)),
+            ),
             Message::User(user) => user.content.last().is_some_and(
                 |part| matches!(part, ContentBlock::Text(text) if text.trim_end().ends_with(&block)),
             ),
