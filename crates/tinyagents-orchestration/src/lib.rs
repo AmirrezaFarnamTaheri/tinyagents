@@ -16,7 +16,6 @@
 pub mod steering;
 pub mod subagent;
 
+#[cfg(test)]
 #[path = "lib_boundary_tests.rs"]
 mod boundary_tests;
-
-#[cfg(test)]
