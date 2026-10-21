@@ -521,7 +521,10 @@ async fn agent_turn_preserves_typed_admission_refusal_from_chat_model() {
         options(Some(admission.clone()), None, &counts),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("controlled", Arc::new(controlled));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "controlled",
+        Arc::new(controlled),
+    )));
 
     let error = harness
         .invoke(
@@ -557,7 +560,10 @@ async fn concurrent_agent_turns_keep_typed_admission_refusals_call_local() {
         options(Some(admission.clone()), None, &counts),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("controlled", Arc::new(controlled));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "controlled",
+        Arc::new(controlled),
+    )));
     let harness = Arc::new(harness);
     let invoke = |harness: Arc<AgentHarness<()>>| async move {
         harness
@@ -618,7 +624,10 @@ async fn admitted_agent_turn_still_completes_normally() {
         options(Some(admission.clone()), None, &counts),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("controlled", Arc::new(controlled));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "controlled",
+        Arc::new(controlled),
+    )));
 
     harness
         .invoke(
@@ -644,7 +653,10 @@ async fn streaming_agent_turn_preserves_typed_admission_refusal() {
         options(Some(admission.clone()), None, &counts),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("controlled", Arc::new(controlled));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "controlled",
+        Arc::new(controlled),
+    )));
 
     let error = harness
         .invoke_streaming(
@@ -706,7 +718,10 @@ async fn assert_openai_retry_rechecks_committed_admission(with_money_budget: boo
         options(Some(admission.clone()), money_budget, &counts),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("controlled", Arc::new(controlled));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "controlled",
+        Arc::new(controlled),
+    )));
     let server_permit_state = admission.permits.clone();
     let server_listener = listener.clone();
     let (first_response_sent, first_response_received) = tokio::sync::oneshot::channel();
@@ -814,13 +829,13 @@ impl ChatModel<()> for LazyTypedRefusalModel {
 #[tokio::test]
 async fn turn_keeps_typed_dispatch_outcome_scope_through_lazy_stream_poll() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
         "controlled",
         Arc::new(LazyTypedRefusalModel {
             reason: DispatchRefusalReason::CallLimit,
             barrier: None,
         }),
-    );
+    )));
 
     let error = harness
         .invoke_streaming(
@@ -843,21 +858,21 @@ async fn turn_keeps_typed_dispatch_outcome_scope_through_lazy_stream_poll() {
 async fn concurrent_lazy_turns_keep_distinct_typed_refusals_call_local() {
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
     let mut first_harness: AgentHarness<()> = AgentHarness::new();
-    first_harness.register_model(
+    first_harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
         "controlled",
         Arc::new(LazyTypedRefusalModel {
             reason: DispatchRefusalReason::CallLimit,
             barrier: Some(barrier.clone()),
         }),
-    );
+    )));
     let mut second_harness: AgentHarness<()> = AgentHarness::new();
-    second_harness.register_model(
+    second_harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
         "controlled",
         Arc::new(LazyTypedRefusalModel {
             reason: DispatchRefusalReason::Cancelled,
             barrier: Some(barrier),
         }),
-    );
+    )));
 
     let first = tokio::spawn(async move {
         first_harness
