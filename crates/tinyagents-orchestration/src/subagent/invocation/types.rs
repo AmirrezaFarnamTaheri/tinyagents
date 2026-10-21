@@ -429,7 +429,6 @@ pub(crate) struct JobControl {
 }
 
 pub(crate) struct RootLeaseRecord {
-    pub(crate) root_run_id: tinyagents_harness::ids::RunId,
     pub(crate) owner: String,
     pub(crate) reachable_runs: std::collections::HashSet<tinyagents_harness::ids::RunId>,
     pub(crate) pinned_jobs: std::collections::HashSet<SubAgentJobId>,

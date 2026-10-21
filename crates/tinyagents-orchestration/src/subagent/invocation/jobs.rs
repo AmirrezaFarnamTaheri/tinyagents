@@ -138,6 +138,9 @@ impl SubAgentJobRegistry {
             .driver_jobs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Root leases serialize with lineage insertion and pruning. Lock order:
+        // driver_jobs -> root_leases -> controls -> detached task registry.
+        let mut root_leases = self.root_leases();
         if let Err(error) = self.insert_job(
             id.clone(),
             agent,
@@ -202,7 +205,7 @@ impl SubAgentJobRegistry {
             .register(task_id.clone(), execution.steering.clone());
         if let Err(error) = self.tasks.register_cooperative_managed(
             task_id.clone(),
-            owner,
+            owner.clone(),
             metadata,
             watcher,
             execution.cancellation.clone(),
@@ -214,6 +217,7 @@ impl SubAgentJobRegistry {
             id.clone(),
             JobControl {
                 status,
+                owner,
                 cancellation_requested: false,
                 run_queue: execution.run_queue,
                 steering: execution.steering,
@@ -408,13 +412,15 @@ impl SubAgentJobRegistry {
                 });
                 self.changes
                     .send_modify(|generation| *generation = generation.wrapping_add(1));
-                return Ok((
+                let result = (
                     id.clone(),
                     control.steering.clone(),
                     queue,
                     control.cancellation.clone(),
                     true,
-                ));
+                );
+                self.refresh_root_leases_locked(&mut root_leases, &mut controls);
+                return Ok(result);
             }
             return Ok((
                 id.clone(),
@@ -454,6 +460,10 @@ impl SubAgentJobRegistry {
             &mut driver_jobs,
         )?;
         driver_jobs.insert(key, id.clone());
+        {
+            let mut controls = self.controls();
+            self.refresh_root_leases_locked(&mut root_leases, &mut controls);
+        }
         let token = self
             .controls()
             .get(&id)
@@ -738,6 +748,7 @@ impl SubAgentJobRegistry {
     /// Records the actual native run id of one driver attempt for descendant
     /// settlement. Call once for every attempt, including retries.
     pub fn set_attempt_run_id(&self, id: &SubAgentJobId, run_id: &str) {
+        let mut root_leases = self.root_leases();
         let mut controls = self.controls();
         if let Some(control) = controls.get_mut(id) {
             if control.status.borrow().status.is_terminal() {
@@ -745,6 +756,11 @@ impl SubAgentJobRegistry {
             }
             let run_id = tinyagents_harness::ids::RunId::new(run_id);
             let new_edge = control.lineage.children.insert(run_id.clone());
+            for lease in root_leases.values_mut() {
+                if lease.owner == control.owner && lease.pinned_jobs.contains(id) {
+                    lease.reachable_runs.insert(run_id.clone());
+                }
+            }
             let changed = control.status.send_if_modified(|job| {
                 let changed = job.subagent_run_id.as_deref() != Some(run_id.as_str());
                 job.subagent_run_id = Some(run_id.as_str().to_owned());
@@ -754,6 +770,7 @@ impl SubAgentJobRegistry {
                 self.changes
                     .send_modify(|generation| *generation = generation.wrapping_add(1));
             }
+            self.refresh_root_leases_locked(&mut root_leases, &mut controls);
         }
     }
 
