@@ -15,7 +15,7 @@ use tinyagents_harness::steering::{RecentRequestIds, SteeringCommand, SteeringHa
 use tinyagents_tasks::{CancelledDetachedTask, DetachedTaskRegistry, DetachedTaskRegistryError};
 use tinyinference_llm::message::Message;
 
-use super::types::{DetachedSubagentStatus, SubagentIdentity, WaitError};
+use crate::subagent::{DetachedSubagentStatus, SubagentIdentity, WaitError};
 
 /// Why a steer could not be delivered.
 #[non_exhaustive]
@@ -25,8 +25,6 @@ pub enum SteerError {
     Unknown,
     /// The caller does not own this subagent.
     NotOwned,
-    /// The subagent already reached a terminal status.
-    AlreadyDone,
     /// Detached subagents only accept an injected instruction or collected
     /// context; follow-up work cannot be dispatched through a steer.
     UnsupportedLane,
@@ -38,7 +36,6 @@ impl From<DetachedTaskRegistryError> for SteerError {
     fn from(error: DetachedTaskRegistryError) -> Self {
         match error {
             DetachedTaskRegistryError::NotOwned => Self::NotOwned,
-            DetachedTaskRegistryError::AlreadyDone => Self::AlreadyDone,
             _ => Self::Unknown,
         }
     }
@@ -71,6 +68,28 @@ pub enum SteerAccess<'a> {
     Owner(&'a str),
     /// A trusted control surface: no ownership check.
     Trusted,
+}
+
+/// Host-provided delivery path for a child that has no live steering handle.
+/// Hosts typically enqueue the metadata, lane, and text into their run queue.
+pub trait SteerFallback<M> {
+    /// The asynchronous enqueue operation.
+    type Future: Future<Output = ()>;
+
+    /// Enqueue the steer through the host-owned fallback path.
+    fn enqueue(self, metadata: M, lane: QueueLane, text: String) -> Self::Future;
+}
+
+impl<M, F, Fut> SteerFallback<M> for F
+where
+    F: FnOnce(M, QueueLane, String) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    type Future = Fut;
+
+    fn enqueue(self, metadata: M, lane: QueueLane, text: String) -> Self::Future {
+        self(metadata, lane, text)
+    }
 }
 
 /// Stable lane name for logs (`steer` / `followup` / `collect`).
@@ -108,11 +127,10 @@ fn send_registered(handle: &SteeringHandle, text: &str, lane: QueueLane) -> bool
 
 /// Inject `text` into the running subagent `task_id`.
 ///
-/// Rejects an unsupported lane, an unknown / unowned / already-terminal task,
-/// then prefers the live steering handle and falls back to
-/// `fallback(metadata, lane, text)` when there is none. The text is never
-/// logged here.
-pub async fn steer_detached<M, F, Fut>(
+/// Rejects an unsupported lane or unknown / unowned task, then prefers the
+/// live steering handle and falls back to the host when the child is finished
+/// or has no live handle. The text is never logged here.
+pub async fn steer_detached<M, F>(
     registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
     task_id: &str,
     access: SteerAccess<'_>,
@@ -122,8 +140,7 @@ pub async fn steer_detached<M, F, Fut>(
 ) -> Result<SteerRoute, SteerError>
 where
     M: Clone + Send + Sync + 'static,
-    F: FnOnce(M, QueueLane, String) -> Fut,
-    Fut: Future<Output = ()>,
+    F: SteerFallback<M>,
 {
     let receipt =
         steer_detached_with_request_id(registry, task_id, access, text, lane, None, fallback)
@@ -136,8 +153,9 @@ where
 /// Idempotent [`steer_detached`]: when `request_id` was already applied to
 /// `task_id`, returns a [`SteerReceipt`] with `duplicate: true` and delivers
 /// nothing. The last [`tinyagents_harness::steering::RecentRequestIds::DEFAULT_CAPACITY`] ids per task are
-/// remembered. Validation (lane, unknown / unowned / terminal) runs first, so
-/// a rejected steer never consumes its id and can be retried. A `request_id`
+/// remembered. Lane and ownership validation runs first, so a rejected steer
+/// never consumes its id and can be retried. A terminal task with retained
+/// metadata is delivered through the host fallback. A `request_id`
 /// longer than [`RecentRequestIds::MAX_REQUEST_ID_BYTES`] is rejected with
 /// [`SteerError::RequestIdTooLong`].
 ///
@@ -148,7 +166,7 @@ where
 /// future is dropped, or the host fallback fails to enqueue), a retry with the
 /// same id is acknowledged as a duplicate and is not re-delivered. A caller
 /// that needs retry-until-delivered must use a fresh `request_id`.
-pub async fn steer_detached_with_request_id<M, F, Fut>(
+pub async fn steer_detached_with_request_id<M, F>(
     registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
     task_id: &str,
     access: SteerAccess<'_>,
@@ -159,8 +177,7 @@ pub async fn steer_detached_with_request_id<M, F, Fut>(
 ) -> Result<SteerReceipt, SteerError>
 where
     M: Clone + Send + Sync + 'static,
-    F: FnOnce(M, QueueLane, String) -> Fut,
-    Fut: Future<Output = ()>,
+    F: SteerFallback<M>,
 {
     if !matches!(lane, QueueLane::Steer | QueueLane::Collect) {
         return Err(SteerError::UnsupportedLane);
@@ -170,9 +187,6 @@ where
         SteerAccess::Owner(owner) => registry.snapshot(&key, owner)?,
         SteerAccess::Trusted => registry.snapshot_trusted(&key)?,
     };
-    if snapshot.status.is_terminal() {
-        return Err(SteerError::AlreadyDone);
-    }
     if request_id.is_some_and(|id| id.len() > RecentRequestIds::MAX_REQUEST_ID_BYTES) {
         return Err(SteerError::RequestIdTooLong);
     }
@@ -189,16 +203,20 @@ where
         SteerAccess::Owner(owner) => registry.steering_handle(&key, owner),
         SteerAccess::Trusted => registry.steering_handle_trusted(&key),
     };
-    if handle
-        .map(|handle| send_registered(&handle, &text, lane))
-        .unwrap_or(false)
-    {
-        return Ok(SteerReceipt {
-            route: Some(SteerRoute::Registry),
-            duplicate: false,
-        });
+    match handle {
+        Ok(handle) if !snapshot.status.is_terminal() && send_registered(&handle, &text, lane) => {
+            return Ok(SteerReceipt {
+                route: Some(SteerRoute::Registry),
+                duplicate: false,
+            });
+        }
+        Err(
+            DetachedTaskRegistryError::NoSteeringHandle | DetachedTaskRegistryError::AlreadyDone,
+        )
+        | Ok(_) => {}
+        Err(error) => return Err(error.into()),
     }
-    fallback(snapshot.metadata, lane, text).await;
+    fallback.enqueue(snapshot.metadata, lane, text).await;
     Ok(SteerReceipt {
         route: Some(SteerRoute::Fallback),
         duplicate: false,
@@ -236,3 +254,7 @@ where
     }
     out
 }
+
+#[cfg(test)]
+#[path = "steering_tests.rs"]
+mod tests;
