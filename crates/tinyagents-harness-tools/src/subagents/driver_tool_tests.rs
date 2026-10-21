@@ -1528,13 +1528,14 @@ async fn driver_subagent_tool_routes_execution_through_the_driver() {
     assert_eq!(job.agent, "subagent");
     assert_eq!(job.output.as_deref(), Some("driver result"));
 
-    let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    let (request_key, request_input) = &requests[0];
-    assert_eq!(request_key.task_id, "driver-task");
-    assert_eq!(request_key.parent_run_id, parent.run_id().as_str());
-    assert_eq!(request_input, "do work");
-    drop(requests);
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let (request_key, request_input) = &requests[0];
+        assert_eq!(request_key.task_id, "driver-task");
+        assert_eq!(request_key.parent_run_id, parent.run_id().as_str());
+        assert_eq!(request_input, "do work");
+    }
 
     let settled = jobs
         .settle_root_run_descendants(
