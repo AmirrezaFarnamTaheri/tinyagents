@@ -68,7 +68,7 @@ impl RegistryTestHelpers for SubAgentJobRegistry {
 
     fn mark_result(&self, id: &SubAgentJobId, result: Result<(), TinyAgentsError>) {
         let owner = self.controls.lock().unwrap().get(id).unwrap().owner.clone();
-        if matches!(result, Err(TinyAgentsError::Cancelled)) {
+        if matches!(&result, Err(TinyAgentsError::Cancelled)) {
             let _ = self.cancel_owned(id.as_str(), owner);
             self.mark_driver_result(id, Err(TinyAgentsError::Cancelled.to_string()));
         } else {
@@ -1597,14 +1597,7 @@ async fn a_budget_overrun_that_raced_an_owner_cancel_settles_cancelled() {
     let jobs = SubAgentJobRegistry::new();
     let (id, _) = jobs.create("worker", 1);
     jobs.cancel_owned(id.as_str(), 1).expect("cancel");
-    jobs.mark_budget_overrun(
-        &id,
-        crate::subagent::AppliedResult {
-            text: "late".into(),
-            ..Default::default()
-        },
-        "over budget".into(),
-    );
+    jobs.mark_budget_overrun(&id);
     let job = jobs.get(id.as_str()).unwrap();
     assert_eq!(job.status, SubAgentJobStatus::Cancelled);
     assert!(job.incomplete_kind.is_none() && job.output.is_none());
