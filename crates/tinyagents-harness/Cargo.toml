@@ -15,13 +15,13 @@ async-trait = { workspace = true }
 # rendering and multimodal data URIs both require it.
 base64 = "0.22"
 chrono = { workspace = true }
-chrono-tz = { version = "0.10", optional = true }
 dirs = { version = "6", optional = true }
 tar = { version = "0.4", default-features = false, optional = true }
 zip = { version = "2", default-features = false, features = ["deflate-flate2", "flate2"], optional = true }
 flate2 = { version = "1", optional = true }
 oxipng = { version = "9", default-features = false, optional = true }
 futures = { workspace = true }
+libc = "0.2"
 regex = "1"
 reqwest = { workspace = true, features = ["stream", "http2"], optional = true }
 serde = { workspace = true }
@@ -29,16 +29,16 @@ serde_json = { workspace = true }
 sha2 = "0.11"
 thiserror = "2"
 tracing = { workspace = true }
-tinyagents-definition = { path = "../tinyagents-definition", version = "2.1.4" }
-tinytools-agent = { path = "../../vendor/tinytools/crates/tinytools-agent", version = "0.5.0", default-features = false }
+tinyagents-definition = { path = "../tinyagents-definition", version = "2.2.0" }
+tinytools-agent = { path = "../../vendor/tinytools/crates/tinytools-agent", version = "0.6.0", default-features = false }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.4.1" }
 tinyinference-core = { path = "../../vendor/tinyinference/crates/tinyinference-core", version = "0.4.1" }
 tinyinference-embeddings = { path = "../../vendor/tinyinference/crates/tinyinference-embeddings", version = "0.4.1" }
 tinyinference-image = { path = "../../vendor/tinyinference/crates/tinyinference-image", version = "0.4.1", optional = true }
 tinyinference-video = { path = "../../vendor/tinyinference/crates/tinyinference-video", version = "0.4.1", optional = true }
-tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.5.0" }
+tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.6.0" }
 # Shared URL admission for opt-in remote multimodal attachments.
-tinytools-std = { path = "../../vendor/tinytools/crates/tinytools-std", version = "0.5.0", optional = true }
+tinytools-std = { path = "../../vendor/tinytools/crates/tinytools-std", version = "0.6.0", optional = true }
 tokio = { workspace = true, features = ["sync", "time", "macros", "rt", "rt-multi-thread", "fs", "io-util", "process"] }
 # Storage ports (no database client): the `storage-drivers` adapters put
 # the harness `Store` / `AppendStore` on any tinystoragedrivers backend.
@@ -47,6 +47,15 @@ tempfile = { workspace = true }
 wait-timeout = { version = "0.2", optional = true }
 uuid = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[target.'cfg(not(unix))'.dependencies]
+cap-std.workspace = true
+
+[dev-dependencies.cap-std]
+workspace = true
+
 [features]
 default = ["claude-code", "langfuse"]
 sqlite = []
@@ -54,10 +63,6 @@ sqlite = []
 # ports, so a host's chosen backend (SQLite, MongoDB, memory) holds harness
 # data.
 storage-drivers = []
-# `tools` is a deprecated alias kept so downstream feature forwards that
-# still spell out the old name keep compiling.
-tools = ["builtin-tools"]
-builtin-tools = ["dep:chrono-tz"]
 multimodal = ["dep:flate2", "dep:reqwest", "dep:tar", "dep:tinytools-std", "dep:zip"]
 # Lossless PNG re-compression (`multimodal::optimize_png_lossless`) through
 # `oxipng`. Off by default: without it the helper returns `None` and callers

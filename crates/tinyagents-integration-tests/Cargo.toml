@@ -10,7 +10,6 @@ publish = false
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-chrono = { workspace = true }
 dotenvy = "0.15"
 futures = { workspace = true }
 reqwest = { workspace = true }
@@ -19,24 +18,25 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 tinyagents-graph = { path = "../tinyagents-graph" }
 tinyagents-harness = { path = "../tinyagents-harness" }
+tinyagents-harness-tools = { path = "../tinyagents-harness-tools" }
 tinyagents-orchestration = { path = "../tinyagents-orchestration" }
 tinyagents-definition = { path = "../tinyagents-definition" }
 tinyagents-registry = { path = "../tinyagents-registry" }
 tinyagents-session = { path = "../tinyagents-session" }
+tinyagents-tasks = { path = "../tinyagents-tasks" }
 tinystoragedrivers-core = { workspace = true }
 tinystoragedrivers-sqlite = { workspace = true }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.4.1" }
 tinyinference-embeddings = { path = "../../vendor/tinyinference/crates/tinyinference-embeddings", version = "0.4.1" }
-tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.5.0" }
+tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.6.0" }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
 [features]
 default = []
 # Retained as a no-op: SQLite persistence is the tinystoragedrivers SQLite driver.
 sqlite = []
-# `tools` is kept as the forwarded feature name for backward compatibility
-# (see `tinyagents-harness`'s deprecated `tools` alias for `builtin-tools`).
-tools = ["tinyagents-harness/builtin-tools"]
+tools = ["tinyagents-harness-tools/todos", "tinyagents-harness-tools/goals", "tinyagents-harness-tools/skills"]
+subagents = ["tinyagents-harness-tools/subagents"]
 multimodal = ["tinyagents-harness/multimodal"]
 claude-code = ["tinyagents-harness/claude-code"]
 langfuse = ["tinyagents-harness/langfuse"]
@@ -49,3 +49,13 @@ tracing = [
 
 [lints.rust]
 unused_imports = "allow"
+
+[[test]]
+name = "live_subagents"
+path = "tests/live_subagents.rs"
+required-features = ["subagents"]
+
+[[test]]
+name = "subagent_sessions_tools"
+path = "tests/subagent_sessions_tools.rs"
+required-features = ["subagents"]
