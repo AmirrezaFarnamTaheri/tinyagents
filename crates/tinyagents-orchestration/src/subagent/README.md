@@ -152,7 +152,7 @@ concurrent spawns cannot race past a cap. Dropping the guard releases the live
 slot; dropping it without `commit()` (the spawn failed before the child
 launched) also refunds the total budget. `DriverSubAgentTool`
 reserves before creating the child and moves the guard into the child's task
-for its whole lifetime (a panic, abort, or dropped inline call still releases
+for its whole lifetime (a panic or abort still releases
 it); `SubagentDriver::run` reserves after the cancellation and resume checks and
 before the planner runs, and commits just before the executor launches.
 Coalesced followers and cached terminal results never reserve; a resumed

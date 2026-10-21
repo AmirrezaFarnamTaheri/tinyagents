@@ -60,10 +60,9 @@ type OwnerScope = dyn Fn(u64) -> String + Send + Sync;
 /// A typed-parent dispatcher that runs through [`SubagentDriver`].
 ///
 /// Hosts construct the validated request with `request_factory`; this keeps
-/// authorization and execution policy in the host planner/executor. A call
-/// requesting background mode is detached only when `delivery_target` returns
-/// a target. Otherwise the child runs inline and the result is returned to the
-/// caller.
+/// authorization and execution policy in the host planner/executor. Every call
+/// starts a detached job and returns its task reference immediately. The
+/// optional delivery target controls whether host completion callbacks run.
 pub struct DriverSubAgentTool<State, Ctx: Send + 'static, H: Send + 'static> {
     name: String,
     description: String,
