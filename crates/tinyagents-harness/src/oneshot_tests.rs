@@ -1,5 +1,5 @@
 use super::*;
-use crate::cost::ModelBudget;
+use crate::cost::{ControlledDispatchError, ModelBudget};
 use crate::tinyinference_llm::message::ImageRef;
 use crate::tinyinference_llm::model::budget::{Budget, CallBudget, SpendLimits};
 use crate::tinyinference_llm::model::{
@@ -13,6 +13,90 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
+
+struct RejectAdmission(Arc<AtomicUsize>);
+
+#[async_trait]
+impl crate::cost::PhysicalDispatchAdmission for RejectAdmission {
+    async fn acquire(
+        &self,
+    ) -> Result<Arc<dyn crate::cost::PhysicalDispatchPermit>, crate::cost::DispatchRefusal> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(crate::cost::DispatchRefusal::new(
+            crate::cost::DispatchRefusalReason::CallLimit,
+        ))
+    }
+}
+
+#[tokio::test]
+async fn controlled_complete_once_preserves_admission_as_a_typed_preflight_error() {
+    let model = Arc::new(Capture::default());
+    let request = ModelRequest::new(vec![Message::user("hello")]).with_model("model");
+    let options = OneshotOptions::default();
+
+    let error = complete_once_controlled(
+        model.clone(),
+        request,
+        options,
+        None,
+        Some(Arc::new(RejectAdmission(Arc::new(AtomicUsize::new(0))))),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        CompleteOnceError::Dispatch(ControlledDispatchError::Admission(refusal))
+            if refusal.reason() == crate::cost::DispatchRefusalReason::CallLimit
+    ));
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn invalid_controlled_request_precedes_admission_and_budget_reservation() {
+    let model = Arc::new(Capture::default());
+    let admission_calls = Arc::new(AtomicUsize::new(0));
+    let admission: Arc<dyn crate::cost::PhysicalDispatchAdmission> =
+        Arc::new(RejectAdmission(admission_calls.clone()));
+    let budget = ModelBudget::new(
+        Budget::new(SpendLimits {
+            tokens: Some(1),
+            cost_micros: None,
+        }),
+        CallBudget {
+            input_tokens: 1,
+            output_tokens: 1,
+            cost_micros: 1,
+        },
+    );
+    let invalid = ModelRequest::new(vec![])
+        .with_model("model")
+        .with_tools(vec![ToolSchema::new(
+            "tool",
+            "description",
+            json!({"type":"object"}),
+        )]);
+
+    let error = complete_once_controlled(
+        model.clone(),
+        invalid,
+        OneshotOptions {
+            budget: Some(budget.clone()),
+        },
+        None,
+        Some(admission),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        matches!(error, CompleteOnceError::InvalidRequest(message) if message.contains("tools are not supported"))
+    );
+    assert_eq!(admission_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(budget.ledger.snapshot().spent.tokens, 0);
+    assert_eq!(budget.ledger.snapshot().reserved.tokens, 0);
+}
 
 #[derive(Default)]
 struct Capture {
