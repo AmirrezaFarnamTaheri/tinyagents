@@ -153,6 +153,25 @@ impl SubagentPlanner<(), ()> for Planner {
     }
 }
 
+struct TimeoutPlanner;
+
+#[async_trait]
+impl SubagentPlanner<(), ()> for TimeoutPlanner {
+    async fn prepare(
+        &self,
+        request: SubagentRequest<(), ()>,
+    ) -> Result<PreparedSubagent<()>, SubagentError> {
+        Planner
+            .prepare(request)
+            .await
+            .map(|prepared| {
+                prepared.with_policy(SubAgentPolicy::default().with_timeout(
+                    std::time::Duration::from_millis(10),
+                ))
+            })
+    }
+}
+
 struct Executor;
 
 #[async_trait]
@@ -1075,6 +1094,66 @@ impl SubagentPersistence for TerminalReplayPersistence {
     ) -> std::result::Result<SubagentTerminalPersistenceDisposition, SubagentError> {
         Ok(SubagentTerminalPersistenceDisposition::Existing)
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn detached_driver_timeout_is_recorded_as_incomplete_job_status() {
+    let jobs = SubAgentJobRegistry::new();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let driver = Arc::new(
+        SubagentDriver::new(SubagentCapabilities {
+            planner: Some(Arc::new(TimeoutPlanner)),
+            executor: Some(Arc::new(BlockingExecutor {
+                started: started.clone(),
+                release,
+                calls,
+            })),
+            persistence: Some(Arc::new(Persistence)),
+        })
+        .unwrap(),
+    );
+    let tool = DriverSubAgentTool::new(
+        "spawn_subagent",
+        "worker description",
+        driver,
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("timeout-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "timeout-task",
+                (),
+                args["prompt"].as_str().unwrap_or_default(),
+                None,
+            )
+        },
+        |_| None,
+    )
+    .with_job_registry(jobs.clone());
+    let parent = RunContext::new(RunConfig::new("timeout-parent"), ());
+    let spawned = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("timeout-spawn"),
+        json!({"prompt":"work"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let value: Value = serde_json::from_str(&spawned.output()).unwrap();
+    started.notified().await;
+    tokio::time::advance(std::time::Duration::from_millis(11)).await;
+    let job = jobs
+        .wait_owned(value["task_id"].as_str().unwrap(), parent.instance_id().to_string())
+        .await
+        .unwrap();
+    assert_eq!(job.status, SubAgentJobStatus::Incomplete);
+    assert_eq!(job.incomplete_kind, Some(IncompleteKind::Timeout));
 }
 
 #[tokio::test]
@@ -2206,7 +2285,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
             .with_target("worker");
             Ok(request)
         },
-        |_| Some("parent-thread".into()),
+        |_| None,
     )
     .with_parameters(schema)
     .with_job_registry(jobs.clone())
