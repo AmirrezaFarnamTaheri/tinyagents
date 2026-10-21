@@ -14,8 +14,9 @@ pub struct RootRunDescendantLease {
 }
 
 impl RootRunDescendantLease {
-    /// Waits for root admissions to be closed and every registered descendant
-    /// to become terminal. The lease is consumed and released on success,
+    /// Waits for every registered descendant to become terminal. The caller
+    /// must close direct root admissions before invoking this method. The
+    /// lease is consumed and released on success,
     /// timeout, cancellation, or future drop.
     pub async fn settle(
         self,
@@ -54,7 +55,7 @@ impl SubAgentJobRegistry {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let owner = owner.to_string();
         let mut root_leases = self.root_leases();
-        let mut controls = self.controls();
+        let controls = self.controls();
         let mut reachable_runs = std::collections::HashSet::new();
         reachable_runs.insert(root_run_id.clone());
         let mut record = super::types::RootLeaseRecord {

@@ -381,13 +381,13 @@ impl SubAgentJobRegistry {
         // Lock order: driver_jobs -> root_leases -> controls -> detached task registry.
         let mut root_leases = self.root_leases();
         if let Some(id) = driver_jobs.get(&key) {
-            if self.get_owned(id.as_str(), &owner).is_none() {
-                return Err(SubAgentJobError::NotFound(id.as_str().to_owned()));
-            }
             let mut controls = self.controls();
             let control = controls
                 .get_mut(id)
                 .ok_or_else(|| SubAgentJobError::NotFound(id.as_str().to_owned()))?;
+            if control.owner != owner {
+                return Err(SubAgentJobError::NotFound(id.as_str().to_owned()));
+            }
             let status = control.status.borrow().status;
             if status.is_terminal() {
                 return Ok((
@@ -424,7 +424,6 @@ impl SubAgentJobRegistry {
                     control.cancellation.clone(),
                     true,
                 );
-                drop(control);
                 self.refresh_root_leases_locked(&mut root_leases, &mut controls);
                 return Ok(result);
             }

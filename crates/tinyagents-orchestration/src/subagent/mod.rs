@@ -61,7 +61,7 @@ pub use invocation::{
     ChildDataPolicy, DELEGATION_EXECUTE_PROMPT, DELEGATION_MODE_FIELD, DELEGATION_PLAN_PROMPT,
     DELEGATION_REVIEW_PROMPT, DelegationEnvelope, DelegationRequest, DelegationTool,
     DriverJobRegistration, InlineJobGuard, MultiTargetDelegationTool, ParentJobScope,
-    ReviewApprovalPolicy, SUBAGENT_MODE_FIELD, SubAgent, SubAgentJob, SubAgentJobError,
+    ReviewApprovalPolicy, RootRunDescendantLease, SUBAGENT_MODE_FIELD, SubAgent, SubAgentJob, SubAgentJobError,
     SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus, SubAgentMode, SubAgentSession,
     SubAgentTool, parse_approval, review_stage_output,
 };
