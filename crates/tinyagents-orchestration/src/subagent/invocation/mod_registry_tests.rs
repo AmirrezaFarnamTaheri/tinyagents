@@ -1058,7 +1058,6 @@ async fn live_job_metadata_retains_parent_thread_and_workspace() {
         RegistryFixtureMetadata {
             parent_thread_id: Some("thread-7".into()),
             workspace: Some(workspace.clone()),
-            ..RegistryFixtureMetadata::default()
         },
     );
     let snapshot = jobs
@@ -1087,7 +1086,6 @@ async fn thread_and_global_cancellation_select_jobs_by_retained_metadata() {
         RegistryFixtureMetadata {
             parent_thread_id: Some("thread-a".into()),
             workspace: Some(workspace.clone()),
-            ..RegistryFixtureMetadata::default()
         },
     );
     let (other_job, _) = jobs.register_fixture_job(
@@ -1097,7 +1095,6 @@ async fn thread_and_global_cancellation_select_jobs_by_retained_metadata() {
         RegistryFixtureMetadata {
             parent_thread_id: Some("thread-b".into()),
             workspace: Some(workspace.clone()),
-            ..RegistryFixtureMetadata::default()
         },
     );
 
@@ -1134,7 +1131,6 @@ async fn thread_cancellation_is_scoped_to_workspace() {
             RegistryFixtureMetadata {
                 parent_thread_id: Some("same-thread".into()),
                 workspace: Some(workspace),
-                ..RegistryFixtureMetadata::default()
             },
         );
     }
