@@ -57,6 +57,17 @@ fn only_filesystem_tools_and_patch_envelopes_record_written_paths() {
 }
 
 #[test]
+fn written_paths_are_bounded_before_they_enter_the_ledger() {
+    let path = format!("/workspace/{}", "a".repeat(MAX_SUMMARY_CHARS * 2));
+    let record = call_record(&call(
+        "file_write",
+        serde_json::json!({ "path": path, "content": "x" }),
+    ));
+    assert_eq!(record.written_paths.len(), 1);
+    assert!(record.written_paths[0].chars().count() <= MAX_SUMMARY_CHARS);
+}
+
+#[test]
 fn missing_executables_are_bounded_and_age_out() {
     let mut ledger = RunLedger::default();
     let output = (0..MAX_MISSING + 2)
