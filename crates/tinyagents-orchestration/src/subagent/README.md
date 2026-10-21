@@ -2,16 +2,13 @@
 
 `tinyagents_orchestration::subagent` owns child-agent orchestration policy. Generic
 job and message tool shells live in `tinyagents_harness_tools::subagents`.
-It contains two complementary surfaces.
+It exposes a driver-backed asynchronous job registry and durable lifecycle ports.
 
-The async invocation surface provides `SubagentDriver` and
-`SubAgentJobRegistry`. It wraps a
-`AgentHarness` as a child run, enforces recursion depth, and inherits live
-parent cancellation, events, and host authority. Model-facing delegation is
-background by default: `DriverSubAgentTool` returns a job id immediately while the
-child continues in the background. Callers can request `mode: "inline"` to
-wait for the child and receive its final result in the same tool call. A host
-constructs `tinyagents_harness_tools::subagents::SubAgentJobsTool` and
+The async surface provides `SubagentDriver` and `SubAgentJobRegistry`. A
+`DriverSubAgentTool` call always registers and starts a background job, then
+returns its task reference immediately. Hosts wait separately through the
+registry or detached settlement APIs. A host constructs
+`tinyagents_harness_tools::subagents::SubAgentJobsTool` and
 `SubAgentMessageTool` over the same registry to query status/results and send
 messages to queued or running jobs. Message delivery is cooperative at the
 child loop's next safe steering checkpoint. The registry is process-local and
@@ -60,7 +57,7 @@ without making product-policy decisions. Its dependency direction is:
 
 ```text
 tinyagents-harness-tools::subagents -> orchestration::subagent
-orchestration::subagent -> {tinyagents-graph, tinyagents-harness, tinyagents-session}
+orchestration::subagent -> {tinyagents-harness, tinyagents-session}
 ```
 
 Hosts provide three object-safe lifecycle seams. `SubagentPlanner<C, H>`
