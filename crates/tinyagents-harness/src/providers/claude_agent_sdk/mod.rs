@@ -160,6 +160,47 @@ fn build_inspection_invocation(message: &str, model: &str) -> ClaudeInvocation {
     }
 }
 
+fn configure_inspection_child(
+    cmd: &mut Command,
+    auth: &ClaudeAgentSdkInspectionAuth,
+    home_path: &std::path::Path,
+    max_tokens: u32,
+) {
+    cmd.env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", home_path)
+        .env("TMPDIR", home_path)
+        .env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", max_tokens.to_string())
+        .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+        .env("DISABLE_TELEMETRY", "1")
+        .env("DISABLE_ERROR_REPORTING", "1")
+        .current_dir(home_path);
+    #[cfg(not(windows))]
+    cmd.env("XDG_CONFIG_HOME", home_path)
+        .env("XDG_DATA_HOME", home_path)
+        .env("XDG_STATE_HOME", home_path)
+        .env("XDG_CACHE_HOME", home_path);
+    #[cfg(windows)]
+    {
+        cmd.env("USERPROFILE", home_path)
+            .env("APPDATA", home_path)
+            .env("LOCALAPPDATA", home_path)
+            .env("TEMP", home_path)
+            .env("TMP", home_path);
+        if let Some(system_root) = std::env::var_os("SystemRoot") {
+            cmd.env("SystemRoot", system_root);
+        }
+    }
+    if let Some(key) = auth.api_key.as_deref() {
+        cmd.env("ANTHROPIC_API_KEY", key);
+    } else if let Some(token) = auth.auth_token.as_deref() {
+        cmd.env("ANTHROPIC_AUTH_TOKEN", token);
+    }
+    if let Some(base_url) = auth.base_url.as_deref() {
+        cmd.env("ANTHROPIC_BASE_URL", base_url);
+    }
+}
+
 /// Render the complete non-system transcript for the stateless CLI process.
 ///
 /// Every `claude -p` invocation starts a fresh process, so passing only the
@@ -294,38 +335,7 @@ impl ClaudeAgentSdkProvider {
         if let (Some(auth), Some(home)) = (&self.inspection_auth, &inspection_home) {
             let home_path = home.path();
             let max_tokens = max_tokens.unwrap_or(5).clamp(1, 5);
-            cmd.env_clear()
-                .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-                .env("HOME", home_path)
-                .env("TMPDIR", home_path)
-                .env("XDG_CONFIG_HOME", home_path)
-                .env("XDG_DATA_HOME", home_path)
-                .env("XDG_STATE_HOME", home_path)
-                .env("XDG_CACHE_HOME", home_path)
-                .env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", max_tokens.to_string())
-                .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
-                .env("DISABLE_TELEMETRY", "1")
-                .env("DISABLE_ERROR_REPORTING", "1")
-                .current_dir(home_path);
-            if let Some(key) = auth.api_key.as_deref() {
-                cmd.env("ANTHROPIC_API_KEY", key);
-            } else if let Some(token) = auth.auth_token.as_deref() {
-                cmd.env("ANTHROPIC_AUTH_TOKEN", token);
-            }
-            if let Some(base_url) = auth.base_url.as_deref() {
-                cmd.env("ANTHROPIC_BASE_URL", base_url);
-            }
-            #[cfg(windows)]
-            {
-                cmd.env("USERPROFILE", home_path)
-                    .env("APPDATA", home_path)
-                    .env("LOCALAPPDATA", home_path)
-                    .env("TEMP", home_path)
-                    .env("TMP", home_path);
-                if let Some(system_root) = std::env::var_os("SystemRoot") {
-                    cmd.env("SystemRoot", system_root);
-                }
-            }
+            configure_inspection_child(&mut cmd, auth, home_path, max_tokens);
         }
 
         tracing::debug!(
