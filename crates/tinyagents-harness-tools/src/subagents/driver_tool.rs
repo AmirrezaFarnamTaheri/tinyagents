@@ -20,7 +20,7 @@ use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope, Tool
 use tinyagents_orchestration::subagent::DriverJobRegistration;
 use tinyagents_orchestration::subagent::JobSettleGuard;
 use tinyagents_orchestration::subagent::{
-    SubAgentJobRegistry, SubagentDriver, SubagentError, SubagentOutcomeKind, SubagentRequest,
+    SubAgentJobRegistry, SubagentDriver, SubagentError, SubagentRequest,
 };
 
 fn status_tool_result(
