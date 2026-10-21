@@ -1,7 +1,7 @@
 use super::*;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use tinyagents_harness::CancellationToken;
 use tinyagents_harness::ids::TaskId;
@@ -28,6 +28,7 @@ impl SubagentIdentity for Meta {
 }
 
 type Registry = DetachedTaskRegistry<Meta, DetachedSubagentStatus>;
+type RecordedSteer = (Option<&'static str>, String, QueueLane, String);
 
 fn registry(steering: SteeringRegistry) -> Registry {
     DetachedTaskRegistry::new(steering, 256, DetachedSubagentStatus::is_terminal)
@@ -129,23 +130,16 @@ async fn terminal_child_uses_fallback_with_metadata_and_does_not_drain_stale_han
     let tx = add(&reg, "t1", "p1", Some("thread-1"));
     let handle = SteeringHandle::allow_all();
     steering.register(TaskId::new("t1"), handle.clone());
-    tx.send(DetachedSubagentStatus::Failed { error: "finished".into() })
-        .unwrap();
+    tx.send(DetachedSubagentStatus::Failed {
+        error: "finished".into(),
+    })
+    .unwrap();
 
-    let delivered: Arc<std::sync::Mutex<Option<(
-        Option<&'static str>,
-        String,
-        QueueLane,
-        String,
-    )>>> = Arc::default();
+    let delivered: Arc<Mutex<Option<RecordedSteer>>> = Arc::default();
     let captured = delivered.clone();
     let fallback = move |metadata: Meta, lane: QueueLane, text: String| {
-        *captured.lock().unwrap() = Some((
-            metadata.thread,
-            metadata.agent_id().to_string(),
-            lane,
-            text,
-        ));
+        *captured.lock().unwrap() =
+            Some((metadata.thread, metadata.agent_id().to_string(), lane, text));
         std::future::ready(())
     };
 
