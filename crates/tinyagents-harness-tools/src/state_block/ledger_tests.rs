@@ -144,7 +144,12 @@ fn a_missing_executable_clears_only_when_a_command_runs_it() {
         1,
         "a search argument is not execution"
     );
-    record_result(&mut ledger, shell("python3 x.py"), false, "done");
+    record_result(
+        &mut ledger,
+        shell("command -v python3"),
+        false,
+        "/usr/bin/python3",
+    );
     assert!(ledger.missing.is_empty());
 }
 

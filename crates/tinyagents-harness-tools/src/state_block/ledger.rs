@@ -247,9 +247,11 @@ fn runs_executable(command: &str, name: &str) -> bool {
             return true;
         }
         if first == "env" {
-            return words.iter().skip(1).find(|word| {
-                !word.starts_with('-') && !word.contains('=')
-            }).is_some_and(|word| executable_name(word) == name);
+            return words
+                .iter()
+                .skip(1)
+                .find(|word| !word.starts_with('-') && !word.contains('='))
+                .is_some_and(|word| executable_name(word) == name);
         }
         if first == "command" {
             return match words.get(1).copied() {
