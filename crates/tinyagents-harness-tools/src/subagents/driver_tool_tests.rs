@@ -1266,6 +1266,7 @@ fn driver_subagent_tool_preserves_host_name_description_and_schema() {
 
 #[tokio::test]
 async fn driver_subagent_tool_routes_execution_through_the_driver() {
+    let jobs = SubAgentJobRegistry::new();
     let tool = DriverSubAgentTool::new(
         "subagent",
         "worker description",
@@ -1284,7 +1285,8 @@ async fn driver_subagent_tool_routes_execution_through_the_driver() {
             )
         },
         |_| None,
-    );
+    )
+    .with_job_registry(jobs.clone());
     let parent = RunContext::new(RunConfig::new("parent"), ());
     let result = ToolDispatch::<(), ()>::execute(
         &tool,
@@ -1300,6 +1302,17 @@ async fn driver_subagent_tool_routes_execution_through_the_driver() {
         serde_json::from_str::<Value>(&result.output()).unwrap()["output"],
         "driver result"
     );
+    let settled = jobs
+        .settle_root_run_descendants(
+            parent.run_id(),
+            parent.instance_id().to_string(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0].status, SubAgentJobStatus::Completed);
 }
 
 #[tokio::test]
