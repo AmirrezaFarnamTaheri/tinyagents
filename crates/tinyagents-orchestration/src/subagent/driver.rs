@@ -316,7 +316,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         }
 
         let result = self
-            .run_reserved(request, task_key.clone(), cancellation)
+            .run_reserved(request, task_key.clone(), cancellation, &on_attempt)
             .await;
         reservation.finish(result.clone());
         result
@@ -327,6 +327,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         mut request: SubagentRequest<C, H>,
         task_key: SubagentTaskKey,
         cancellation: CancellationToken,
+        on_attempt: &(impl Fn(&RunId) + Send + Sync),
     ) -> Result<SubagentRunResult, SubagentError> {
         let task_id = request.task_id().to_owned();
         let turn_fence = request.turn_fence();
