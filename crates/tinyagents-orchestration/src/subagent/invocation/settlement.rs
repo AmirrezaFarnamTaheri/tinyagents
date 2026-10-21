@@ -139,7 +139,10 @@ impl SubAgentJobRegistry {
     /// Jobs without native edges and jobs owned by another owner are excluded.
     /// Legacy registrations may expose their durable key's parent but cannot
     /// expose descendants until actual child attempt ids are supplied. The
-    /// deadline is absolute and shared by the whole operation.
+    /// deadline is absolute and shared by the whole operation. This
+    /// compatibility method only sees records still retained when called;
+    /// acquire [`Self::retain_root_run_descendants`] before admissions when
+    /// completed history must survive bounded-registry pruning.
     pub async fn settle_root_run_descendants(
         &self,
         root_run_id: &tinyagents_harness::ids::RunId,
@@ -148,6 +151,17 @@ impl SubAgentJobRegistry {
         cancellation: &tinyagents_harness::cancel::CancellationToken,
     ) -> std::result::Result<Vec<SubAgentJob>, SubAgentJobError> {
         let owner = owner.to_string();
+        self.settle_root_run_descendants_inner(root_run_id, &owner, deadline, cancellation)
+            .await
+    }
+
+    async fn settle_root_run_descendants_inner(
+        &self,
+        root_run_id: &tinyagents_harness::ids::RunId,
+        owner: &str,
+        deadline: tokio::time::Instant,
+        cancellation: &tinyagents_harness::cancel::CancellationToken,
+    ) -> std::result::Result<Vec<SubAgentJob>, SubAgentJobError> {
         let mut changes = self.changes.subscribe();
         let mut pinned = std::collections::HashMap::<SubAgentJobId, JobWaitGuard>::new();
         loop {

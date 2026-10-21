@@ -88,6 +88,7 @@ pub use delegation_tool::{
     MultiTargetDelegationTool, ReviewApprovalPolicy, parse_approval, review_stage_output,
 };
 pub use jobs::InlineJobGuard;
+pub use settlement::RootRunDescendantLease;
 pub use types::*;
 
 #[cfg(test)]
