@@ -462,6 +462,188 @@ async fn root_settlement_pins_terminal_ancestors_while_descendants_remain_live()
 }
 
 #[tokio::test]
+async fn root_lease_preserves_parent_and_grandchild_before_settlement_starts() {
+    use tinyagents_harness::cancel::CancellationToken;
+    use tinyagents_harness::ids::RunId;
+
+    let jobs = SubAgentJobRegistry::new();
+    let lease = jobs
+        .retain_root_run_descendants(&RunId::new("leased-root"), "owner")
+        .unwrap();
+    let registration = |task: &str, parent: &str| DriverJobRegistration {
+        key: crate::subagent::SubagentTaskKey {
+            root_run_id: "leased-root".into(),
+            parent_run_id: parent.into(),
+            thread_id: None,
+            task_id: task.into(),
+        },
+        agent: task.into(),
+        owner: "owner".into(),
+        workspace: None,
+        cancellation: CancellationToken::new(),
+        steering: None,
+        run_queue: None,
+        continuing: false,
+    };
+    let (parent, _, _, _, _) = jobs
+        .register_driver_job_with_parent_run(
+            registration("leased-parent", "ignored"),
+            RunId::new("leased-root"),
+        )
+        .unwrap();
+    jobs.set_attempt_run_id(&parent, "leased-parent-attempt");
+    jobs.mark_running(&parent);
+    let (grandchild, _, _, _, _) = jobs
+        .register_driver_job_with_parent_run(
+            registration("leased-grandchild", "ignored"),
+            RunId::new("leased-parent-attempt"),
+        )
+        .unwrap();
+    jobs.set_attempt_run_id(&grandchild, "leased-grandchild-attempt");
+    jobs.mark_running(&grandchild);
+    jobs.mark_driver_result(
+        &parent,
+        Ok(SubagentOutcome::completed(parent.as_str(), "retained parent output")),
+    );
+
+    for index in 0..=super::types::SUBAGENT_JOB_SOFT_CAP {
+        let task = format!("lease-pressure-{index}");
+        let (id, _, _, _, _) = jobs
+            .register_driver_job_with_parent_run(
+                registration(&task, "ignored"),
+                RunId::new("unrelated-root"),
+            )
+            .unwrap();
+        jobs.set_attempt_run_id(&id, &format!("{task}-attempt"));
+        jobs.mark_driver_result(
+            &id,
+            Ok(SubagentOutcome::completed(id.as_str(), "pressure")),
+        );
+    }
+    assert!(jobs.get(parent.as_str()).is_some());
+
+    let cancellation = CancellationToken::new();
+    let settling = lease.settle(
+        tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+        &cancellation,
+    );
+    tokio::pin!(settling);
+    tokio::select! {
+        biased;
+        result = &mut settling => panic!("live grandchild settled unexpectedly: {result:?}"),
+        _ = tokio::task::yield_now() => {},
+    }
+    jobs.mark_driver_result(
+        &grandchild,
+        Ok(SubagentOutcome::completed(grandchild.as_str(), "grandchild output")),
+    );
+    let settled = settling.await.unwrap();
+    assert_eq!(settled.len(), 2);
+    assert!(settled.iter().any(|job| {
+        job.id == parent
+            && job.output.as_deref() == Some("retained parent output")
+    }));
+    assert!(settled.iter().any(|job| job.id == grandchild));
+}
+
+#[tokio::test]
+async fn root_lease_keeps_completed_history_and_overlapping_lease_pins_independent() {
+    use tinyagents_harness::cancel::CancellationToken;
+    use tinyagents_harness::ids::RunId;
+
+    let jobs = SubAgentJobRegistry::new();
+    let root = RunId::new("history-root");
+    let first = jobs.retain_root_run_descendants(&root, "owner").unwrap();
+    let second = jobs.retain_root_run_descendants(&root, "owner").unwrap();
+    let (parent, _, _, _, _) = jobs
+        .register_driver_job_with_parent_run(
+            DriverJobRegistration {
+                key: crate::subagent::SubagentTaskKey {
+                    root_run_id: "history-root".into(),
+                    parent_run_id: "ignored".into(),
+                    thread_id: None,
+                    task_id: "history-parent".into(),
+                },
+                agent: "worker".into(),
+                owner: "owner".into(),
+                workspace: None,
+                cancellation: CancellationToken::new(),
+                steering: None,
+                run_queue: None,
+                continuing: false,
+            },
+            root.clone(),
+        )
+        .unwrap();
+    jobs.set_attempt_run_id(&parent, "history-parent-attempt");
+    let (child, _, _, _, _) = jobs
+        .register_driver_job_with_parent_run(
+            DriverJobRegistration {
+                key: crate::subagent::SubagentTaskKey {
+                    root_run_id: "history-root".into(),
+                    parent_run_id: "ignored".into(),
+                    thread_id: None,
+                    task_id: "history-child".into(),
+                },
+                agent: "worker".into(),
+                owner: "owner".into(),
+                workspace: None,
+                cancellation: CancellationToken::new(),
+                steering: None,
+                run_queue: None,
+                continuing: false,
+            },
+            RunId::new("history-parent-attempt"),
+        )
+        .unwrap();
+    jobs.set_attempt_run_id(&child, "history-child-attempt");
+    jobs.mark_driver_result(
+        &parent,
+        Ok(SubagentOutcome::completed(parent.as_str(), "parent")),
+    );
+    jobs.mark_driver_result(
+        &child,
+        Ok(SubagentOutcome::completed(child.as_str(), "child")),
+    );
+    assert_eq!(jobs.controls()[&parent].waiters.load(std::sync::atomic::Ordering::Acquire), 2);
+    drop(first);
+    assert_eq!(jobs.controls()[&parent].waiters.load(std::sync::atomic::Ordering::Acquire), 1);
+    assert!(jobs.get(parent.as_str()).is_some());
+
+    for index in 0..=super::types::SUBAGENT_JOB_SOFT_CAP {
+        let task = format!("history-pressure-{index}");
+        let (id, _, _, _, _) = jobs
+            .register_driver_job_with_parent_run(
+                DriverJobRegistration {
+                    key: crate::subagent::SubagentTaskKey {
+                        root_run_id: "history-root".into(),
+                        parent_run_id: "ignored".into(),
+                        thread_id: None,
+                        task_id: task.clone(),
+                    },
+                    agent: "worker".into(),
+                    owner: "owner".into(),
+                    workspace: None,
+                    cancellation: CancellationToken::new(),
+                    steering: None,
+                    run_queue: None,
+                    continuing: false,
+                },
+                RunId::new("pressure-root"),
+            )
+            .unwrap();
+        jobs.set_attempt_run_id(&id, &format!("{task}-attempt"));
+        jobs.mark_driver_result(
+            &id,
+            Ok(SubagentOutcome::completed(id.as_str(), "pressure")),
+        );
+    }
+    assert!(jobs.get(parent.as_str()).is_some());
+    drop(second);
+    assert!(jobs.get(parent.as_str()).is_none(), "last lease drop releases retention and allows pruning");
+}
+
+#[tokio::test]
 async fn resumed_job_keeps_old_attempt_edges_without_importing_new_root_siblings() {
     use tinyagents_harness::cancel::CancellationToken;
     use tinyagents_harness::ids::RunId;
