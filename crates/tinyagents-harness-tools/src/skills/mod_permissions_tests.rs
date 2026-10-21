@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use tinyagents_harness::tool::CanonicalSharedToolAdapter;
+use tinyagents_harness::tool::{BoundToolCall, CanonicalSharedToolAdapter};
 use tinytools::{PermissionLevel, Tool, ToolPolicyEngine, ToolResult};
 
 struct PackExtension;
@@ -171,7 +171,6 @@ fn unresolved_named_calls_keep_the_ceiling_even_in_an_all_read_only_registry() {
 
 #[test]
 fn pinned_disclosure_stays_read_only_in_a_mixed_pack() {
-    let (_tools, dispatcher) = tools();
     let (handle, _tools, dispatcher) = tools();
     let bound = handle.bind_call(dispatcher, &json!({"skill": "code"}));
 
