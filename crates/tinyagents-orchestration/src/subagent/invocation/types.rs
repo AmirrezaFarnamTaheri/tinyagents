@@ -335,6 +335,9 @@ pub struct SubAgentJobRegistry {
     pub(crate) next_terminal_sequence: Arc<AtomicU64>,
     /// Changes whenever root-lineage membership or a job lifecycle changes.
     pub(crate) changes: watch::Sender<u64>,
+    /// Root-scoped retention leases; lock order is `root_leases -> controls`.
+    pub(crate) root_leases: Arc<Mutex<HashMap<u64, RootLeaseRecord>>>,
+    pub(crate) next_root_lease_id: Arc<AtomicU64>,
 }
 
 impl Default for SubAgentJobRegistry {
@@ -351,6 +354,8 @@ impl Default for SubAgentJobRegistry {
             driver_jobs: Arc::default(),
             next_terminal_sequence: Arc::new(AtomicU64::new(1)),
             changes: watch::channel(0).0,
+            root_leases: Arc::default(),
+            next_root_lease_id: Arc::new(AtomicU64::new(1)),
         }
     }
 }
@@ -406,6 +411,7 @@ thread_local! {
 /// The adapter-owned half of a job: the status publisher and cancel flag.
 pub(crate) struct JobControl {
     pub(crate) status: watch::Sender<SubAgentJob>,
+    pub(crate) owner: String,
     /// Whether cancellation was requested while the child was still running.
     /// The job remains non-terminal until the child reports its result.
     pub(crate) cancellation_requested: bool,
@@ -420,6 +426,13 @@ pub(crate) struct JobControl {
     pub(crate) terminal_sequence: AtomicU64,
     /// Native parent-to-attempt edges, including every resumed attempt.
     pub(crate) lineage: JobLineage,
+}
+
+pub(crate) struct RootLeaseRecord {
+    pub(crate) root_run_id: tinyagents_harness::ids::RunId,
+    pub(crate) owner: String,
+    pub(crate) reachable_runs: std::collections::HashSet<tinyagents_harness::ids::RunId>,
+    pub(crate) pinned_jobs: std::collections::HashSet<SubAgentJobId>,
 }
 
 #[derive(Default)]
