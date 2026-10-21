@@ -26,8 +26,9 @@ crate cycle.
 ## Model tool
 
 `GoalTool` is constructed directly with a `GoalToolKind` and shared `GoalStore`.
-The model-facing kinds are `Get`, `Set`, and `Complete`; pause, resume, and
-clear remain host controls. The target thread comes from
+The model-facing kinds are `Get`, `Set`, `Complete`, and `Resume`; pause and
+clear remain host controls. The model can resume a paused goal after it reads
+the incoming message. The target thread comes from
 `ToolExecutionContext::thread_id`, never a model argument.
 
 ## Persistence

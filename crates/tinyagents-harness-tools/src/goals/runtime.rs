@@ -9,7 +9,7 @@ use super::budget::GoalBudgetGuard;
 use super::observer::{GoalObserver, GoalUpdateThrottle};
 use super::prompt::active_goal_context_block;
 use super::store;
-use super::types::{ThreadGoal, ThreadGoalStatus};
+use super::types::ThreadGoal;
 use tinyagents_harness::error::Result;
 use tinyagents_harness::store::Store;
 
