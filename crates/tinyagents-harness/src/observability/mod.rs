@@ -1,4 +1,4 @@
-//! Durable observability for the harness — journals, status stores, and sinks.
+//! Durable and live observability for the harness, including provider dispatches.
 //!
 //! The live [`crate::events`] layer fans typed [`AgentEvent`]s out to
 //! in-process listeners. This module makes that history **durable and
@@ -32,6 +32,12 @@ mod supplemental;
 mod types;
 mod worker;
 
+pub mod physical_dispatch;
+pub use physical_dispatch::{
+    ObservedChatModel, PhysicalDispatchGuard, PhysicalDispatchMetadata, PhysicalDispatchObserver,
+    PhysicalDispatchOutcome, PhysicalDispatchStatus, PhysicalDispatchTerminal,
+    PhysicalDispatchUsage,
+};
 pub mod reaper;
 pub mod replay;
 #[cfg(feature = "langfuse")]
