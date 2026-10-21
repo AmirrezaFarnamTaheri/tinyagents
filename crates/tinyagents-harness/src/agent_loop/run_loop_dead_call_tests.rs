@@ -3,8 +3,6 @@
 use super::*;
 use std::sync::Arc;
 
-use crate::context::{RunConfig, RunContext};
-use crate::runtime::{AgentHarness, RunPolicy};
 use crate::testkit::ScriptedModel;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelResponse, ReasoningConfig, ReasoningEffort};
