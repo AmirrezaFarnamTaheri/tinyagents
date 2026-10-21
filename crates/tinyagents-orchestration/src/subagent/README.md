@@ -27,19 +27,21 @@ removes it.
 
 Hosts that need to settle a completed top-level run can call
 `SubAgentJobRegistry::settle_root_run_descendants`. Driver jobs retain the
-native root `RunId` from their validated `SubagentTaskKey`; ordinary
-`SubAgentTool` jobs retain it from the live parent context. Settlement filters
-by both this root identity and the caller's existing job owner, then waits for
-all matching jobs to become terminal and returns their final snapshots,
-including failures and cancellations. The call has one absolute deadline and
-observes caller cancellation. A root is not itself a registry job, so hosts
-must call it after that root run can no longer admit direct children. Paused
-`AwaitingInput` jobs remain nonterminal and keep settlement open.
+native parent-to-child-attempt edges. `DriverSubAgentTool` records the actual
+caller and child context run ids; retries and durable continuations append new
+edges while preserving earlier attempts. Settlement traverses only edges
+reachable from the requested run and filters each job by the caller's existing
+owner. It waits for every reachable job to become terminal and returns final
+snapshots, including failures and cancellations. The call has one absolute
+deadline and observes caller cancellation. A root is not itself a registry
+job, so hosts must call it after that root can no longer admit direct children.
+Paused `AwaitingInput` jobs remain nonterminal and keep settlement open.
 
-Durable continuations keep their original `SubagentTaskKey` and therefore
-remain associated with its original root identity even when executed with a
-fresh run context. Hosts should use the same root scope when settling that
-durable lifecycle.
+The legacy `register_driver_job` API can recover a historical parent run from
+its durable key but cannot infer the native child attempt id. Use
+`register_driver_job_with_lineage` when both live run contexts are available;
+the settlement traversal can only follow descendants whose actual child
+attempt ids have been recorded.
 
 The durable lifecycle surface coordinates a host-resolved subagent lifecycle
 without making product-policy decisions. Its dependency direction is:
