@@ -119,8 +119,12 @@ async fn a_settled_record_is_persisted_without_its_result() {
         let id = task_id_key(task).unwrap();
         async move { docs.get(COMPLETIONS, &id).await.unwrap().unwrap().doc }
     };
-    for task in ["delivered", "tombstoned", "gave-up", "cancelled"] {
+    for (index, task) in ["delivered", "tombstoned", "gave-up", "cancelled"]
+        .into_iter()
+        .enumerate()
+    {
         let mut record = record(task, "p");
+        record.finished_at = UNIX_EPOCH + Duration::from_secs(index as u64 + 1);
         record.result.omitted_chars = 7;
         record.result.artifact = Some(crate::completions::CompletionArtifact {
             id: format!("art-{task}"),
