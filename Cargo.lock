@@ -2020,7 +2020,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-definition"
-version = "2.2.0"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2035,7 +2035,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-graph"
-version = "2.2.0"
+version = "2.10.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -2054,7 +2054,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-harness"
-version = "2.2.0"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2096,7 +2096,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-harness-tools"
-version = "2.2.0"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2116,7 +2116,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-hooks"
-version = "2.2.0"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2134,7 +2134,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-integration-tests"
-version = "2.2.0"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2162,7 +2162,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-live"
-version = "2.2.0"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2175,7 +2175,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-orchestration"
-version = "2.2.0"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2206,7 +2206,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-registry"
-version = "2.2.0"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2222,7 +2222,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-runtime"
-version = "2.2.0"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2243,7 +2243,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-session"
-version = "2.2.0"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2269,7 +2269,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-tasks"
-version = "2.2.0"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2473,7 +2473,7 @@ dependencies = [
 
 [[package]]
 name = "tinytools"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2483,7 +2483,7 @@ dependencies = [
 
 [[package]]
 name = "tinytools-agent"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "regex",
  "serde",
@@ -2494,7 +2494,7 @@ dependencies = [
 
 [[package]]
 name = "tinytools-std"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
