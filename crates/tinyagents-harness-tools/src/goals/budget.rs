@@ -72,10 +72,11 @@ pub async fn account_turn(
 ///
 /// Built from a goal that is active or paused and has a budget; a goal with
 /// neither is nothing to enforce. Including paused goals lets the host keep a
-/// guard installed when the model resumes a goal during the turn. The captured `goal_id` is what makes the guard safe to
-/// hold across a long turn: if the objective is replaced while the turn runs,
-/// the new goal has a new id, the guard stops matching, and it quietly stands
-/// down instead of enforcing a budget that no longer applies.
+/// guard installed when the model resumes a goal during the turn. The captured
+/// `goal_id` is what makes the guard safe to hold across a long turn: if the
+/// objective is replaced while the turn runs, the new goal has a new id, the
+/// guard stops matching, and it quietly stands down instead of enforcing a
+/// budget that no longer applies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalBudgetGuard {
     thread_id: String,
@@ -87,7 +88,7 @@ impl GoalBudgetGuard {
     /// A guard for an active or paused `goal`, or `None` when it is complete
     /// or has no budget.
     pub fn for_goal(goal: &ThreadGoal) -> Option<Self> {
-        if !goal.status.is_active() && !goal.status.is_paused() {
+        if !matches!(goal.status, ThreadGoalStatus::Active | ThreadGoalStatus::Paused) {
             return None;
         }
         Some(Self {
