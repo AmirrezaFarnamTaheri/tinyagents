@@ -1,8 +1,9 @@
 //! Async tool adapter for the host-planned [`SubagentDriver`] lifecycle.
 //!
 //! The request factory is host supplied: it owns authorization, child context
-//! construction, durable task identity, and opaque planner options. The driver
-//! then remains the only path that plans, executes, and persists the run.
+//! construction, durable task identity, and opaque planner options. Every
+//! accepted call starts a background job and returns its status immediately;
+//! waiting and completion delivery remain separate host operations.
 
 use std::future::Future;
 use std::marker::PhantomData;
