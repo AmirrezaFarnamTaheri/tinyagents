@@ -818,10 +818,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // cancel-safe, and the pre-call `is_cancelled()` check above
                     // still short-circuits before the request is ever issued.
                     let fut = async {
-                        model
-                            .invoke(state, attempt_request.clone())
-                            .await
-                            .map_err(TinyAgentsError::from)
+                        let (result, refusal) = crate::cost::with_dispatch_outcome_scope(
+                            model.invoke(state, attempt_request.clone()),
+                        )
+                        .await;
+                        match refusal {
+                            Some(refusal) => {
+                                Err(TinyAgentsError::PhysicalDispatchAdmission(refusal))
+                            }
+                            None => result.map_err(TinyAgentsError::from),
+                        }
                     };
                     let budgeted = Self::with_call_budget(
                         remaining,
@@ -1319,6 +1325,36 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         model_name: &str,
         shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
+        let (result, refusal) =
+            crate::cost::with_dispatch_outcome_scope(self.invoke_model_streaming_once_scoped(
+                state,
+                ctx,
+                model,
+                request,
+                call_id,
+                deltas_emitted,
+                model_name,
+                shape,
+            ))
+            .await;
+        match refusal {
+            Some(refusal) => Err(TinyAgentsError::PhysicalDispatchAdmission(refusal)),
+            None => result,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn invoke_model_streaming_once_scoped(
+        &self,
+        state: &State,
+        ctx: &mut RunContext<Ctx>,
+        model: &Arc<dyn ChatModel<State>>,
+        request: &ModelRequest,
+        call_id: &CallId,
+        deltas_emitted: &mut usize,
+        model_name: &str,
+        shape: &super::dialect::CallShape,
+    ) -> Result<ModelResponse> {
         let recovery = &shape.recovery;
         // Start the first-event window before opening the provider stream so
         // a provider that hangs while establishing the stream is bounded too.
@@ -1328,14 +1364,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let first_event_timeout = positive_window(self.policy.limits.stream_first_event_timeout_ms);
         let first_event_deadline =
             first_event_timeout.map(|window| tokio::time::Instant::now() + window);
+        let open_stream = async {
+            model
+                .stream(state, request.clone())
+                .await
+                .map_err(TinyAgentsError::from)
+        };
         let stream_result = async {
             match first_event_deadline {
-                Some(deadline) => {
-                    tokio::time::timeout_at(deadline, model.stream(state, request.clone()))
-                        .await
-                        .map_err(|_| ())
-                }
-                None => Ok(model.stream(state, request.clone()).await),
+                Some(deadline) => tokio::time::timeout_at(deadline, open_stream)
+                    .await
+                    .map_err(|_| ()),
+                None => Ok(open_stream.await),
             }
         };
         let mut stream = tokio::select! {
