@@ -38,6 +38,7 @@ tracing = "0.1"
 # module (tinyflows, tinybox, tinychannels, ...) and tinyinference names, so a
 # host's graph holds one set of port types with no [patch] to reconcile them.
 tinystoragedrivers-core = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
+tinystoragedrivers-file = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
 tinystoragedrivers-sqlite = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
 uuid = { version = "1", features = ["v4"] }
 
