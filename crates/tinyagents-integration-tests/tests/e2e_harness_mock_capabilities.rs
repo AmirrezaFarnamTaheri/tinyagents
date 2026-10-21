@@ -210,7 +210,7 @@ async fn tool_loop_compacts_old_results_and_runs_all_lifecycle_hooks() {
 #[tokio::test]
 async fn mock_matrix_composes_regular_tools() {
     for use_lookup in [false, true] {
-    let label = format!("lookup={use_lookup}");
+        let label = format!("lookup={use_lookup}");
         let mut harness: AgentHarness<()> = AgentHarness::new();
         let mut calls = Vec::new();
         if use_lookup {
@@ -235,7 +235,7 @@ async fn mock_matrix_composes_regular_tools() {
             .invoke_default(&(), vec![Message::user(format!("run {label}"))])
             .await
             .unwrap_or_else(|error| panic!("scenario {label} failed: {error:?}"));
-        let expected_tools = usize::from(use_lookup) + usize::from(use_subagent);
+        let expected_tools = usize::from(use_lookup);
         assert_eq!(run.tool_calls, expected_tools, "scenario {label}");
         assert_eq!(
             run.model_calls,
@@ -243,5 +243,5 @@ async fn mock_matrix_composes_regular_tools() {
             "scenario {label}"
         );
         assert_eq!(run.text(), Some("final".to_string()), "scenario {label}");
-}
+    }
 }
