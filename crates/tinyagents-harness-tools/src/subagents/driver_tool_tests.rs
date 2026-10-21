@@ -45,6 +45,25 @@ impl ChatModel<()> for CloseCorrectionModel {
 
 struct Planner;
 
+struct ReplacingPlanner;
+
+#[async_trait]
+impl SubagentPlanner<(), ()> for ReplacingPlanner {
+    async fn prepare(
+        &self,
+        request: SubagentRequest<(), ()>,
+    ) -> std::result::Result<PreparedSubagent<()>, SubagentError> {
+        let parts = request.into_parts();
+        Ok(PreparedSubagent::new(
+            parts.task_key.task_id,
+            "worker",
+            vec![Message::user(parts.input)],
+            ToolSnapshot::new(vec![]).unwrap(),
+            RunContext::new(RunConfig::new("planner-replaced-actual"), ()),
+        ))
+    }
+}
+
 #[async_trait]
 impl SubagentPlanner<(), ()> for Planner {
     async fn prepare(
@@ -1313,6 +1332,55 @@ async fn driver_subagent_tool_routes_execution_through_the_driver() {
         .unwrap();
     assert_eq!(settled.len(), 1);
     assert_eq!(settled[0].status, SubAgentJobStatus::Completed);
+}
+
+#[tokio::test]
+async fn driver_job_records_the_planners_actual_run_context_for_descendant_settlement() {
+    let jobs = SubAgentJobRegistry::new();
+    let driver = Arc::new(
+        SubagentDriver::new(SubagentCapabilities {
+            planner: Some(Arc::new(ReplacingPlanner)),
+            executor: Some(Arc::new(Executor)),
+            persistence: Some(Arc::new(Persistence)),
+        })
+        .unwrap(),
+    );
+    let tool = DriverSubAgentTool::new(
+        "subagent",
+        "worker description",
+        driver,
+        |_: &(), parent: &RunContext<()>, _: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("worker-request-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(parent, child, "planner-replaced-task", (), "input", None)
+        },
+        |_| None,
+    )
+    .with_job_registry(jobs.clone());
+    let parent = RunContext::new(RunConfig::new("planner-replaced-parent"), ());
+    ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("planner-replaced-driver"),
+        json!({"input":"ignored"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+
+    let settled = jobs
+        .settle_root_run_descendants(
+            parent.run_id(),
+            parent.instance_id().to_string(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0].subagent_run_id.as_deref(), Some("planner-replaced-actual"));
 }
 
 #[tokio::test]
