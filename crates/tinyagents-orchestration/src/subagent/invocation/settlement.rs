@@ -22,7 +22,7 @@ impl SubAgentJobRegistry {
         root_run_id: &tinyagents_harness::ids::RunId,
         owner: impl ToString,
         deadline: tokio::time::Instant,
-        cancellation: &CancellationToken,
+        cancellation: &tinyagents_harness::cancel::CancellationToken,
     ) -> Result<Vec<SubAgentJob>, SubAgentJobError> {
         let owner = owner.to_string();
         let mut changes = self.changes.subscribe();
