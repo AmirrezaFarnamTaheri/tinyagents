@@ -27,7 +27,6 @@ const MAX_ERROR_CHARS: usize = 160;
 
 /// Argument keys that carry a shell command.
 const COMMAND_KEYS: &[&str] = &["command", "cmd", "script"];
-/// Argument keys that carry a file path.
 /// What the ledger keeps of `call` while it runs.
 pub(super) fn call_record(call: &ToolCall) -> CallRecord {
     let command = string_arg(&call.arguments, COMMAND_KEYS);
@@ -36,7 +35,7 @@ pub(super) fn call_record(call: &ToolCall) -> CallRecord {
     let mut written_paths: Vec<String> = file_operations
         .modified()
         .into_iter()
-        .map(str::to_owned)
+        .map(|path| one_line(path, MAX_SUMMARY_CHARS))
         .collect();
     for path in patch_paths(&call.arguments) {
         if !written_paths.contains(&path) {
