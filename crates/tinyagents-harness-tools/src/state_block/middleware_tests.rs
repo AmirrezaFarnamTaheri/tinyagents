@@ -306,5 +306,9 @@ async fn the_block_stays_last_when_a_later_note_is_pushed() {
                 .any(|m| m.text().contains("web budget exhausted")),
             "the other note is kept (hoists={hoists})"
         );
+        assert!(
+            last.rfind(STATE_BLOCK_HEADER) > last.rfind("web budget exhausted"),
+            "the block follows same-message guidance (hoists={hoists}): {last}"
+        );
     }
 }
