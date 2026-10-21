@@ -131,7 +131,7 @@ async fn provider_spawn_error_includes_the_os_source() {
     let provider = ClaudeAgentSdkProvider::new(config);
 
     let error = provider
-        .invoke_cli(None, "hello", "claude-sonnet-4-6")
+        .invoke_cli(None, "hello", "claude-sonnet-4-6", None)
         .await
         .expect_err("missing binary must fail");
 
@@ -255,6 +255,335 @@ printf '%s\n' '{"type":"result","result":"Calling.<tool_call>{\"name\":\"lookup\
             .profile()
             .and_then(|profile| profile.provider.as_deref()),
         Some("claude-agent-sdk")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn inspection_invocation_uses_supported_cli_flags_and_caps_output_with_frozen_auth() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = dir.path().join("claude-inspection");
+    let args_path = dir.path().join("args.txt");
+    let input_path = dir.path().join("input.txt");
+    let auth_path = dir.path().join("auth.txt");
+    let cap_path = dir.path().join("cap.txt");
+    let endpoint_path = dir.path().join("endpoint.txt");
+    let home_path = dir.path().join("home.txt");
+    let canonical_home_path = dir.path().join("canonical-home.txt");
+    let cwd_path = dir.path().join("cwd.txt");
+    let isolated_paths = dir.path().join("isolated-paths.txt");
+    let state_path = dir.path().join("state.txt");
+    let staging = dir.path().join("claude-inspection.staging");
+    let source = format!(
+        "#!/bin/sh\n\
+         case \" $* \" in *\" --no-color \"*) echo 'unsupported --no-color' >&2; exit 64;; esac\n\
+         case \" $* \" in *\" --output-format stream-json \"*)\n\
+           case \" $* \" in *\" --verbose \"*) ;; *) echo 'stream-json requires --verbose' >&2; exit 65;; esac;;\n\
+         esac\n\
+         printf '%s\\n' \"$@\" > '{}'\n\
+         cat > '{}'\n\
+         printf '%s' \"${{ANTHROPIC_API_KEY-}}\" > '{}'\n\
+         printf '%s' \"${{CLAUDE_CODE_MAX_OUTPUT_TOKENS-}}\" > '{}'\n\
+         printf '%s' \"${{ANTHROPIC_BASE_URL-}}\" > '{}'\n\
+         printf '%s' \"$HOME\" > '{}'\n\
+         (cd \"$HOME\" && pwd -P) > '{}'\n\
+         pwd > '{}'; printf '%s|' \"$TMPDIR\" \"$XDG_CONFIG_HOME\" \"$XDG_DATA_HOME\" \"$XDG_STATE_HOME\" \"$XDG_CACHE_HOME\" \"$USERPROFILE\" \"$APPDATA\" \"$LOCALAPPDATA\" \"$TEMP\" \"$TMP\" > '{}'\n\
+         if [ -e \"$HOME/.claude\" ]; then printf yes > '{}'; else printf no > '{}'; fi\n\
+         printf '%s\\n' '{{\"type\":\"result\",\"result\":\"OK\",\"is_error\":false}}'\n",
+        args_path.display(),
+        input_path.display(),
+        auth_path.display(),
+        cap_path.display(),
+        endpoint_path.display(),
+        home_path.display(),
+        canonical_home_path.display(),
+        cwd_path.display(),
+        isolated_paths.display(),
+        state_path.display(),
+        state_path.display(),
+    );
+    std::fs::write(&staging, source).expect("write fake claude");
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
+        .expect("make fake claude executable");
+    std::fs::rename(&staging, &script).expect("publish fake claude");
+
+    let config = ClaudeAgentSdkConfig {
+        binary: script.display().to_string(),
+        ..Default::default()
+    };
+    let auth = ClaudeAgentSdkInspectionAuth::new(
+        Some("dummy-inspection-key".into()),
+        None,
+        Some("https://anthropic.example.test".into()),
+    )
+    .expect("explicit key is required for inspection");
+    let provider = ClaudeAgentSdkProvider::for_inspection(config, "model-for-inspection", auth);
+    let response = provider
+        .invoke(
+            &(),
+            ModelRequest::new(vec![Message::user("Reply OK")]).with_max_tokens(5),
+        )
+        .await
+        .expect("fake CLI response");
+
+    assert_eq!(response.text(), "OK");
+    let args = std::fs::read_to_string(args_path).expect("captured arguments");
+    for flag in [
+        "--bare",
+        "--no-session-persistence",
+        "--tools",
+        "--max-turns",
+        "--model",
+        "--system-prompt",
+        "--verbose",
+        "dontAsk",
+        "model-for-inspection",
+    ] {
+        assert!(
+            args.contains(flag),
+            "missing inspection argument {flag}: {args:?}"
+        );
+    }
+    assert!(
+        args.contains("--tools\n\n"),
+        "built-in tools must be disabled: {args:?}"
+    );
+    assert!(
+        args.contains("--max-turns\n1\n"),
+        "one turn is allowed: {args:?}"
+    );
+    assert!(
+        args.contains("--system-prompt\n\n"),
+        "the CLI default prompt must be replaced: {args:?}"
+    );
+    assert!(
+        !args.contains("--no-color"),
+        "unsupported CLI arguments must be omitted: {args:?}"
+    );
+    assert!(
+        !args.contains("dummy-inspection-key"),
+        "credentials must never be passed as argv"
+    );
+    assert_eq!(
+        std::fs::read_to_string(input_path).expect("captured prompt"),
+        "Reply OK",
+        "inspection receives no transcript or prior history"
+    );
+    assert_eq!(
+        std::fs::read_to_string(auth_path).expect("captured auth"),
+        "dummy-inspection-key"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cap_path).expect("captured token cap"),
+        "5"
+    );
+    assert_eq!(
+        std::fs::read_to_string(endpoint_path).expect("captured endpoint"),
+        "https://anthropic.example.test"
+    );
+    let cli_home = std::fs::read_to_string(home_path).expect("captured isolated HOME");
+    assert!(cli_home.starts_with(std::env::temp_dir().to_str().unwrap()));
+    let cli_cwd = std::fs::read_to_string(cwd_path).expect("captured isolated working directory");
+    let canonical_home = std::fs::read_to_string(canonical_home_path)
+        .expect("captured isolated HOME resolved while it existed");
+    assert_eq!(
+        cli_cwd.trim(),
+        canonical_home.trim(),
+        "the CLI must not discover repository instructions from the caller's working directory"
+    );
+    let isolated = std::fs::read_to_string(isolated_paths).expect("captured isolated user paths");
+    let isolated_paths = isolated.split('|').collect::<Vec<_>>();
+    assert_eq!(isolated_paths.len(), 11, "all path variables were captured");
+    assert!(
+        isolated_paths[..5].iter().all(|path| *path == cli_home),
+        "temporary and XDG profile paths must stay private: {isolated_paths:?}"
+    );
+    #[cfg(windows)]
+    assert!(
+        isolated_paths[5..10].iter().all(|path| *path == cli_home),
+        "Windows user and temporary profile paths must stay private: {isolated_paths:?}"
+    );
+    #[cfg(unix)]
+    assert!(
+        isolated_paths[5..10].iter().all(|path| path.is_empty()),
+        "Windows-only profile variables must not be inherited on Unix: {isolated_paths:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(state_path).expect("captured session state"),
+        "no",
+        "inspection must not expose or load an existing CLI login/session"
+    );
+}
+
+#[test]
+fn inspection_auth_rejects_opaque_cli_managed_login() {
+    let result = ClaudeAgentSdkInspectionAuth::new(None, None, None);
+    assert!(
+        result.is_err(),
+        "inspection cannot read the CLI's saved login"
+    );
+}
+
+#[test]
+fn inspection_child_environment_is_isolated_from_platform_profiles() {
+    let home = tempfile::tempdir().expect("private inspection home");
+    let private_home = home.path().to_string_lossy().into_owned();
+    let auth = ClaudeAgentSdkInspectionAuth::new(
+        Some("dummy-inspection-key".into()),
+        None,
+        Some("https://anthropic.example.test".into()),
+    )
+    .expect("explicit inspection key");
+    let mut command = tokio::process::Command::new("claude");
+    configure_inspection_child(&mut command, &auth, home.path(), 5);
+
+    let environment = command
+        .as_std()
+        .get_envs()
+        .filter_map(|(name, value)| {
+            value.map(|value| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(environment.get("HOME"), Some(&private_home));
+    assert_eq!(environment.get("TMPDIR"), Some(&private_home));
+    assert_eq!(
+        environment.get("ANTHROPIC_API_KEY"),
+        Some(&"dummy-inspection-key".into())
+    );
+    assert_eq!(
+        environment.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS"),
+        Some(&"5".into())
+    );
+    assert!(
+        environment.contains_key("PATH"),
+        "the configured CLI remains launchable"
+    );
+
+    #[cfg(not(windows))]
+    for key in [
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+    ] {
+        assert_eq!(
+            environment.get(key),
+            Some(&private_home),
+            "{key} must be private"
+        );
+    }
+    #[cfg(windows)]
+    for key in ["USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"] {
+        assert_eq!(
+            environment.get(key),
+            Some(&private_home),
+            "{key} must be private"
+        );
+    }
+}
+
+#[test]
+fn inspection_binary_path_is_resolved_before_switching_to_private_home() {
+    let caller_dir = std::env::current_dir().expect("current directory");
+    assert_eq!(
+        inspection_binary_path("tools/claude").expect("relative configured binary"),
+        caller_dir.join("tools/claude")
+    );
+    assert_eq!(
+        inspection_binary_path("claude").expect("PATH binary"),
+        std::path::PathBuf::from("claude"),
+        "a bare executable name must continue to resolve through PATH"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn inspection_invocation_clamps_requested_output_cap_to_five_tokens() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = dir.path().join("claude-inspection");
+    let cap_path = dir.path().join("cap.txt");
+    let staging = dir.path().join("claude-inspection.staging");
+    let source = format!(
+        "#!/bin/sh\nprintf '%s' \"${{CLAUDE_CODE_MAX_OUTPUT_TOKENS-}}\" > '{}'\nprintf '%s\\n' '{{\"type\":\"result\",\"result\":\"OK\",\"is_error\":false}}'\n",
+        cap_path.display()
+    );
+    std::fs::write(&staging, source).expect("write fake claude");
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
+        .expect("make fake claude executable");
+    std::fs::rename(&staging, &script).expect("publish fake claude");
+
+    let config = ClaudeAgentSdkConfig {
+        binary: script.display().to_string(),
+        ..Default::default()
+    };
+    let auth = ClaudeAgentSdkInspectionAuth::new(Some("dummy-key".into()), None, None)
+        .expect("explicit key is required");
+    let provider = ClaudeAgentSdkProvider::for_inspection(config, "model", auth);
+    provider
+        .invoke(
+            &(),
+            ModelRequest::new(vec![Message::user("Reply OK")]).with_max_tokens(64),
+        )
+        .await
+        .expect("fake CLI response");
+
+    assert_eq!(
+        std::fs::read_to_string(cap_path).expect("captured cap"),
+        "5",
+        "caller-supplied limits cannot raise the inspection cap"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn inspection_invocation_rejects_tool_requests_before_spawning() {
+    use std::os::unix::fs::PermissionsExt;
+    use tinyinference_llm::tool::ToolSchema;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = dir.path().join("claude-inspection");
+    let marker_path = dir.path().join("spawned.txt");
+    let staging = dir.path().join("claude-inspection.staging");
+    std::fs::write(
+        &staging,
+        format!("#!/bin/sh\nprintf spawned > '{}'\n", marker_path.display()),
+    )
+    .expect("write fake claude");
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
+        .expect("make fake claude executable");
+    std::fs::rename(&staging, &script).expect("publish fake claude");
+
+    let config = ClaudeAgentSdkConfig {
+        binary: script.display().to_string(),
+        ..Default::default()
+    };
+    let auth = ClaudeAgentSdkInspectionAuth::new(Some("dummy-key".into()), None, None)
+        .expect("explicit key is required");
+    let provider = ClaudeAgentSdkProvider::for_inspection(config, "model", auth);
+    let mut request = ModelRequest::new(vec![Message::user("Reply OK")]);
+    request.tools.push(ToolSchema::new(
+        "should-never-run",
+        "test tool",
+        serde_json::json!({"type": "object"}),
+    ));
+
+    let error = provider
+        .invoke(&(), request)
+        .await
+        .expect_err("inspection must refuse a request that could execute a tool");
+    assert!(matches!(error, tinyinference_llm::Error::Unsupported(_)));
+    assert!(
+        !marker_path.exists(),
+        "rejected calls must not spawn the CLI"
     );
 }
 

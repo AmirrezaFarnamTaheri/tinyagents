@@ -58,3 +58,14 @@ Not registered automatically; construct a `ClaudeAgentSdkProvider` directly
 model) and pass it to the harness like any other `ChatModel`.
 `ClaudeAgentSdkConfig::enabled` is a plain data field for the embedding
 application's own gating — this crate does not read it.
+
+Doctor may construct `ClaudeAgentSdkProvider::for_inspection` only with an
+explicit API key or auth token captured by its host. This path launches the CLI
+with `--bare`, an empty system prompt, `--tools ""`,
+`--no-session-persistence`, and one allowed turn. It sets
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS` from the request, capped at five, uses a
+temporary HOME, and passes only the frozen explicit credential and optional
+base URL. It rejects tool declarations and multi-message histories before
+spawning. Ordinary `new` / `for_model` calls retain their existing CLI
+configuration and behavior. A CLI-managed login cannot be used by inspection
+because its credential cannot be frozen by the host.
