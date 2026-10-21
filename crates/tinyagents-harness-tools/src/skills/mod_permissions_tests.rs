@@ -246,10 +246,8 @@ async fn read_only_permission_ceiling_refuses_a_packed_delete_before_execution()
         )
         .register_tool(dispatcher);
     harness.with_policy(tinyagents_harness::runtime::RunPolicy {
-        tool_rules: tinyagents_harness::tool::ToolRulePolicy {
-            permission_ceiling: Some(PermissionLevel::ReadOnly),
-            ..Default::default()
-        },
+        tool_rules: tinyagents_harness::tool::ToolRulePolicy::default()
+            .with_permission_ceiling(PermissionLevel::ReadOnly),
         ..Default::default()
     });
 
