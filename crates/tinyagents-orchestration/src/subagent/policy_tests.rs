@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tinyagents_harness::retry::RetryPolicy;
-use crate::subagent::SubAgentIncompleteKind as IncompleteKind;
+use crate::subagent::IncompleteKind;
 
 use super::*;
 

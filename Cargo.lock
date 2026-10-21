@@ -2269,6 +2269,7 @@ dependencies = [
  "tinyagents-definition",
  "tinyagents-harness",
  "tinyagents-registry",
+ "tinyagents-runtime",
  "tinyagents-session",
  "tinyagents-tasks",
  "tinyinference-llm",
