@@ -16,7 +16,6 @@ mod permanent_tool;
 mod prefix;
 mod session;
 mod tool_registration;
-mod tools;
 pub mod transcript;
 pub mod turn_driver;
 mod types;
@@ -35,7 +34,6 @@ pub use tool_registration::{
     RegistrationPlan, ToolAdmission, ToolRegistration, ToolSurfaceDiff, plan_registration,
     register_admitted, tool_surface_diff,
 };
-pub use tools::ToolSnapshot;
 pub use types::{
     CommitReceipt, ResumeMode, ResumePreparation, SessionResume, SessionStateView, SessionTerminal,
     SessionTurnOutcome, SessionTurnRequest, TranscriptCommitReceipt, TranscriptDelta,
