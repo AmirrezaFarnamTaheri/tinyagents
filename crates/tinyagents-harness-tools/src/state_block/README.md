@@ -44,8 +44,12 @@ cached prefix is untouched.
 ## Wiring
 
 ```rust
+use tinyagents_harness_tools::state_block::StateBlockMiddleware;
+
 harness.push_middleware(Arc::new(StateBlockMiddleware::new(todo_store)));
 ```
+
+Enable the crate's `state-block` feature to use this module.
 
 For a run with no thread id, `with_fallback_thread(key)` names the scope the
 host's `todo` tool falls back to (OpenHuman: the session id), so a headless run
