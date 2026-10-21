@@ -244,6 +244,23 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
         Ok(())
     }
 
+    async fn observe_nested_result(
+        &self,
+        ctx: &RunContext<C>,
+        _state: &S,
+        call: &ToolCall,
+        result: &ToolResult,
+    ) {
+        if call.name == TODO_TOOL_NAME {
+            return;
+        }
+        let record = ledger::call_record(call);
+        let output = result.output();
+        self.with_run(ctx.instance_id(), |ledger| {
+            ledger::record_result(ledger, record, result.is_error, &output);
+        });
+    }
+
     async fn on_error(&self, ctx: &mut RunContext<C>, _error: &TinyAgentsError) -> Result<()> {
         self.forget(ctx.instance_id());
         Ok(())
