@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::*;
 use crate::completions::{CompletionResult, RecordOutcome};
 use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
+use crate::storage::{COMPLETIONS, task_id_key};
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
 fn record(task: &str, parent: &str) -> CompletionRecord {
@@ -115,14 +116,8 @@ async fn a_settled_record_is_persisted_without_its_result() {
     let router = CompletionRouter::new(store.clone()).with_max_attempts(1);
     let doc_of = |task: &str| {
         let docs = docs.clone();
-        let id = hashed_id(&[task]);
-        async move {
-            docs.get(DriverCompletionStore::DEFAULT_COLLECTION, &id)
-                .await
-                .unwrap()
-                .unwrap()
-                .doc
-        }
+        let id = task_id_key(task).unwrap();
+        async move { docs.get(COMPLETIONS, &id).await.unwrap().unwrap().doc }
     };
     for task in ["delivered", "tombstoned", "gave-up", "cancelled"] {
         let mut record = record(task, "p");
