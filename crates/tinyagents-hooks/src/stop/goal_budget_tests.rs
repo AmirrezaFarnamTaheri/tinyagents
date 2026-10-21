@@ -49,7 +49,10 @@ async fn paused_goal_hook_stays_dormant_until_the_goal_resumes() {
 
     let resumed = goal_store::resume(&store, "thread").await.unwrap();
     assert_eq!(resumed.goal_id, active.goal_id);
-    assert!(matches!(hook.check(&state).await, StopDecision::Stop { .. }));
+    assert!(matches!(
+        hook.check(&state).await,
+        StopDecision::Stop { .. }
+    ));
 }
 
 #[tokio::test]
