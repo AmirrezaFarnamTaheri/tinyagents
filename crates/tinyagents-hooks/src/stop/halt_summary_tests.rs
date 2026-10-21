@@ -1,7 +1,7 @@
 use super::*;
 
-use crate::stop::{halt_summary, truncate_for_halt};
-use tinyagents_harness::turn_stop::{CopyProvider, CopyRequest};
+use crate::stop::halt_summary;
+use tinyagents_harness::turn_stop::{CopyProvider, CopyRequest, truncate_for_halt};
 
 struct Localized;
 
