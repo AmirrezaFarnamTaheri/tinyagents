@@ -209,7 +209,7 @@ async fn turn_preparation_preserves_paused_goals_until_model_resumes_them() {
     let goal = prepared.goal.unwrap();
     assert_eq!(goal.status, ThreadGoalStatus::Paused);
     assert!(prepared.context_block.is_none());
-    assert!(prepared.budget_guard.is_none());
+    assert!(prepared.budget_guard.is_some());
 }
 
 #[test]

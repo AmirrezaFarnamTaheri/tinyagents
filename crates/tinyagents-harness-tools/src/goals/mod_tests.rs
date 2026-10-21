@@ -530,10 +530,10 @@ mod budget_tests {
     }
 
     #[test]
-    fn a_guard_is_only_armed_for_an_active_goal_with_a_budget() {
+    fn a_guard_is_armed_for_active_or_paused_goals_with_a_budget() {
         assert!(GoalBudgetGuard::for_goal(&goal(ThreadGoalStatus::Active, Some(100), 0)).is_some());
         assert!(GoalBudgetGuard::for_goal(&goal(ThreadGoalStatus::Active, None, 0)).is_none());
-        assert!(GoalBudgetGuard::for_goal(&goal(ThreadGoalStatus::Paused, Some(100), 0)).is_none());
+        assert!(GoalBudgetGuard::for_goal(&goal(ThreadGoalStatus::Paused, Some(100), 0)).is_some());
         assert!(
             GoalBudgetGuard::for_goal(&goal(ThreadGoalStatus::Complete, Some(100), 0)).is_none()
         );
