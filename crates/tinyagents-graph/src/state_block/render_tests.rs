@@ -102,7 +102,7 @@ fn the_goal_comes_first_with_its_status() {
         .build()
         .unwrap();
     let mut goal = runtime
-        .block_on(crate::goals::store::set(
+        .block_on(tinyagents_harness_tools::goals::store::set(
             &store,
             "t",
             "Migrate the auth schema",
@@ -135,7 +135,7 @@ fn a_paused_goal_asks_the_model_to_decide() {
         .build()
         .unwrap();
     let mut goal = runtime
-        .block_on(crate::goals::store::set(
+        .block_on(tinyagents_harness_tools::goals::store::set(
             &store,
             "t",
             "Migrate the auth schema",

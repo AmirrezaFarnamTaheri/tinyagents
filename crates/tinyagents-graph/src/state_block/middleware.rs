@@ -14,8 +14,8 @@ use tinyinference_llm::model::{ModelRequest, ModelResponse};
 use tinyinference_llm::tool::ToolCall;
 use tinytools::ToolResult;
 
-use crate::goals::{ThreadGoal, store as goal_store};
-use crate::todos::{TodoItem, TodoStatus, store as todo_store};
+use tinyagents_harness_tools::goals::{ThreadGoal, store as goal_store};
+use tinyagents_harness_tools::todos::{TodoItem, TodoStatus, store as todo_store};
 
 use super::ledger;
 use super::render::render;

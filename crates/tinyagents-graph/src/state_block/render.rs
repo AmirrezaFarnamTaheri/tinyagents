@@ -1,7 +1,7 @@
 //! Rendering the run-state block from the goal, the plan and the ledger.
 
-use crate::goals::{ThreadGoal, ThreadGoalStatus};
-use crate::todos::{TodoItem, TodoStatus};
+use tinyagents_harness_tools::goals::{ThreadGoal, ThreadGoalStatus};
+use tinyagents_harness_tools::todos::{TodoItem, TodoStatus};
 
 use super::ledger::one_line;
 use super::types::RunLedger;
