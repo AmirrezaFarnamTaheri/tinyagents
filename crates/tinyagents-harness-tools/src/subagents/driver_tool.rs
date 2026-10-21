@@ -1,4 +1,4 @@
-//! `SubAgentTool` adapter for the host-planned [`SubagentDriver`] lifecycle.
+//! Async tool adapter for the host-planned [`SubagentDriver`] lifecycle.
 //!
 //! The request factory is host supplied: it owns authorization, child context
 //! construction, durable task identity, and opaque planner options. The driver
@@ -35,7 +35,7 @@ fn status_tool_result(
     if let Some(error) = error {
         value["error"] = Value::String(error);
     }
-    if matches!(status, "completed" | "running" | "queued") {
+    if matches!(status, "completed" | "running" | "queued" | "awaiting_input") {
         ToolResult::json(value)
     } else {
         ToolResult::error(value.to_string())
@@ -271,140 +271,81 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             .filter(|(_, _, created)| *created)
             .map(|(jobs, id, _)| JobSettleGuard::new(jobs.clone(), id.clone()));
         if let Some((jobs, id, false)) = &bridged_job {
-            let job = if target.is_some() {
-                jobs.get(id.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("registered subagent job disappeared"))?
-            } else {
-                jobs.wait_owned(id.as_str(), &owner).await?
-            };
+            let job = jobs
+                .get(id.as_str())
+                .ok_or_else(|| anyhow::anyhow!("registered subagent job disappeared"))?;
             let status = match job.status {
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Queued => "queued",
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Running => "running",
-                tinyagents_orchestration::subagent::SubAgentJobStatus::AwaitingInput => {
-                    "awaiting_input"
-                }
+                tinyagents_orchestration::subagent::SubAgentJobStatus::AwaitingInput => "awaiting_input",
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Completed => "completed",
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Failed => "failed",
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Incomplete => "incomplete",
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Cancelled => "cancelled",
             };
-            return Ok(status_tool_result(
-                public_task_id,
-                status,
-                job.output,
-                job.error,
-            ));
-        }
-        if let Some(target) = target {
-            let cancellation = request.run_context().cancellation.clone();
-            let driver = Arc::clone(&self.driver);
-            let completion = self.completion.clone();
-            let async_completion = self.async_completion.clone();
-            let detached_task_id = task_id.clone();
-            let completion_target = target.clone();
-            let bridge = bridged_job.clone();
-            let mut job_guard = job_guard;
-            tokio::spawn(async move {
-                let attempt_bridge = bridge.clone();
-                let attempt_observer = move |run_id: &tinyagents_harness::ids::RunId| {
-                    if let Some((jobs, id, _)) = &attempt_bridge {
-                        jobs.set_attempt_run_id(id, run_id.as_str());
-                    }
-                };
-                match driver
-                    .run_with_attempt_observer(request, cancellation, attempt_observer)
-                    .await
-                {
-                    Ok(result) => {
-                        if result.disposition
-                            != tinyagents_orchestration::subagent::SubagentPersistenceDisposition::ObserverCancelled
-                            && let Some(completion) = async_completion
-                        {
-                            completion(completion_target.clone(), Ok(result.clone())).await;
-                        }
-                        if let Some((jobs, id, _)) = &bridge {
-                            jobs.mark_driver_result(id, Ok(result.outcome.clone()));
-                        }
-                        if let Some(guard) = &mut job_guard {
-                            guard.disarm();
-                        }
-                        if result.should_emit_host_effects()
-                            && let Some(completion) = completion
-                        {
-                            completion(&completion_target, Ok(result.outcome));
-                        }
-                    }
-                    Err(error) => {
-                        let error = error.to_string();
-                        if let Some(completion) = async_completion {
-                            completion(completion_target.clone(), Err(error.clone())).await;
-                        }
-                        if let Some((jobs, id, _)) = &bridge {
-                            jobs.mark_driver_result(id, Err(error.clone()));
-                        }
-                        if let Some(guard) = &mut job_guard {
-                            guard.disarm();
-                        }
-                        if let Some(completion) = completion {
-                            completion(&completion_target, Err(error.clone()));
-                        }
-                        tracing::error!(task_id = %detached_task_id, error, "driver-backed subagent failed");
-                    }
-                }
-            });
-            return Ok(ToolResult::json(json!({
-                "task_id": public_task_id,
-                "status": "running",
-                "delivery_target": target,
-            })));
+            return Ok(status_tool_result(public_task_id, status, job.output, job.error));
         }
 
         let cancellation = request.run_context().cancellation.clone();
+        let driver = Arc::clone(&self.driver);
+        let completion = self.completion.clone();
+        let async_completion = self.async_completion.clone();
+        let detached_task_id = task_id.clone();
+        let bridge = bridged_job.clone();
         let mut job_guard = job_guard;
-        let attempt_bridge = bridged_job.clone();
-        let attempt_observer = move |run_id: &tinyagents_harness::ids::RunId| {
-            if let Some((jobs, id, _)) = &attempt_bridge {
-                jobs.set_attempt_run_id(id, run_id.as_str());
-            }
-        };
-        match self
-            .driver
-            .run_with_attempt_observer(request, cancellation, attempt_observer)
-            .await
-        {
-            Ok(result) => {
-                let outcome = result.outcome;
-                if let Some((jobs, id, _)) = &bridged_job {
-                    jobs.mark_driver_result(id, Ok(outcome.clone()));
+        tokio::spawn(async move {
+            let attempt_bridge = bridge.clone();
+            let attempt_observer = move |run_id: &tinyagents_harness::ids::RunId| {
+                if let Some((jobs, id, _)) = &attempt_bridge {
+                    jobs.set_attempt_run_id(id, run_id.as_str());
                 }
-                if let Some(guard) = &mut job_guard {
-                    guard.disarm();
-                }
-                let (status, error) = match &outcome.status {
-                    SubagentOutcomeKind::Completed => ("completed", None),
-                    SubagentOutcomeKind::AwaitingInput(_) => ("awaiting_input", None),
-                    SubagentOutcomeKind::Incomplete(incomplete) => {
-                        ("incomplete", Some(incomplete.reason.clone()))
+            };
+            match driver
+                .run_with_attempt_observer(request, cancellation, attempt_observer)
+                .await
+            {
+                Ok(result) => {
+                    if result.disposition
+                        != tinyagents_orchestration::subagent::SubagentPersistenceDisposition::ObserverCancelled
+                        && let (Some(target), Some(callback)) = (&target, &async_completion)
+                    {
+                        callback(target.clone(), Ok(result.clone())).await;
                     }
-                    SubagentOutcomeKind::Cancelled => ("cancelled", Some("cancelled".into())),
-                };
-                Ok(status_tool_result(
-                    public_task_id,
-                    status,
-                    Some(outcome.output),
-                    error,
-                ))
-            }
-            Err(error) => {
-                if let Some((jobs, id, _)) = &bridged_job {
-                    jobs.mark_driver_result(id, Err(error.to_string()));
+                    if let Some((jobs, id, _)) = &bridge {
+                        jobs.mark_driver_result(id, Ok(result.outcome.clone()));
+                    }
+                    if let Some(guard) = &mut job_guard {
+                        guard.disarm();
+                    }
+                    if result.should_emit_host_effects()
+                        && let (Some(target), Some(callback)) = (&target, &completion)
+                    {
+                        callback(target, Ok(result.outcome));
+                    }
                 }
-                if let Some(guard) = &mut job_guard {
-                    guard.disarm();
+                Err(error) => {
+                    let error = error.to_string();
+                    if let (Some(target), Some(callback)) = (&target, &async_completion) {
+                        callback(target.clone(), Err(error.clone())).await;
+                    }
+                    if let Some((jobs, id, _)) = &bridge {
+                        jobs.mark_driver_result(id, Err(error.clone()));
+                    }
+                    if let Some(guard) = &mut job_guard {
+                        guard.disarm();
+                    }
+                    if let (Some(target), Some(callback)) = (&target, &completion) {
+                        callback(target, Err(error.clone()));
+                    }
+                    tracing::error!(task_id = %detached_task_id, error, "driver-backed subagent failed");
                 }
-                Ok(ToolResult::error(format!("subagent driver: {error}")))
             }
+        });
+        let mut response = json!({ "task_id": public_task_id, "status": "running" });
+        if let Some(target) = target {
+            response["delivery_target"] = Value::String(target);
         }
+        Ok(ToolResult::json(response))
     }
 }
 
