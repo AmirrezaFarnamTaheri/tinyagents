@@ -1,5 +1,9 @@
 //! Root-turn observer hooks. Scopes attach once during harness construction;
 //! payload capture is opt-in and raw errors/provider options are never exposed.
+use super::physical_dispatch::{
+    PhysicalDispatchMetadata, PhysicalDispatchObserver, PhysicalDispatchOutcome,
+    PhysicalDispatchStatus, PhysicalDispatchTerminal,
+};
 use crate::context::RunContext;
 use crate::events::{AgentEvent, EventListener, EventRecord, EventSink};
 use crate::middleware::{MiddlewareModelOutcome, ModelHandler, ModelMiddleware};
@@ -58,6 +62,27 @@ pub enum TurnObservation {
         input: Option<Value>,
         /// Assistant message, only with explicit capture consent.
         output: Option<Value>,
+    },
+    /// One admitted physical provider invocation, independent of logical retries.
+    ModelDispatch {
+        /// Harness run identifier.
+        run_id: String,
+        /// Model call identifier when supplied by the harness.
+        call_id: Option<String>,
+        /// Requested model identifier.
+        requested_model: Option<String>,
+        /// Provider-reported answering model.
+        answered_model: Option<String>,
+        /// Provider finish reason.
+        finish_reason: Option<String>,
+        /// Wall-clock time in milliseconds.
+        duration_ms: u64,
+        /// Terminal outcome label.
+        status: PhysicalDispatchStatus,
+        /// Whether the provider reported a refusal response.
+        refused: bool,
+        /// Provider-reported usage.
+        usage: Option<ObservedUsage>,
     },
     /// A tool started or returned; `failed=None` denotes its start.
     Tool {
@@ -146,8 +171,32 @@ pub fn install<Ctx: Send + Sync + 'static>(
             policy.capture.tool_io = true;
             harness.with_policy(policy);
         }
-        harness.push_model_middleware(scope.clone());
+        harness.push_model_middleware(Arc::new(InstalledObserverMiddleware(scope.clone())));
         events.subscribe(scope);
+    }
+}
+
+/// Restores the captured observer task-local while an installed model hook runs.
+struct InstalledObserverMiddleware(Arc<ObserverScope>);
+
+#[async_trait]
+impl<Ctx: Send + Sync + 'static> ModelMiddleware<(), Ctx> for InstalledObserverMiddleware {
+    fn name(&self) -> &str {
+        "turn_observer"
+    }
+
+    async fn wrap_model(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &(),
+        request: ModelRequest,
+        next: ModelHandler<'_, (), Ctx>,
+    ) -> crate::error::Result<MiddlewareModelOutcome> {
+        with_observer(
+            Arc::clone(&self.0),
+            self.0.wrap_model(ctx, state, request, next),
+        )
+        .await
     }
 }
 impl EventListener for ObserverScope {
@@ -200,6 +249,72 @@ impl EventListener for ObserverScope {
             output,
         });
     }
+}
+
+impl PhysicalDispatchObserver for ObserverScope {
+    fn on_start(&self, metadata: &PhysicalDispatchMetadata) -> Box<dyn PhysicalDispatchTerminal> {
+        Box::new(DispatchTerminal {
+            observer: Arc::clone(&self.observer),
+            run_id: self.run_id().unwrap_or_default(),
+            metadata: metadata.clone(),
+        })
+    }
+}
+
+struct DispatchTerminal {
+    observer: Arc<dyn Observer>,
+    run_id: String,
+    metadata: PhysicalDispatchMetadata,
+}
+
+impl PhysicalDispatchTerminal for DispatchTerminal {
+    fn on_terminal(self: Box<Self>, outcome: PhysicalDispatchOutcome) {
+        let usage = outcome.usage.map(|usage| ObservedUsage {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cached_tokens: usage.cached_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+            cost_usd: usage.cost_usd,
+        });
+        self.observer.on_event(&TurnObservation::ModelDispatch {
+            run_id: self.run_id,
+            call_id: self.metadata.call_id,
+            requested_model: self.metadata.requested_model,
+            answered_model: outcome.answered_model,
+            finish_reason: outcome.finish_reason,
+            duration_ms: outcome.duration.as_millis().min(u128::from(u64::MAX)) as u64,
+            status: outcome.status,
+            refused: outcome.refused,
+            usage,
+        });
+    }
+}
+
+/// Wrap a provider so a turn's task-local observer receives physical dispatch events.
+pub fn observe_physical_dispatches(
+    model: Arc<dyn tinyinference_llm::model::ChatModel<()>>,
+) -> Arc<dyn tinyinference_llm::model::ChatModel<()>> {
+    let observer: Arc<dyn PhysicalDispatchObserver> = Arc::new(CurrentScopeDispatchObserver);
+    Arc::new(super::physical_dispatch::ObservedChatModel::new(
+        model, observer,
+    ))
+}
+
+struct CurrentScopeDispatchObserver;
+
+impl PhysicalDispatchObserver for CurrentScopeDispatchObserver {
+    fn on_start(&self, metadata: &PhysicalDispatchMetadata) -> Box<dyn PhysicalDispatchTerminal> {
+        match current_scope() {
+            Some(scope) => scope.on_start(metadata),
+            None => Box::new(NoopDispatchTerminal),
+        }
+    }
+}
+
+struct NoopDispatchTerminal;
+
+impl PhysicalDispatchTerminal for NoopDispatchTerminal {
+    fn on_terminal(self: Box<Self>, _: PhysicalDispatchOutcome) {}
 }
 #[async_trait]
 impl<Ctx: Send + Sync + 'static> ModelMiddleware<(), Ctx> for ObserverScope {
