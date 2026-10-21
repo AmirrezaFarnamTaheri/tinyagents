@@ -740,7 +740,7 @@ impl SubAgentJobRegistry {
             let new_edge = control.lineage.children.insert(run_id.clone());
             let changed = control.status.send_if_modified(|job| {
                 let changed = job.subagent_run_id.as_deref() != Some(run_id.as_str());
-                job.subagent_run_id = Some(run_id.to_owned());
+                job.subagent_run_id = Some(run_id.as_str().to_owned());
                 changed
             });
             if new_edge || changed {
