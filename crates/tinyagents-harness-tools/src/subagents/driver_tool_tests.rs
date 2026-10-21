@@ -1078,7 +1078,8 @@ impl SubagentPersistence for TerminalReplayPersistence {
 }
 
 #[tokio::test]
-async fn background_request_without_delivery_target_runs_inline() {
+async fn background_request_without_delivery_target_spawns_and_can_be_waited_separately() {
+    let jobs = SubAgentJobRegistry::new();
     let tool = DriverSubAgentTool::new(
         "worker",
         "worker description",
@@ -1097,14 +1098,15 @@ async fn background_request_without_delivery_target_runs_inline() {
             )
         },
         |_request| None,
-    );
+    )
+    .with_job_registry(jobs.clone());
     let parent = RunContext::new(RunConfig::new("parent"), ());
 
     let result = ToolDispatch::<(), ()>::execute(
         &tool,
         &(),
         CallId::new("call-1"),
-        json!({"input":"do work", "mode":"background"}),
+        json!({"input":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1113,8 +1115,14 @@ async fn background_request_without_delivery_target_runs_inline() {
 
     assert!(!result.is_error);
     let value: Value = serde_json::from_str(&result.output()).unwrap();
-    assert_eq!(value["status"], "completed");
-    assert_eq!(value["output"], "driver result");
+    assert_eq!(value["status"], "running");
+    assert_eq!(value["task_id"], "worker-task");
+    let job = jobs
+        .wait_owned(value["task_id"].as_str().unwrap(), &parent.instance_id().to_string())
+        .await
+        .unwrap();
+    assert_eq!(job.status, SubAgentJobStatus::Completed);
+    assert_eq!(job.output.as_deref(), Some("driver result"));
 }
 
 #[tokio::test]
