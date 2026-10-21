@@ -271,6 +271,7 @@ async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_froz
     let cap_path = dir.path().join("cap.txt");
     let endpoint_path = dir.path().join("endpoint.txt");
     let home_path = dir.path().join("home.txt");
+    let cwd_path = dir.path().join("cwd.txt");
     let state_path = dir.path().join("state.txt");
     let staging = dir.path().join("claude-inspection.staging");
     let source = format!(
@@ -281,6 +282,7 @@ async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_froz
          printf '%s' \"${{CLAUDE_CODE_MAX_OUTPUT_TOKENS-}}\" > '{}'\n\
          printf '%s' \"${{ANTHROPIC_BASE_URL-}}\" > '{}'\n\
          printf '%s' \"$HOME\" > '{}'\n\
+         pwd > '{}'\n\
          if [ -e \"$HOME/.claude\" ]; then printf yes > '{}'; else printf no > '{}'; fi\n\
          printf '%s\\n' '{{\"type\":\"result\",\"result\":\"OK\",\"is_error\":false}}'\n",
         args_path.display(),
@@ -289,6 +291,7 @@ async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_froz
         cap_path.display(),
         endpoint_path.display(),
         home_path.display(),
+        cwd_path.display(),
         state_path.display(),
         state_path.display(),
     );
@@ -368,6 +371,12 @@ async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_froz
     );
     let cli_home = std::fs::read_to_string(home_path).expect("captured isolated HOME");
     assert!(cli_home.starts_with(std::env::temp_dir().to_str().unwrap()));
+    let cli_cwd = std::fs::read_to_string(cwd_path).expect("captured isolated working directory");
+    assert_eq!(
+        cli_cwd.trim(),
+        cli_home,
+        "the CLI must not discover repository instructions from the caller's working directory"
+    );
     assert_eq!(
         std::fs::read_to_string(state_path).expect("captured session state"),
         "no",
