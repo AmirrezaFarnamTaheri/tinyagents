@@ -490,7 +490,9 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
                     "Claude inspection does not execute tools".into(),
                 ));
             }
-            if request.messages.len() != 1 || !matches!(request.messages.first(), Some(Message::User(_))) {
+            if request.messages.len() != 1
+                || !matches!(request.messages.first(), Some(Message::User(_)))
+            {
                 return Err(tinyinference_llm::Error::Unsupported(
                     "Claude inspection accepts one user message without history".into(),
                 ));
