@@ -466,6 +466,9 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
     /// Identity for harness response-cache scoping: the SDK binary and the
     /// selected model. No credential is involved on this path.
     fn cache_identity(&self) -> Option<String> {
+        if self.inspection_auth.is_some() {
+            return None;
+        }
         Some(format!(
             "claude_agent_sdk:{}:{}",
             self.config.binary,
@@ -481,7 +484,7 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
         _state: &(),
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
-        if let Some(auth) = self.inspection_auth.as_ref() {
+        if self.inspection_auth.is_some() {
             if !request.tools.is_empty() {
                 return Err(tinyinference_llm::Error::Unsupported(
                     "Claude inspection does not execute tools".into(),
@@ -501,7 +504,6 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
                 .invoke_cli(None, &request.messages[0].text(), model, request.max_tokens)
                 .await
                 .map_err(|error| tinyinference_llm::Error::Model(error.to_string()))?;
-            let _ = auth;
             return Ok(ModelResponse::assistant(output));
         }
         let messages = coalesce_tool_results(&request.messages);
