@@ -1200,7 +1200,7 @@ impl SubAgentJobRegistry {
         Ok(false)
     }
 
-    fn controls(
+    pub(super) fn controls(
         &self,
     ) -> std::sync::MutexGuard<'_, std::collections::HashMap<SubAgentJobId, JobControl>> {
         self.controls
