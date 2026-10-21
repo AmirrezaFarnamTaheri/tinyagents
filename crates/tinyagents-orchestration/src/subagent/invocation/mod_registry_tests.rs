@@ -9,40 +9,40 @@ use tinyagents_harness::ids::TaskId;
 /// Test fixture builder: all fixture jobs enter through the same driver
 /// registration path used by `DriverSubAgentTool`.
 #[derive(Default)]
-struct JobLink {
+struct RegistryFixtureMetadata {
     parent_thread_id: Option<String>,
     workspace: Option<tinytools::WorkspaceDescriptor>,
 }
 
 trait RegistryTestHelpers {
-    fn create(&self, agent: &str, owner: impl ToString) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle);
-    fn create_with_cancellation(
+    fn create_fixture_job(&self, agent: &str, owner: impl ToString) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle);
+    fn register_fixture_job(
         &self,
         agent: &str,
         owner: impl ToString,
         cancellation: tinyagents_harness::cancel::CancellationToken,
-        link: JobLink,
+        link: RegistryFixtureMetadata,
     ) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle);
-    fn mark_result(&self, id: &SubAgentJobId, result: Result<(), TinyAgentsError>);
-    fn mark_budget_overrun(&self, id: &SubAgentJobId);
+    fn finish_fixture_job(&self, id: &SubAgentJobId, result: Result<(), TinyAgentsError>);
+    fn finish_budget_overrun(&self, id: &SubAgentJobId);
 }
 
 impl RegistryTestHelpers for SubAgentJobRegistry {
-    fn create(&self, agent: &str, owner: impl ToString) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle) {
-        self.create_with_cancellation(
+    fn create_fixture_job(&self, agent: &str, owner: impl ToString) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle) {
+        self.register_fixture_job(
             agent,
             owner,
             tinyagents_harness::cancel::CancellationToken::new(),
-            JobLink::default(),
+            RegistryFixtureMetadata::default(),
         )
     }
 
-    fn create_with_cancellation(
+    fn register_fixture_job(
         &self,
         agent: &str,
         owner: impl ToString,
         cancellation: tinyagents_harness::cancel::CancellationToken,
-        link: JobLink,
+        link: RegistryFixtureMetadata,
     ) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle) {
         use tinyagents_harness::ids::next_seq;
         let task = format!("registry-fixture-{}", next_seq());
@@ -66,7 +66,7 @@ impl RegistryTestHelpers for SubAgentJobRegistry {
         (id, steering)
     }
 
-    fn mark_result(&self, id: &SubAgentJobId, result: Result<(), TinyAgentsError>) {
+    fn finish_fixture_job(&self, id: &SubAgentJobId, result: Result<(), TinyAgentsError>) {
         let owner = self.controls.lock().unwrap().get(id).unwrap().owner.clone();
         if matches!(&result, Err(TinyAgentsError::Cancelled)) {
             let _ = self.cancel_owned(id.as_str(), owner);
@@ -76,7 +76,7 @@ impl RegistryTestHelpers for SubAgentJobRegistry {
         }
     }
 
-    fn mark_budget_overrun(&self, id: &SubAgentJobId) {
+    fn finish_budget_overrun(&self, id: &SubAgentJobId) {
         let mut outcome = SubagentOutcome::completed(id.as_str(), "late");
         outcome.status = SubagentOutcomeKind::Incomplete(crate::subagent::SubagentIncomplete::new("over budget")
             .with_kind(crate::subagent::IncompleteKind::BudgetExceeded));
@@ -115,7 +115,7 @@ fn register_driver_job(
 #[tokio::test]
 async fn jobs_are_registered_in_the_shared_detached_registry() {
     let jobs = SubAgentJobRegistry::new();
-    let (job_id, _steering) = jobs.create("worker", 7);
+    let (job_id, _steering) = jobs.create_fixture_job("worker", 7);
     let task_id = TaskId::new(job_id.as_str());
 
     let tasks = jobs.tasks();
@@ -1048,14 +1048,14 @@ async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
 async fn live_job_metadata_retains_parent_thread_and_workspace() {
     let jobs = SubAgentJobRegistry::new();
     let workspace = tinytools::WorkspaceDescriptor::new("/workspace/project");
-    let (job_id, _) = jobs.create_with_cancellation(
+    let (job_id, _) = jobs.register_fixture_job(
         "worker",
         7,
         tinyagents_harness::cancel::CancellationToken::new(),
-        JobLink {
+        RegistryFixtureMetadata {
             parent_thread_id: Some("thread-7".into()),
             workspace: Some(workspace.clone()),
-            ..JobLink::default()
+            ..RegistryFixtureMetadata::default()
         },
     );
     let snapshot = jobs
@@ -1077,24 +1077,24 @@ async fn thread_and_global_cancellation_select_jobs_by_retained_metadata() {
     let workspace = tinytools::WorkspaceDescriptor::new("/workspace/project");
     let thread_token = CancellationToken::new();
     let other_token = CancellationToken::new();
-    let (thread_job, _) = jobs.create_with_cancellation(
+    let (thread_job, _) = jobs.register_fixture_job(
         "worker",
         7,
         thread_token.clone(),
-        JobLink {
+        RegistryFixtureMetadata {
             parent_thread_id: Some("thread-a".into()),
             workspace: Some(workspace.clone()),
-            ..JobLink::default()
+            ..RegistryFixtureMetadata::default()
         },
     );
-    let (other_job, _) = jobs.create_with_cancellation(
+    let (other_job, _) = jobs.register_fixture_job(
         "worker",
         7,
         other_token.clone(),
-        JobLink {
+        RegistryFixtureMetadata {
             parent_thread_id: Some("thread-b".into()),
             workspace: Some(workspace.clone()),
-            ..JobLink::default()
+            ..RegistryFixtureMetadata::default()
         },
     );
 
@@ -1124,14 +1124,14 @@ async fn thread_cancellation_is_scoped_to_workspace() {
         (token_a.clone(), workspace_a.clone()),
         (token_b.clone(), workspace_b),
     ] {
-        jobs.create_with_cancellation(
+        jobs.register_fixture_job(
             "worker",
             7,
             token,
-            JobLink {
+            RegistryFixtureMetadata {
                 parent_thread_id: Some("same-thread".into()),
                 workspace: Some(workspace),
-                ..JobLink::default()
+                ..RegistryFixtureMetadata::default()
             },
         );
     }
@@ -1148,11 +1148,11 @@ async fn thread_cancellation_is_scoped_to_workspace() {
 #[tokio::test]
 async fn steering_is_reachable_while_live_and_released_when_settled() {
     let jobs = SubAgentJobRegistry::new();
-    let (job_id, _steering) = jobs.create("worker", 1);
+    let (job_id, _steering) = jobs.create_fixture_job("worker", 1);
     let task_id = TaskId::new(job_id.as_str());
     assert!(jobs.tasks().steering_handle_trusted(&task_id).is_ok());
 
-    jobs.mark_result(&job_id, Err(TinyAgentsError::Cancelled));
+    jobs.finish_fixture_job(&job_id, Err(TinyAgentsError::Cancelled));
 
     assert!(jobs.tasks().steering_handle_trusted(&task_id).is_err());
     // A settled job stays queryable; the registry never prunes it.
@@ -1452,9 +1452,9 @@ async fn waiter_keeps_terminal_snapshot_when_pruning_races_its_observation() {
 #[tokio::test]
 async fn control_errors_keep_their_documented_order() {
     let jobs = SubAgentJobRegistry::new();
-    let (live, _s) = jobs.create("worker", 1);
-    let (done, _s2) = jobs.create("worker", 1);
-    jobs.mark_result(&done, Err(TinyAgentsError::Cancelled));
+    let (live, _s) = jobs.create_fixture_job("worker", 1);
+    let (done, _s2) = jobs.create_fixture_job("worker", 1);
+    jobs.finish_fixture_job(&done, Err(TinyAgentsError::Cancelled));
     let not_found = |id: &str| SubAgentJobError::NotFound(id.to_owned());
 
     // Unknown id and foreign owner are both NotFound, even for a settled job.
@@ -1508,7 +1508,7 @@ async fn control_errors_keep_their_documented_order() {
 #[tokio::test]
 async fn poisoned_detached_registry_errors_remain_typed_across_job_controls() {
     let jobs = SubAgentJobRegistry::new();
-    let (id, _) = jobs.create("worker", 7);
+    let (id, _) = jobs.create_fixture_job("worker", 7);
 
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         super::types::PANIC_ON_JOB_META_CLONE.with(|panic| panic.set(true));
@@ -1548,7 +1548,7 @@ async fn poisoned_detached_registry_errors_remain_typed_across_job_controls() {
 async fn listings_are_sorted_by_job_id() {
     let jobs = SubAgentJobRegistry::new();
     for _ in 0..40 {
-        jobs.create("worker", 1);
+        jobs.create_fixture_job("worker", 1);
     }
     let all: Vec<String> = jobs.list().into_iter().map(|j| j.id.0).collect();
     let mut sorted = all.clone();
@@ -1560,9 +1560,9 @@ async fn listings_are_sorted_by_job_id() {
 #[tokio::test]
 async fn terminal_jobs_never_return_to_running() {
     let jobs = SubAgentJobRegistry::new();
-    let (id, _) = jobs.create("worker", 1);
+    let (id, _) = jobs.create_fixture_job("worker", 1);
     jobs.cancel_owned(id.as_str(), 1).expect("cancel");
-    jobs.mark_result(&id, Err(TinyAgentsError::Cancelled));
+    jobs.finish_fixture_job(&id, Err(TinyAgentsError::Cancelled));
     jobs.mark_running(&id);
     assert_eq!(
         jobs.get(id.as_str()).unwrap().status,
@@ -1573,16 +1573,16 @@ async fn terminal_jobs_never_return_to_running() {
 #[tokio::test]
 async fn settled_jobs_release_their_cancellation_token() {
     let jobs = SubAgentJobRegistry::new();
-    let (id, _) = jobs.create("worker", 1);
+    let (id, _) = jobs.create_fixture_job("worker", 1);
     let task_id = TaskId::new(id.as_str());
     assert!(jobs.tasks().holds_cancellation(&task_id).unwrap());
     jobs.cancel_owned(id.as_str(), 1).expect("cancel");
     assert!(!jobs.tasks().holds_cancellation(&task_id).unwrap());
     assert!(!jobs.get(id.as_str()).unwrap().status.is_terminal());
-    jobs.mark_result(&id, Err(TinyAgentsError::Cancelled));
+    jobs.finish_fixture_job(&id, Err(TinyAgentsError::Cancelled));
     assert!(jobs.get(id.as_str()).unwrap().status.is_terminal());
 
-    let (aborted, _) = jobs.create("worker", 1);
+    let (aborted, _) = jobs.create_fixture_job("worker", 1);
     jobs.mark_aborted(&aborted, true);
     assert!(
         !jobs
@@ -1595,9 +1595,9 @@ async fn settled_jobs_release_their_cancellation_token() {
 #[tokio::test]
 async fn a_budget_overrun_that_raced_an_owner_cancel_settles_cancelled() {
     let jobs = SubAgentJobRegistry::new();
-    let (id, _) = jobs.create("worker", 1);
+    let (id, _) = jobs.create_fixture_job("worker", 1);
     jobs.cancel_owned(id.as_str(), 1).expect("cancel");
-    jobs.mark_budget_overrun(&id);
+    jobs.finish_budget_overrun(&id);
     let job = jobs.get(id.as_str()).unwrap();
     assert_eq!(job.status, SubAgentJobStatus::Cancelled);
     assert!(job.incomplete_kind.is_none() && job.output.is_none());
@@ -1606,7 +1606,7 @@ async fn a_budget_overrun_that_raced_an_owner_cancel_settles_cancelled() {
 #[tokio::test]
 async fn message_request_ids_are_bounded_per_job() {
     let jobs = SubAgentJobRegistry::new();
-    let (id, steering) = jobs.create("worker", 1);
+    let (id, steering) = jobs.create_fixture_job("worker", 1);
     for index in 0..=tinyagents_harness::steering::RecentRequestIds::DEFAULT_CAPACITY {
         let duplicate = jobs
             .send_message_with_request_id(id.as_str(), 1, "m", Some(&format!("r{index}")))
@@ -1635,13 +1635,13 @@ async fn cancel_all_for_workspace_does_not_cross_workspace_boundaries() {
         (token_a.clone(), workspace_a.clone()),
         (token_b.clone(), workspace_b),
     ] {
-        jobs.create_with_cancellation(
+        jobs.register_fixture_job(
             "worker",
             7,
             token,
-            JobLink {
+            RegistryFixtureMetadata {
                 workspace: Some(workspace),
-                ..JobLink::default()
+                ..RegistryFixtureMetadata::default()
             },
         );
     }
