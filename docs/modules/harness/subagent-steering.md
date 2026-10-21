@@ -225,18 +225,11 @@ hallucinate indefinitely or loop forever. Harness-level caps such as
 `RunLimits::max_model_calls`, `max_tool_calls`, wall-clock deadlines, and
 `max_depth` are enforced by the child run.
 
-When a parent calls a sub-agent through `SubAgentTool`, child limit exhaustion is
-reported back as an error `ToolResult` instead of crashing the parent run. The
-tool result content must tell the parent orchestrator that the delegated
-sub-agent stopped because it hit a configured limit, not because it completed
-the task. The parent can then narrow the task, split it across more workers,
-retry with a different budget, or report the partial failure.
-
-Direct sub-agent APIs (`SubAgent::invoke`, `invoke_with_events`,
-`invoke_in_parent`, and `SubAgentSession::send`) still return the original
-classified error. That lets application code decide whether a direct child
-limit should fail the caller, be retried, or be converted into a graph/state
-transition.
+`DriverSubAgentTool` runs child work asynchronously and immediately returns a
+job reference. A child limit is recorded as an incomplete job with its typed
+reason; the host can query or await that job separately and decide whether to
+retry, narrow the task, or report the partial result. The driver does not run
+child work inline in the parent model tool call.
 
 ## Human Steering
 

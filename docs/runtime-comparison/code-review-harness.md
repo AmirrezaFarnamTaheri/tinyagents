@@ -31,8 +31,7 @@ tool-wrap onion, or `join_all` when eligible) → ordered fold (`after_tool`, ho
 append) → loop. Termination: no tool calls (after truncated-empty retry and `continue_turn` nudge) → structured extraction →
 `LoopExit::Finished`; or `LimitStop`, `Paused`, or `Err`.
 
-**Sub-agents** (`subagent/mod.rs`): `SubAgentTool` is a `ToolDispatch` whose `execute` builds `parent.child(...)` and runs the child
-harness inside the parent's tool call, sharing `EventSink`, `CancellationToken`, `SteeringHandle`, stores and workspace.
+**Sub-agents** (`tinyagents-orchestration`): `DriverSubAgentTool` starts a child through the host-planned `SubagentDriver` and returns a job reference immediately. The host supplies authorization, persistence, and completion routing; the registry exposes status, cancellation, steering, and messaging.
 
 **Providers.** Only two adapters live in this crate (`providers/claude_code`, `providers/claude_agent_sdk` — subprocess/JSON-RPC
 drivers). OpenAI/Anthropic/local adapters live in `vendor/tinyinference/crates/tinyinference-llm`; the harness never sees wire JSON.

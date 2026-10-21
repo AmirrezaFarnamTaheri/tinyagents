@@ -96,7 +96,7 @@ Harness/product layer:
 | Session backends + conformance | memory, JSONL, SQLite, `session/testing/conformance` | Partial: SQLite session DB + JSONL transcript; no backend conformance suite (sdk-gaps §17) | |
 | Extension API / event bus | 40+ product events, `registerTool/Command/Provider`, UI | Partial: middleware + registry; no plugin loader (host concern) | |
 | Skills / prompt templates | Yes (`Skill`, `PromptTemplate` types in agent-core `harness/types.ts`; loaders in coding-agent) | No skills (grep empty); `prompt/` module exists | |
-| Sub-agents | Example extension only (`examples/extensions/subagent/`) | Yes: `SubAgent`, `SubAgentTool`, parallel policies | TA ahead. |
+| Sub-agents | Example extension only (`examples/extensions/subagent/`) | Yes: async `DriverSubAgentTool`, job registry, steering, and detached settlement | TA ahead. |
 | Graph/workflow runtime | None | Yes (`tinyagents-graph`) | TA ahead. |
 | Per-tool timeouts / limits / budgets | None (signal only) | Yes: `ToolTimeout`, `RunLimits`, budget middleware | TA ahead. |
 | Telemetry | typed schema spans (`pi-telemetry`) | Yes: `AgentEvent` + Langfuse exporter | |
