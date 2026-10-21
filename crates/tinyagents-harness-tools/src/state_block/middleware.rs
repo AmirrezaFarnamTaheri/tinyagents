@@ -217,10 +217,20 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
 
     async fn after_tool(
         &self,
+        _ctx: &mut RunContext<C>,
+        _state: &S,
+        _invocation: &ToolInvocationIdentity,
+        _result: &mut ToolResult,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn after_tool_output_screened(
+        &self,
         ctx: &mut RunContext<C>,
         _state: &S,
         invocation: &ToolInvocationIdentity,
-        result: &mut ToolResult,
+        result: &ToolResult,
     ) -> Result<()> {
         if invocation.tool_name() == TODO_TOOL_NAME {
             return Ok(());

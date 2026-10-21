@@ -1527,6 +1527,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             );
         }
 
+        self.middleware
+            .run_after_tool_output_screened(
+                ctx,
+                state,
+                &crate::middleware::ToolInvocationIdentity::new(
+                    prepared.call_id.clone(),
+                    prepared.tool_name.clone(),
+                ),
+                &result,
+            )
+            .await?;
+
         // A tool's own `ToolControl` (`return_direct`/`terminate`/`goto`/
         // `state_update`) is the tool-vocabulary half of A1: it is *data* the
         // tool returned, not a middleware decision, so it is translated into

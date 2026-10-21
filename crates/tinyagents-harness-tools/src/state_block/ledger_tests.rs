@@ -83,6 +83,39 @@ fn missing_executables_are_bounded_and_age_out() {
 }
 
 #[test]
+fn repeated_missing_executables_refresh_their_age() {
+    let mut ledger = RunLedger::default();
+    record_result(
+        &mut ledger,
+        shell("python3 x.py"),
+        true,
+        "bash: python3: command not found",
+    );
+    ledger.round = FAILURE_HORIZON_ROUNDS;
+    record_result(
+        &mut ledger,
+        shell("python3 x.py"),
+        true,
+        "bash: python3: command not found",
+    );
+    ledger.round += 1;
+    age_out(&mut ledger);
+    assert_eq!(
+        ledger.missing,
+        vec![("python3".to_string(), FAILURE_HORIZON_ROUNDS)]
+    );
+}
+
+#[test]
+fn unified_diff_headers_without_git_prefix_record_the_target_path() {
+    let record = call_record(&call(
+        "patch",
+        serde_json::json!({ "diff": "--- /dev/null\n+++ src/main.rs\n@@ -0,0 +1 @@\n+fn main() {}" }),
+    ));
+    assert_eq!(record.written_paths, vec!["src/main.rs"]);
+}
+
+#[test]
 fn the_error_line_is_the_exit_code_and_first_stderr_line() {
     assert_eq!(
         error_line(SHELL_127),

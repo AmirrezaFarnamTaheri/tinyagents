@@ -77,6 +77,17 @@ fn a_long_plan_keeps_the_active_step_visible() {
 }
 
 #[test]
+fn a_long_plan_keeps_the_next_pending_step_visible() {
+    let mut items: Vec<TodoItem> = (0..25)
+        .map(|n| item(&format!("step {n}"), TodoStatus::Completed))
+        .collect();
+    items[20].status = TodoStatus::Pending;
+    let block = render(None, &items, &RunLedger::default()).unwrap();
+    assert!(block.contains("  [ ] 21. step 20"), "{block}");
+    assert!(!block.contains("  [x] 20."), "{block}");
+}
+
+#[test]
 fn facts_render_without_a_plan() {
     let mut ledger = RunLedger {
         round: 4,

@@ -58,6 +58,9 @@ async fn round(
     Middleware::<(), ()>::after_tool(mw, ctx, &(), &invocation, &mut result)
         .await
         .unwrap();
+    Middleware::<(), ()>::after_tool_output_screened(mw, ctx, &(), &invocation, &result)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -182,6 +185,34 @@ async fn nested_tool_results_are_recorded_in_the_run_state() {
         rendered.contains("shell `make test`: exit code 2"),
         "{rendered}"
     );
+}
+
+#[tokio::test]
+async fn only_security_screened_tool_output_enters_the_ledger() {
+    let mw = StateBlockMiddleware::new(Arc::new(InMemoryStore::default()));
+    let mut ctx = ctx();
+    let mut call = ToolCall::new("c", "shell", serde_json::json!({"command": "make"}));
+    let mut response = ModelResponse::assistant(String::new());
+    response.message.tool_calls = vec![call.clone()];
+    Middleware::<(), ()>::after_model(&mw, &mut ctx, &(), &mut response)
+        .await
+        .unwrap();
+    Middleware::<(), ()>::before_tool(&mw, &mut ctx, &(), &mut call)
+        .await
+        .unwrap();
+    let invocation = ToolInvocationIdentity::new("c", "shell");
+    let mut raw = ToolResult::error("secret-token-from-stderr");
+    Middleware::<(), ()>::after_tool(&mw, &mut ctx, &(), &invocation, &mut raw)
+        .await
+        .unwrap();
+    let screened = ToolResult::error("redacted output");
+    Middleware::<(), ()>::after_tool_output_screened(&mw, &mut ctx, &(), &invocation, &screened)
+        .await
+        .unwrap();
+
+    let rendered = block(&mw, &mut ctx).await.unwrap();
+    assert!(rendered.contains("redacted output"), "{rendered}");
+    assert!(!rendered.contains("secret-token-from-stderr"), "{rendered}");
 }
 
 #[tokio::test]

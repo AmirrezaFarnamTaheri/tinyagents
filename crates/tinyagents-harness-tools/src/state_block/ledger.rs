@@ -67,11 +67,7 @@ pub(super) fn record_result(
     }
     if is_error {
         for name in missing_executables(output) {
-            if let Some((_, seen)) = ledger
-                .missing
-                .iter_mut()
-                .find(|(known, _)| known == &name)
-            {
+            if let Some((_, seen)) = ledger.missing.iter_mut().find(|(known, _)| known == &name) {
                 *seen = round;
             } else {
                 ledger.missing.push((name, round));
