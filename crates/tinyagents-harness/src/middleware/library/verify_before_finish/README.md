@@ -8,7 +8,8 @@ run. Hosts opt in and choose a tool-round threshold or a custom trigger.
 `mod.rs` exposes the small public surface. `types.rs` defines activity, trigger,
 and per-run state. `middleware.rs` contains configuration and lifecycle hooks;
 `middleware_tests.rs` exercises those hooks and the run loop;
-`middleware_execution_tests.rs` covers actual execution evidence.
+`tinyagents-integration-tests/tests/verify_before_finish_execution.rs` covers
+actual execution evidence across the harness and packed-tool crates.
 
 ## Requested and executed activity
 

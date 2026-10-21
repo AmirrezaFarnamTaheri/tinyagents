@@ -1,5 +1,3 @@
-use super::*;
-
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -9,14 +7,15 @@ use tinyinference_llm::model::ModelResponse;
 use tinyinference_llm::tool::ToolCall;
 use tinytools::{PermissionLevel, Tool, ToolResult};
 
-use crate::context::RunContext;
-use crate::limits::RunLimits;
-use crate::middleware::{
+use tinyagents_harness::context::RunContext;
+use tinyagents_harness::limits::RunLimits;
+use tinyagents_harness::middleware::{
+    AgentRun, FinishActivity, VerifyBeforeFinishMiddleware,
     Middleware, MiddlewareToolOutcome, ToolHandler, ToolInvocationIdentity, ToolMiddleware,
 };
-use crate::runtime::{AgentHarness, RunPolicy};
-use crate::testkit::ScriptedModel;
-use crate::tool::ToolRulePolicy;
+use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
+use tinyagents_harness::testkit::ScriptedModel;
+use tinyagents_harness::tool::ToolRulePolicy;
 use tinyagents_harness_tools::skills::{
     PackCatalog, PackRegistryHandle, ToolPack, USE_SKILL, UseSkillTool,
 };
@@ -507,5 +506,5 @@ async fn cancellation_after_executor_entry_retains_the_started_attempt() {
     assert_eq!(observations[0].target, "patch");
 }
 
-#[path = "middleware_execution_boundary_tests.rs"]
+#[path = "verify_before_finish_execution_boundary.rs"]
 mod boundary_tests;

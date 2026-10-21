@@ -1,11 +1,11 @@
 use super::*;
 
-use crate::context::RunConfig;
-use crate::host::{
+use tinyagents_harness::context::RunConfig;
+use tinyagents_harness::host::{
     ContentOrigin, FixedModelResolver, GateDecision, HostCapabilities, ScreenOutcome, SecurityGate,
     StaticContextComposer, ToolCallRequest,
 };
-use crate::runtime::{AgentInvocation, AgentTurnRequest};
+use tinyagents_harness::runtime::{AgentInvocation, AgentTurnRequest};
 use tinyagents_definition::{AgentDefinition, InMemoryDefinitionRegistry};
 
 struct DenyToolCalls;
@@ -89,7 +89,9 @@ impl Tool for NestedCaller {
     ) -> anyhow::Result<ToolResult> {
         let context = context
             .and_then(tinytools::ToolRunContext::host_extension)
-            .and_then(|extension| extension.downcast_ref::<crate::tool::ToolExecutionContext>())
+            .and_then(|extension| {
+                extension.downcast_ref::<tinyagents_harness::tool::ToolExecutionContext>()
+            })
             .expect("harness execution context");
         Ok(
             match context
