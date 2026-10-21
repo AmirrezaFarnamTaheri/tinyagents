@@ -346,6 +346,34 @@ pub struct RunPolicy {
     /// cap and one with room. Set to `0` to disable for exact-replay callers
     /// that must not re-issue a call.
     pub truncated_empty_retries: u32,
+    /// Keep every truncated-empty retry at the cap the dead call ran under:
+    /// no doubling, and the second retry is still made at that cap.
+    ///
+    /// The default (`false`) doubles the cap from the second retry, up to 4x
+    /// the original, for a step that no longer fits. A host whose cap is
+    /// already generous (a reasoning model at 128k output) gains nothing from
+    /// doubling: a model that reasons past 128k without answering reasons past
+    /// 256k the same way, at twice the cost and time.
+    pub truncated_empty_constant_cap: bool,
+    /// Make the call that follows a truncated-empty reply (a retry, or a
+    /// "stop deliberating" nudge) with reasoning switched off
+    /// ([`ReasoningEffort::None`](tinyinference_llm::model::ReasoningEffort::None)).
+    /// One call only: the call after it reasons as the policy says again.
+    ///
+    /// A reasoning model that thought to the output cap without acting tends
+    /// to do the same on a retry at any cap; without reasoning it has to act.
+    /// Defaults to `false`.
+    pub truncated_empty_reasoning_off: bool,
+    /// From this many truncated-empty replies in one run on, every later call
+    /// of the run goes out with reasoning off, not just the one after each
+    /// dead call. `0` never makes it sticky.
+    ///
+    /// With [`Self::truncated_empty_reasoning_off`] alone a model that keeps
+    /// thinking to the cap acts on the reasoning-off call and then dies again
+    /// on the next one with reasoning back on: on Terminal-Bench
+    /// protein-assembly five dead calls alternated with five working ones.
+    /// Defaults to `0`.
+    pub truncated_empty_reasoning_off_sticky_after: u32,
     /// Re-prompts after [`Self::truncated_empty_retries`] are spent and the
     /// model *still* returned a truncated-empty completion.
     ///
@@ -692,6 +720,9 @@ impl Default for RunPolicy {
             // keeps deliberating; one plain "stop and act" re-prompt recovers
             // the step instead of ending the run on a blank reply.
             truncated_empty_nudges: 1,
+            truncated_empty_constant_cap: false,
+            truncated_empty_reasoning_off: false,
+            truncated_empty_reasoning_off_sticky_after: 0,
             empty_response_retries: 0,
             reject_truncated_tool_calls: true,
             truncated_tool_call_retries: 2,
