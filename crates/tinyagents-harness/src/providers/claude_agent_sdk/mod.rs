@@ -150,9 +150,9 @@ fn build_inspection_invocation(message: &str, model: &str) -> ClaudeInvocation {
             "1".into(),
             "--model".into(),
             model.into(),
+            "--verbose".into(),
             "--output-format".into(),
             "stream-json".into(),
-            "--no-color".into(),
             "--system-prompt".into(),
             String::new(),
         ],
@@ -298,6 +298,10 @@ impl ClaudeAgentSdkProvider {
                 .env("PATH", std::env::var_os("PATH").unwrap_or_default())
                 .env("HOME", home_path)
                 .env("TMPDIR", home_path)
+                .env("XDG_CONFIG_HOME", home_path)
+                .env("XDG_DATA_HOME", home_path)
+                .env("XDG_STATE_HOME", home_path)
+                .env("XDG_CACHE_HOME", home_path)
                 .env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", max_tokens.to_string())
                 .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
                 .env("DISABLE_TELEMETRY", "1")
@@ -312,8 +316,15 @@ impl ClaudeAgentSdkProvider {
                 cmd.env("ANTHROPIC_BASE_URL", base_url);
             }
             #[cfg(windows)]
-            if let Some(system_root) = std::env::var_os("SystemRoot") {
-                cmd.env("SystemRoot", system_root);
+            {
+                cmd.env("USERPROFILE", home_path)
+                    .env("APPDATA", home_path)
+                    .env("LOCALAPPDATA", home_path)
+                    .env("TEMP", home_path)
+                    .env("TMP", home_path);
+                if let Some(system_root) = std::env::var_os("SystemRoot") {
+                    cmd.env("SystemRoot", system_root);
+                }
             }
         }
 
