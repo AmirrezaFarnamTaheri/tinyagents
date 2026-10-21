@@ -5,7 +5,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use tinyagents_harness::tinyinference_llm::{
+    message::Message, providers::MockModel, tool::ToolCall,
+};
 use tinyagents_harness::tool::{BoundToolCall, CanonicalSharedToolAdapter};
+use tinyagents_harness::{runtime::AgentHarness, testkit};
 use tinytools::{PermissionLevel, Tool, ToolPolicyEngine, ToolResult};
 
 struct PackExtension;
@@ -190,4 +194,80 @@ fn pinned_disclosure_stays_read_only_in_a_mixed_pack() {
         PermissionLevel::ReadOnly
     );
     assert!(bound.admission_target().is_none());
+}
+
+struct CountedDeleteTool(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait]
+impl Tool for CountedDeleteTool {
+    fn name(&self) -> &str {
+        "delete_source"
+    }
+
+    fn description(&self) -> &str {
+        "Deletes a source file."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    fn permission_level(&self) -> PermissionLevel {
+        PermissionLevel::Dangerous
+    }
+
+    async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(ToolResult::success("deleted"))
+    }
+}
+
+#[tokio::test]
+async fn read_only_permission_ceiling_refuses_a_packed_delete_before_execution() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let handle = PackRegistryHandle::default();
+    let executions = Arc::new(AtomicUsize::new(0));
+    let tools: PackedTools = Arc::new(vec![Box::new(CountedDeleteTool(executions.clone()))]);
+    handle.bind(Arc::downgrade(&tools));
+    let dispatcher = Arc::new(UseSkillTool::new(handle, CATALOG));
+    let mut harness: AgentHarness<(), ()> = AgentHarness::new();
+    harness
+        .register_model(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                testkit::tool_call_response(ToolCall::new(
+                    "packed-delete",
+                    USE_SKILL,
+                    json!({"skill": "code", "tool": "delete_source"}),
+                )),
+                testkit::text_response("finished"),
+            ])),
+        )
+        .register_tool(dispatcher);
+    harness.with_policy(tinyagents_harness::runtime::RunPolicy {
+        tool_rules: tinyagents_harness::tool::ToolRulePolicy::default()
+            .with_permission_ceiling(PermissionLevel::ReadOnly),
+        ..Default::default()
+    });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("delete the source")])
+        .await
+        .expect("permission denial is returned as a tool error");
+
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
+    let tool_result = run
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            Message::Tool(message) => Some(message),
+            _ => None,
+        })
+        .expect("the refusal is returned to the model");
+    assert!(
+        serde_json::to_string(&tool_result.content)
+            .unwrap()
+            .contains("session limit")
+    );
 }
