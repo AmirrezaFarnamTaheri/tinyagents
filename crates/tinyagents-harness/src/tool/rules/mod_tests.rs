@@ -164,8 +164,9 @@ impl Tool for ArgumentPermission {
 
 #[tokio::test]
 async fn permission_ceiling_checks_argument_aware_dispatch_permissions() {
-    let gate = ToolGate::new(None, &ToolRulePolicy::default(), None)
+    let policy = ToolRulePolicy::default()
         .with_permission_ceiling(tinytools::PermissionLevel::ReadOnly);
+    let gate = ToolGate::new(None, &policy, None);
     let tool = ArgumentPermission;
 
     assert_eq!(
