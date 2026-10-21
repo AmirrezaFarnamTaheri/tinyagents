@@ -393,6 +393,20 @@ fn inspection_auth_rejects_opaque_cli_managed_login() {
     );
 }
 
+#[test]
+fn inspection_binary_path_is_resolved_before_switching_to_private_home() {
+    let caller_dir = std::env::current_dir().expect("current directory");
+    assert_eq!(
+        inspection_binary_path("tools/claude").expect("relative configured binary"),
+        caller_dir.join("tools/claude")
+    );
+    assert_eq!(
+        inspection_binary_path("claude").expect("PATH binary"),
+        std::path::PathBuf::from("claude"),
+        "a bare executable name must continue to resolve through PATH"
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn inspection_invocation_clamps_requested_output_cap_to_five_tokens() {
