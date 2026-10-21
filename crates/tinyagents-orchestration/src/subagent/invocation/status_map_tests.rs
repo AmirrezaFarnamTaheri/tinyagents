@@ -1,5 +1,5 @@
 use super::*;
-use crate::status::NoEquivalentStatus;
+use tinyagents_tasks::NoEquivalentStatus;
 use crate::subagent::SubAgentJobId;
 use tinyagents_session::run_ledger::AgentRunStatus as Run;
 use tinyagents_tasks::OrchestrationTaskStatus as Task;
