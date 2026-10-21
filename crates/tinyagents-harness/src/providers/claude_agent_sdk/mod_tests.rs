@@ -258,6 +258,138 @@ printf '%s\n' '{"type":"result","result":"Calling.<tool_call>{\"name\":\"lookup\
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_frozen_auth() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = dir.path().join("claude-inspection");
+    let args_path = dir.path().join("args.txt");
+    let input_path = dir.path().join("input.txt");
+    let auth_path = dir.path().join("auth.txt");
+    let cap_path = dir.path().join("cap.txt");
+    let home_path = dir.path().join("home.txt");
+    let state_path = dir.path().join("state.txt");
+    let staging = dir.path().join("claude-inspection.staging");
+    let source = format!(
+        "#!/bin/sh\n\
+         printf '%s\\n' \"$@\" > '{}'\n\
+         cat > '{}'\n\
+         printf '%s' \"${{ANTHROPIC_API_KEY-}}\" > '{}'\n\
+         printf '%s' \"${{CLAUDE_CODE_MAX_OUTPUT_TOKENS-}}\" > '{}'\n\
+         printf '%s' \"$HOME\" > '{}'\n\
+         if [ -e \"$HOME/.claude\" ]; then printf yes > '{}'; else printf no > '{}'; fi\n\
+         printf '%s\\n' '{{\"type\":\"result\",\"result\":\"OK\",\"is_error\":false}}'\n",
+        args_path.display(),
+        input_path.display(),
+        auth_path.display(),
+        cap_path.display(),
+        home_path.display(),
+        state_path.display(),
+        state_path.display(),
+    );
+    std::fs::write(&staging, source).expect("write fake claude");
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
+        .expect("make fake claude executable");
+    std::fs::rename(&staging, &script).expect("publish fake claude");
+
+    let config = ClaudeAgentSdkConfig {
+        binary: script.display().to_string(),
+        ..Default::default()
+    };
+    let auth = ClaudeAgentSdkInspectionAuth::new(
+        Some("dummy-inspection-key".into()),
+        None,
+        Some("https://anthropic.example.test".into()),
+    )
+    .expect("explicit key is required for inspection");
+    let provider = ClaudeAgentSdkProvider::for_inspection(config, "model-for-inspection", auth);
+    let response = provider
+        .invoke(
+            &(),
+            ModelRequest::new(vec![Message::user("Reply OK")]).with_max_tokens(5),
+        )
+        .await
+        .expect("fake CLI response");
+
+    assert_eq!(response.text(), "OK");
+    let args = std::fs::read_to_string(args_path).expect("captured arguments");
+    for flag in [
+        "--bare",
+        "--no-session-persistence",
+        "--tools",
+        "--max-turns",
+        "--model",
+        "--system-prompt",
+        "dontAsk",
+        "model-for-inspection",
+    ] {
+        assert!(args.contains(flag), "missing inspection argument {flag}: {args:?}");
+    }
+    assert!(args.contains("--tools\n\n"), "built-in tools must be disabled: {args:?}");
+    assert_eq!(
+        std::fs::read_to_string(input_path).expect("captured prompt"),
+        "Reply OK",
+        "inspection receives no transcript or prior history"
+    );
+    assert_eq!(
+        std::fs::read_to_string(auth_path).expect("captured auth"),
+        "dummy-inspection-key"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cap_path).expect("captured token cap"),
+        "5"
+    );
+    let cli_home = std::fs::read_to_string(home_path).expect("captured isolated HOME");
+    assert!(cli_home.starts_with(std::env::temp_dir().to_str().unwrap()));
+    assert_eq!(
+        std::fs::read_to_string(state_path).expect("captured session state"),
+        "no",
+        "inspection must not expose or load an existing CLI login/session"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn inspection_invocation_clamps_requested_output_cap_to_five_tokens() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = dir.path().join("claude-inspection");
+    let cap_path = dir.path().join("cap.txt");
+    let staging = dir.path().join("claude-inspection.staging");
+    let source = format!(
+        "#!/bin/sh\nprintf '%s' \"${{CLAUDE_CODE_MAX_OUTPUT_TOKENS-}}\" > '{}'\nprintf '%s\\n' '{{\"type\":\"result\",\"result\":\"OK\",\"is_error\":false}}'\n",
+        cap_path.display()
+    );
+    std::fs::write(&staging, source).expect("write fake claude");
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
+        .expect("make fake claude executable");
+    std::fs::rename(&staging, &script).expect("publish fake claude");
+
+    let config = ClaudeAgentSdkConfig {
+        binary: script.display().to_string(),
+        ..Default::default()
+    };
+    let auth = ClaudeAgentSdkInspectionAuth::new(Some("dummy-key".into()), None, None)
+        .expect("explicit key is required");
+    let provider = ClaudeAgentSdkProvider::for_inspection(config, "model", auth);
+    provider
+        .invoke(
+            &(),
+            ModelRequest::new(vec![Message::user("Reply OK")]).with_max_tokens(64),
+        )
+        .await
+        .expect("fake CLI response");
+
+    assert_eq!(
+        std::fs::read_to_string(cap_path).expect("captured cap"),
+        "5",
+        "caller-supplied limits cannot raise the inspection cap"
+    );
+}
+
 #[test]
 fn cache_identity_includes_selected_model() {
     let config = ClaudeAgentSdkConfig::default();
