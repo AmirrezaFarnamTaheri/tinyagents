@@ -42,6 +42,7 @@ type Behaviour = Arc<
 
 struct Executor {
     attempts: AtomicU32,
+    observed_attempts: Mutex<Option<Arc<Mutex<Vec<String>>>>>,
     seen_tools: Mutex<Vec<Vec<String>>>,
     seen_caps: Mutex<Vec<(Option<usize>, Option<usize>)>>,
     child_tokens: Mutex<Vec<CancellationToken>>,
@@ -53,6 +54,7 @@ impl Executor {
     fn new(behaviour: Behaviour) -> Arc<Self> {
         Arc::new(Self {
             attempts: AtomicU32::new(0),
+            observed_attempts: Mutex::new(None),
             seen_tools: Mutex::default(),
             seen_caps: Mutex::default(),
             child_tokens: Mutex::default(),
@@ -75,6 +77,13 @@ impl SubagentExecutor<String> for Executor {
         &self,
         execution: SubagentExecution<String>,
     ) -> Result<SubagentOutcome, SubagentError> {
+        if let Some(observed) = self.observed_attempts.lock().unwrap().as_ref() {
+            let run_id = execution.prepared.run_context.run_id().as_str();
+            assert!(
+                observed.lock().unwrap().iter().any(|observed| observed == run_id),
+                "attempt {run_id} reached the executor before the observer recorded it"
+            );
+        }
         let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
         self.seen_tools.lock().unwrap().push(
             execution
@@ -247,8 +256,9 @@ async fn retries_a_transient_failure_that_ran_no_tools() {
 #[tokio::test]
 async fn attempt_observer_receives_each_actual_run_id_before_execution() {
     let executor = Executor::new(flaky(1, false));
-    let plan: Planned = Arc::new(|p| with_factory(p.with_policy(retry_policy(2))));
     let observed = Arc::new(Mutex::new(Vec::new()));
+    *executor.observed_attempts.lock().unwrap() = Some(observed.clone());
+    let plan: Planned = Arc::new(|p| with_factory(p.with_policy(retry_policy(2))));
     let observed_by_driver = observed.clone();
     driver(plan, executor)
         .run_with_attempt_observer(
