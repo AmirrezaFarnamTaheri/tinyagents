@@ -69,6 +69,11 @@ impl ClaudeAgentSdkInspectionAuth {
     /// configured endpoint. The resulting value is passed to the child
     /// process unchanged; the CLI is launched in bare mode and cannot read a
     /// user's stored login.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when neither an explicit API key nor an explicit auth
+    /// token is available.
     pub fn new(
         api_key: Option<String>,
         auth_token: Option<String>,
