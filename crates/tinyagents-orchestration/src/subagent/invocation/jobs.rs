@@ -724,18 +724,17 @@ impl SubAgentJobRegistry {
     pub fn set_attempt_run_id(&self, id: &SubAgentJobId, run_id: &str) {
         let mut controls = self.controls();
         if let Some(control) = controls.get_mut(id) {
-            control
-                .lineage
-                .children
-                .insert(tinyagents_harness::ids::RunId::new(run_id));
+            if control.status.borrow().status.is_terminal() {
+                return;
+            }
+            let run_id = tinyagents_harness::ids::RunId::new(run_id);
+            let new_edge = control.lineage.children.insert(run_id.clone());
             let changed = control.status.send_if_modified(|job| {
-                if job.status.is_terminal() {
-                    return false;
-                }
+                let changed = job.subagent_run_id.as_deref() != Some(run_id.as_str());
                 job.subagent_run_id = Some(run_id.to_owned());
-                true
+                changed
             });
-            if changed {
+            if new_edge || changed {
                 self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
             }
         }
