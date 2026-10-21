@@ -184,6 +184,7 @@ fn activity(rig: &Rig) -> FinishActivity {
 async fn packed_execution_records_the_bound_target_and_keeps_transcript_identity() {
     let rig = rig(vec![packed("call-1", "patch", json!({}))]);
     let run = run(&rig).await;
+    eprintln!("run={run:#?} activity={:?} capture={:?}", activity(&rig), rig.capture.0.lock().unwrap());
     assert_eq!(run.text().as_deref(), Some("checked"));
     assert_eq!(run.executed_tools, [USE_SKILL]);
     assert!(run.messages.iter().any(|message| matches!(message,
