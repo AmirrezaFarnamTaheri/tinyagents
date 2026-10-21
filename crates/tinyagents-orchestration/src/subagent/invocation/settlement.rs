@@ -55,7 +55,7 @@ impl SubAgentJobRegistry {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let owner = owner.to_string();
         let mut root_leases = self.root_leases();
-        let controls = self.controls();
+        let mut controls = self.controls();
         let mut reachable_runs = std::collections::HashSet::new();
         reachable_runs.insert(root_run_id.clone());
         let mut record = super::types::RootLeaseRecord {
@@ -118,7 +118,7 @@ impl SubAgentJobRegistry {
         let Some(record) = root_leases.remove(&id) else {
             return;
         };
-        let mut controls = self.controls();
+        let controls = self.controls();
         for job_id in record.pinned_jobs {
             if let Some(control) = controls.get(&job_id) {
                 control
