@@ -88,7 +88,10 @@ impl GoalBudgetGuard {
     /// A guard for an active or paused `goal`, or `None` when it is complete
     /// or has no budget.
     pub fn for_goal(goal: &ThreadGoal) -> Option<Self> {
-        if !matches!(goal.status, ThreadGoalStatus::Active | ThreadGoalStatus::Paused) {
+        if !matches!(
+            goal.status,
+            ThreadGoalStatus::Active | ThreadGoalStatus::Paused
+        ) {
             return None;
         }
         Some(Self {

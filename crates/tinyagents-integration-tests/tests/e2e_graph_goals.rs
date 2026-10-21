@@ -26,11 +26,13 @@ async fn prepared_goal_exposes_context_and_budget_for_a_host_turn() {
     let budget_guard = prepared.budget_guard.expect("paused goal budget guard");
 
     goals.resume("thread-goal").await.expect("resume goal");
-    assert!(budget_guard
-        .check(&goals.backing_store(), 1_000)
-        .await
-        .expect("check resumed goal budget")
-        .is_stop());
+    assert!(
+        budget_guard
+            .check(&goals.backing_store(), 1_000)
+            .await
+            .expect("check resumed goal budget")
+            .is_stop()
+    );
 
     goals
         .account_turn("thread-goal", 10, 5, Duration::from_millis(500))
