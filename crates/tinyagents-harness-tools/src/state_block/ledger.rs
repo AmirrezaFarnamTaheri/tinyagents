@@ -239,7 +239,7 @@ pub(super) fn missing_executables(output: &str) -> Vec<String> {
 /// `which`/`type`, rather than merely mentioning it as an argument.
 fn runs_executable(command: &str, name: &str) -> bool {
     command
-        .split(|c: char| matches!(c, '\n' | ';' | '&' | '|' | '(' | ')'))
+        .split(['\n', ';', '&', '|', '(', ')'])
         .any(|part| {
             let words: Vec<_> = part.split_whitespace().collect();
             let Some(first) = words.first().map(|word| executable_name(word)) else {
