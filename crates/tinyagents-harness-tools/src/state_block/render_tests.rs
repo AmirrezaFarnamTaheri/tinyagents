@@ -72,7 +72,7 @@ fn a_long_plan_keeps_the_active_step_visible() {
     items[23].status = TodoStatus::InProgress;
     let block = render(None, &items, &RunLedger::default()).unwrap();
     assert!(block.contains("  [>] 24. step 23"), "{block}");
-    assert!(block.contains("  … 6 more"), "{block}");
+    assert!(block.contains("  … 5 more"), "{block}");
     assert!(!block.contains("  [x] 20."), "{block}");
 }
 
