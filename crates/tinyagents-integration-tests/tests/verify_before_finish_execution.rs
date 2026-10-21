@@ -7,16 +7,16 @@ use tinyinference_llm::model::ModelResponse;
 use tinyinference_llm::tool::ToolCall;
 use tinytools::{PermissionLevel, Tool, ToolResult};
 
+use tinyagents_harness::Result;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::limits::RunLimits;
 use tinyagents_harness::middleware::{
-    AgentRun, FinishActivity, VerifyBeforeFinishMiddleware,
-    Middleware, MiddlewareToolOutcome, ToolHandler, ToolInvocationIdentity, ToolMiddleware,
+    AgentRun, FinishActivity, Middleware, MiddlewareToolOutcome, ToolHandler,
+    ToolInvocationIdentity, ToolMiddleware, VerifyBeforeFinishMiddleware,
 };
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::ScriptedModel;
 use tinyagents_harness::tool::ToolRulePolicy;
-use tinyagents_harness::Result;
 use tinyagents_harness_tools::skills::{
     PackCatalog, PackRegistryHandle, ToolPack, USE_SKILL, UseSkillTool,
 };

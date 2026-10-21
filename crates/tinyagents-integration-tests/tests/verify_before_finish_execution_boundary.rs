@@ -1,13 +1,13 @@
 use super::*;
 
+use tinyagents_definition::{AgentDefinition, InMemoryDefinitionRegistry};
+use tinyagents_harness::Result;
 use tinyagents_harness::context::RunConfig;
 use tinyagents_harness::host::{
     ContentOrigin, FixedModelResolver, GateDecision, HostCapabilities, ScreenOutcome, SecurityGate,
     StaticContextComposer, ToolCallRequest,
 };
 use tinyagents_harness::runtime::{AgentInvocation, AgentTurnRequest};
-use tinyagents_harness::Result;
-use tinyagents_definition::{AgentDefinition, InMemoryDefinitionRegistry};
 
 struct DenyToolCalls;
 
