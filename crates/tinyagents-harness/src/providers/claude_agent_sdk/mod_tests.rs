@@ -447,17 +447,39 @@ fn inspection_child_environment_is_isolated_from_platform_profiles() {
         .collect::<std::collections::HashMap<_, _>>();
     assert_eq!(environment.get("HOME"), Some(&private_home));
     assert_eq!(environment.get("TMPDIR"), Some(&private_home));
-    assert_eq!(environment.get("ANTHROPIC_API_KEY"), Some(&"dummy-inspection-key".into()));
-    assert_eq!(environment.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS"), Some(&"5".into()));
-    assert!(environment.contains_key("PATH"), "the configured CLI remains launchable");
+    assert_eq!(
+        environment.get("ANTHROPIC_API_KEY"),
+        Some(&"dummy-inspection-key".into())
+    );
+    assert_eq!(
+        environment.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS"),
+        Some(&"5".into())
+    );
+    assert!(
+        environment.contains_key("PATH"),
+        "the configured CLI remains launchable"
+    );
 
     #[cfg(not(windows))]
-    for key in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] {
-        assert_eq!(environment.get(key), Some(&private_home), "{key} must be private");
+    for key in [
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+    ] {
+        assert_eq!(
+            environment.get(key),
+            Some(&private_home),
+            "{key} must be private"
+        );
     }
     #[cfg(windows)]
     for key in ["USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"] {
-        assert_eq!(environment.get(key), Some(&private_home), "{key} must be private");
+        assert_eq!(
+            environment.get(key),
+            Some(&private_home),
+            "{key} must be private"
+        );
     }
 }
 
