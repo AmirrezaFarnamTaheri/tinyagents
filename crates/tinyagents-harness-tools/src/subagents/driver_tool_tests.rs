@@ -45,6 +45,97 @@ impl ChatModel<()> for CloseCorrectionModel {
 
 struct Planner;
 
+struct ReplacingPlanner;
+
+struct ReplacingRetryPlanner;
+
+#[async_trait]
+impl SubagentPlanner<(), ()> for ReplacingPlanner {
+    async fn prepare(
+        &self,
+        request: SubagentRequest<(), ()>,
+    ) -> std::result::Result<PreparedSubagent<()>, SubagentError> {
+        let parts = request.into_parts();
+        Ok(PreparedSubagent::new(
+            parts.task_key.task_id,
+            "worker",
+            vec![Message::user(parts.input)],
+            ToolSnapshot::new(vec![]).unwrap(),
+            RunContext::new(RunConfig::new("planner-replaced-actual"), ()),
+        ))
+    }
+}
+
+#[async_trait]
+impl SubagentPlanner<(), ()> for ReplacingRetryPlanner {
+    async fn prepare(
+        &self,
+        request: SubagentRequest<(), ()>,
+    ) -> std::result::Result<PreparedSubagent<()>, SubagentError> {
+        let parts = request.into_parts();
+        let retry_parent = parts
+            .run_context
+            .child(RunConfig::new("retry-template"), ())
+            .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+        let retry_policy = SubAgentPolicy::default().with_retry(
+            tinyagents_harness::retry::RetryPolicy::default()
+                .with_max_attempts(2)
+                .with_backoff_sleep(false),
+        );
+        Ok(PreparedSubagent::new(
+            parts.task_key.task_id,
+            "worker",
+            vec![Message::user(parts.input)],
+            ToolSnapshot::new(vec![]).unwrap(),
+            RunContext::new(RunConfig::new("planner-replaced-actual"), ()),
+        )
+        .with_policy(retry_policy)
+        .with_retry_context(Arc::new(move |attempt| {
+            retry_parent
+                .child(RunConfig::new(format!("custom-retry-{attempt}")), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))
+        })))
+    }
+}
+
+struct RetryThenNestedExecutor {
+    nested_tool: Arc<dyn ToolDispatch<(), ()>>,
+    attempts: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl SubagentExecutor<()> for RetryThenNestedExecutor {
+    async fn execute(
+        &self,
+        execution: SubagentExecution<()>,
+    ) -> std::result::Result<SubagentOutcome, SubagentError> {
+        if self
+            .attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            == 0
+        {
+            return Err(SubagentError::Transient {
+                message: "retry before nested spawn".into(),
+                tools_ran: false,
+            });
+        }
+        ToolDispatch::<(), ()>::execute(
+            self.nested_tool.as_ref(),
+            &(),
+            CallId::new("nested-from-custom-retry"),
+            json!({"input":"nested child"}),
+            tinytools::ToolCallOptions::default(),
+            &execution.prepared.run_context,
+        )
+        .await
+        .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+        Ok(SubagentOutcome::completed(
+            execution.prepared.task_id,
+            "retried and spawned nested child",
+        ))
+    }
+}
+
 #[async_trait]
 impl SubagentPlanner<(), ()> for Planner {
     async fn prepare(
@@ -1266,6 +1357,7 @@ fn driver_subagent_tool_preserves_host_name_description_and_schema() {
 
 #[tokio::test]
 async fn driver_subagent_tool_routes_execution_through_the_driver() {
+    let jobs = SubAgentJobRegistry::new();
     let tool = DriverSubAgentTool::new(
         "subagent",
         "worker description",
@@ -1284,7 +1376,8 @@ async fn driver_subagent_tool_routes_execution_through_the_driver() {
             )
         },
         |_| None,
-    );
+    )
+    .with_job_registry(jobs.clone());
     let parent = RunContext::new(RunConfig::new("parent"), ());
     let result = ToolDispatch::<(), ()>::execute(
         &tool,
@@ -1300,6 +1393,165 @@ async fn driver_subagent_tool_routes_execution_through_the_driver() {
         serde_json::from_str::<Value>(&result.output()).unwrap()["output"],
         "driver result"
     );
+    let settled = jobs
+        .settle_root_run_descendants(
+            parent.run_id(),
+            parent.instance_id().to_string(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0].status, SubAgentJobStatus::Completed);
+}
+
+#[tokio::test]
+async fn driver_job_records_the_planners_actual_run_context_for_descendant_settlement() {
+    let jobs = SubAgentJobRegistry::new();
+    let driver = Arc::new(
+        SubagentDriver::new(SubagentCapabilities {
+            planner: Some(Arc::new(ReplacingPlanner)),
+            executor: Some(Arc::new(Executor)),
+            persistence: Some(Arc::new(Persistence)),
+        })
+        .unwrap(),
+    );
+    let tool = DriverSubAgentTool::new(
+        "subagent",
+        "worker description",
+        driver,
+        |_: &(), parent: &RunContext<()>, _: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("worker-request-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "planner-replaced-task",
+                (),
+                "input",
+                None,
+            )
+        },
+        |_| None,
+    )
+    .with_job_registry(jobs.clone());
+    let parent = RunContext::new(RunConfig::new("planner-replaced-parent"), ());
+    ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("planner-replaced-driver"),
+        json!({"input":"ignored"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+
+    let settled = jobs
+        .settle_root_run_descendants(
+            parent.run_id(),
+            parent.instance_id().to_string(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.len(), 1);
+    assert_eq!(
+        settled[0].subagent_run_id.as_deref(),
+        Some("planner-replaced-actual")
+    );
+}
+
+#[tokio::test]
+async fn driver_job_tracks_planner_replacement_custom_retry_and_nested_child_lineage() {
+    let jobs = SubAgentJobRegistry::new();
+    let nested_driver = driver();
+    let nested_tool: Arc<dyn ToolDispatch<(), ()>> = Arc::new(
+        DriverSubAgentTool::new(
+            "nested_subagent",
+            "Run a nested worker.",
+            nested_driver,
+            |_: &(), parent: &RunContext<()>, _: &Value, _: &CallId| {
+                let child = parent
+                    .child(RunConfig::new("nested-worker-child"), ())
+                    .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+                SubagentRequest::fresh_from_parent(
+                    parent,
+                    child,
+                    "nested-task",
+                    (),
+                    "nested input",
+                    None,
+                )
+            },
+            |_| None,
+        )
+        .with_job_registry(jobs.clone())
+        .with_owner_scope(Arc::new(|_| "owner".to_owned())),
+    );
+    let driver = Arc::new(
+        SubagentDriver::new(SubagentCapabilities {
+            planner: Some(Arc::new(ReplacingRetryPlanner)),
+            executor: Some(Arc::new(RetryThenNestedExecutor {
+                nested_tool,
+                attempts: std::sync::atomic::AtomicUsize::new(0),
+            })),
+            persistence: Some(Arc::new(Persistence)),
+        })
+        .unwrap(),
+    );
+    let tool = DriverSubAgentTool::new(
+        "subagent",
+        "worker description",
+        driver,
+        |_: &(), parent: &RunContext<()>, _: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("worker-request-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "retry-nested-task",
+                (),
+                "input",
+                None,
+            )
+        },
+        |_| None,
+    )
+    .with_job_registry(jobs.clone())
+    .with_owner_scope(Arc::new(|_| "owner".to_owned()));
+    let parent = RunContext::new(RunConfig::new("retry-nested-parent"), ());
+    ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("retry-nested-driver"),
+        json!({"input":"ignored"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+
+    let settled = jobs
+        .settle_root_run_descendants(
+            parent.run_id(),
+            "owner",
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.len(), 2, "all registered jobs: {:?}", jobs.list());
+    assert!(
+        settled
+            .iter()
+            .all(|job| job.status == SubAgentJobStatus::Completed)
+    );
+    assert!(settled.iter().any(|job| job.agent == "nested_subagent"));
 }
 
 #[tokio::test]

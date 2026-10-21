@@ -22,6 +22,13 @@ use super::{
 };
 
 const LOG_PREFIX: &str = "[subagent-jobs]";
+type DriverJobControls = (
+    SubAgentJobId,
+    SteeringHandle,
+    tinyagents_harness::run_queue::RunQueueHandle,
+    CancellationToken,
+    bool,
+);
 
 fn registry_failure(error: DetachedTaskRegistryError) -> SubAgentJobError {
     SubAgentJobError::Registry(error.to_string())
@@ -33,9 +40,16 @@ struct JobExecutionControls {
     run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
 }
 
-struct JobWaitGuard {
+pub(super) struct JobWaitGuard {
     jobs: SubAgentJobRegistry,
     waiters: Arc<AtomicUsize>,
+}
+
+impl JobWaitGuard {
+    pub(super) fn pin(jobs: SubAgentJobRegistry, waiters: Arc<AtomicUsize>) -> Self {
+        waiters.fetch_add(1, Ordering::AcqRel);
+        Self { jobs, waiters }
+    }
 }
 
 impl Drop for JobWaitGuard {
@@ -124,6 +138,9 @@ impl SubAgentJobRegistry {
             .driver_jobs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Root leases serialize with lineage insertion and pruning. Lock order:
+        // driver_jobs -> root_leases -> controls -> detached task registry.
+        let mut root_leases = self.root_leases();
         if let Err(error) = self.insert_job(
             id.clone(),
             agent,
@@ -137,6 +154,9 @@ impl SubAgentJobRegistry {
             &mut driver_jobs,
         ) {
             tracing::error!("{LOG_PREFIX} register.failed job_id={id} error={error}");
+        } else {
+            let mut controls = self.controls();
+            self.refresh_root_leases_locked(&mut root_leases, &mut controls);
         }
         (id, steering)
     }
@@ -160,6 +180,8 @@ impl SubAgentJobRegistry {
             parent_thread_id: link.parent_thread_id.clone(),
             workspace: link.workspace.clone(),
         };
+        let lineage =
+            super::types::JobLineage::new(link.parent_run_id.clone(), link.child_run_id.clone());
         let task_id = TaskId::new(id.as_str());
         let job = SubAgentJob {
             id: id.clone(),
@@ -186,7 +208,7 @@ impl SubAgentJobRegistry {
             .register(task_id.clone(), execution.steering.clone());
         if let Err(error) = self.tasks.register_cooperative_managed(
             task_id.clone(),
-            owner,
+            owner.clone(),
             metadata,
             watcher,
             execution.cancellation.clone(),
@@ -198,14 +220,18 @@ impl SubAgentJobRegistry {
             id.clone(),
             JobControl {
                 status,
+                owner,
                 cancellation_requested: false,
                 run_queue: execution.run_queue,
                 steering: execution.steering,
                 cancellation: execution.cancellation,
                 waiters: Arc::new(AtomicUsize::new(0)),
                 terminal_sequence: AtomicU64::new(0),
+                lineage,
             },
         );
+        self.changes
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
         Ok(())
     }
 
@@ -228,7 +254,7 @@ impl SubAgentJobRegistry {
 
     /// Keeps unpinned terminal history within the soft cap while allowing
     /// live work and terminal jobs pinned by waiters to exceed it temporarily.
-    fn prune_terminal_over_cap(&self) -> Result<(), SubAgentJobError> {
+    pub(super) fn prune_terminal_over_cap(&self) -> Result<(), SubAgentJobError> {
         let mut driver_jobs = self
             .driver_jobs
             .lock()
@@ -309,6 +335,35 @@ impl SubAgentJobRegistry {
         ),
         SubAgentJobError,
     > {
+        self.register_driver_job_inner(registration, None)
+    }
+
+    /// Registers a driver job with the actual live caller run. The driver
+    /// reports each planned attempt with [`Self::set_attempt_run_id`]. Resuming
+    /// the same durable task appends another parent edge and retains earlier
+    /// attempts.
+    pub fn register_driver_job_with_parent_run(
+        &self,
+        registration: DriverJobRegistration,
+        parent_run_id: tinyagents_harness::ids::RunId,
+    ) -> Result<
+        (
+            SubAgentJobId,
+            SteeringHandle,
+            tinyagents_harness::run_queue::RunQueueHandle,
+            CancellationToken,
+            bool,
+        ),
+        SubAgentJobError,
+    > {
+        self.register_driver_job_inner(registration, Some(parent_run_id))
+    }
+
+    fn register_driver_job_inner(
+        &self,
+        registration: DriverJobRegistration,
+        parent_run_id: Option<tinyagents_harness::ids::RunId>,
+    ) -> Result<DriverJobControls, SubAgentJobError> {
         let DriverJobRegistration {
             key,
             agent,
@@ -323,14 +378,16 @@ impl SubAgentJobRegistry {
             .driver_jobs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Lock order: driver_jobs -> root_leases -> controls -> detached task registry.
+        let mut root_leases = self.root_leases();
         if let Some(id) = driver_jobs.get(&key) {
-            if self.get_owned(id.as_str(), &owner).is_none() {
+            let mut controls = self.controls();
+            let control = controls
+                .get_mut(id)
+                .ok_or_else(|| SubAgentJobError::NotFound(id.as_str().to_owned()))?;
+            if control.owner != owner {
                 return Err(SubAgentJobError::NotFound(id.as_str().to_owned()));
             }
-            let controls = self.controls();
-            let control = controls
-                .get(id)
-                .ok_or_else(|| SubAgentJobError::NotFound(id.as_str().to_owned()))?;
             let status = control.status.borrow().status;
             if status.is_terminal() {
                 return Ok((
@@ -351,17 +408,24 @@ impl SubAgentJobRegistry {
                 .clone()
                 .ok_or_else(|| SubAgentJobError::LaneUnavailable(id.as_str().to_owned()))?;
             if status == SubAgentJobStatus::AwaitingInput && continuing {
+                if let Some(parent_run_id) = parent_run_id {
+                    control.lineage.add(Some(parent_run_id), None);
+                }
                 control.status.send_modify(|job| {
                     job.status = SubAgentJobStatus::Running;
                     job.error = None;
                 });
-                return Ok((
+                self.changes
+                    .send_modify(|generation| *generation = generation.wrapping_add(1));
+                let result = (
                     id.clone(),
                     control.steering.clone(),
                     queue,
                     control.cancellation.clone(),
                     true,
-                ));
+                );
+                self.refresh_root_leases_locked(&mut root_leases, &mut controls);
+                return Ok(result);
             }
             return Ok((
                 id.clone(),
@@ -378,6 +442,11 @@ impl SubAgentJobRegistry {
         let steering = steering.unwrap_or_else(|| {
             SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage))
         });
+        let parent_run_id = parent_run_id.unwrap_or_else(|| {
+            // A legacy caller's durable key proves its historical parent,
+            // but does not prove the current child attempt's native RunId.
+            tinyagents_harness::ids::RunId::new(key.parent_run_id.clone())
+        });
         self.insert_job(
             id.clone(),
             &agent,
@@ -385,6 +454,7 @@ impl SubAgentJobRegistry {
             JobLink {
                 parent_thread_id: key.thread_id.clone(),
                 workspace,
+                parent_run_id: Some(parent_run_id),
                 ..JobLink::default()
             },
             JobExecutionControls {
@@ -395,6 +465,10 @@ impl SubAgentJobRegistry {
             &mut driver_jobs,
         )?;
         driver_jobs.insert(key, id.clone());
+        {
+            let mut controls = self.controls();
+            self.refresh_root_leases_locked(&mut root_leases, &mut controls);
+        }
         let token = self
             .controls()
             .get(&id)
@@ -406,7 +480,7 @@ impl SubAgentJobRegistry {
 
     pub fn mark_running(&self, id: &SubAgentJobId) {
         if let Some(control) = self.controls().get(id) {
-            control.status.send_if_modified(|job| {
+            let changed = control.status.send_if_modified(|job| {
                 if matches!(
                     job.status,
                     SubAgentJobStatus::Queued | SubAgentJobStatus::AwaitingInput
@@ -417,6 +491,10 @@ impl SubAgentJobRegistry {
                     false
                 }
             });
+            if changed {
+                self.changes
+                    .send_modify(|generation| *generation = generation.wrapping_add(1));
+            }
         }
     }
 
@@ -442,6 +520,8 @@ impl SubAgentJobRegistry {
                 .send_modify(|job| settle(job, cancellation_requested));
             if control.status.borrow().status.is_terminal() {
                 self.stamp_terminal_sequence(control);
+                self.changes
+                    .send_modify(|generation| *generation = generation.wrapping_add(1));
             }
             self.steering.deregister(&task_id);
             true
@@ -546,6 +626,8 @@ impl SubAgentJobRegistry {
                         job.status = SubAgentJobStatus::Cancelled;
                         job.error = Some(TinyAgentsError::Cancelled.to_string());
                     });
+                    self.changes
+                        .send_modify(|generation| *generation = generation.wrapping_add(1));
                     self.stamp_terminal_sequence(control);
                     self.steering.deregister(&task_id);
                     drop(controls);
@@ -668,15 +750,32 @@ impl SubAgentJobRegistry {
     }
 
     /// Points the job link at the attempt that is now running.
-    pub(crate) fn set_attempt_run_id(&self, id: &SubAgentJobId, run_id: &str) {
-        if let Some(control) = self.controls().get(id) {
-            control.status.send_if_modified(|job| {
-                if job.status.is_terminal() {
-                    return false;
+    /// Records the actual native run id of one driver attempt for descendant
+    /// settlement. Call once for every attempt, including retries.
+    pub fn set_attempt_run_id(&self, id: &SubAgentJobId, run_id: &str) {
+        let mut root_leases = self.root_leases();
+        let mut controls = self.controls();
+        if let Some(control) = controls.get_mut(id) {
+            if control.status.borrow().status.is_terminal() {
+                return;
+            }
+            let run_id = tinyagents_harness::ids::RunId::new(run_id);
+            let new_edge = control.lineage.children.insert(run_id.clone());
+            for lease in root_leases.values_mut() {
+                if lease.owner == control.owner && lease.pinned_jobs.contains(id) {
+                    lease.reachable_runs.insert(run_id.clone());
                 }
-                job.subagent_run_id = Some(run_id.to_owned());
-                true
+            }
+            let changed = control.status.send_if_modified(|job| {
+                let changed = job.subagent_run_id.as_deref() != Some(run_id.as_str());
+                job.subagent_run_id = Some(run_id.as_str().to_owned());
+                changed
             });
+            if new_edge || changed {
+                self.changes
+                    .send_modify(|generation| *generation = generation.wrapping_add(1));
+            }
+            self.refresh_root_leases_locked(&mut root_leases, &mut controls);
         }
     }
 
@@ -774,6 +873,8 @@ impl SubAgentJobRegistry {
                     job.status = SubAgentJobStatus::Cancelled;
                     job.error = Some(TinyAgentsError::Cancelled.to_string());
                 });
+                self.changes
+                    .send_modify(|generation| *generation = generation.wrapping_add(1));
                 self.stamp_terminal_sequence(control);
                 self.steering.deregister(&task_id);
                 let snapshot = control.status.borrow().clone();
@@ -806,6 +907,8 @@ impl SubAgentJobRegistry {
                 job.status = SubAgentJobStatus::Cancelled;
                 job.error = Some(TinyAgentsError::Cancelled.to_string());
             });
+            self.changes
+                .send_modify(|generation| *generation = generation.wrapping_add(1));
             self.stamp_terminal_sequence(control);
             self.steering.deregister(&task_id);
             let snapshot = control.status.borrow().clone();
@@ -1126,10 +1229,19 @@ impl SubAgentJobRegistry {
         Ok(false)
     }
 
-    fn controls(
+    pub(super) fn controls(
         &self,
     ) -> std::sync::MutexGuard<'_, std::collections::HashMap<SubAgentJobId, JobControl>> {
         self.controls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(super) fn root_leases(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<u64, super::types::RootLeaseRecord>>
+    {
+        self.root_leases
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }

@@ -301,6 +301,8 @@ pub struct SubAgentJob {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct JobLink {
     pub(crate) subagent_run_id: Option<String>,
+    pub(crate) parent_run_id: Option<tinyagents_harness::ids::RunId>,
+    pub(crate) child_run_id: Option<tinyagents_harness::ids::RunId>,
     pub(crate) parent_tool_call_id: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
     pub(crate) workspace: Option<tinytools::WorkspaceDescriptor>,
@@ -321,16 +323,21 @@ pub struct SubAgentJobRegistry {
     // Private to `jobs.rs`. Invariant: only cooperative calls (register,
     // cancel_cooperative, release_cancellation, snapshots) may touch it, under
     // `controls`. Adapter cleanup removes from all three maps under the lock
-    // order driver_jobs -> controls -> tasks.
+    // order driver_jobs -> root_leases -> controls -> tasks.
     pub(super) tasks: DetachedTaskRegistry<JobMeta, SubAgentJob>,
     pub(crate) steering: SteeringRegistry,
     /// Status senders and cancel flags. Also the transition gate: every
-    /// mutation holds this lock, so a settle and a cancel never interleave.
+    /// Mutation holds this lock, so a settle and a cancel never interleave.
     pub(crate) controls: Arc<Mutex<HashMap<SubAgentJobId, JobControl>>>,
     /// Scoped bridge from driver task identity to the public job control id.
     pub(crate) driver_jobs: Arc<Mutex<HashMap<crate::subagent::SubagentTaskKey, SubAgentJobId>>>,
     /// Monotonic settlement order for deterministic bounded terminal retention.
     pub(crate) next_terminal_sequence: Arc<AtomicU64>,
+    /// Changes whenever root-lineage membership or a job lifecycle changes.
+    pub(crate) changes: watch::Sender<u64>,
+    /// Root-scoped retention leases; lock order is `root_leases -> controls`.
+    pub(crate) root_leases: Arc<Mutex<HashMap<u64, RootLeaseRecord>>>,
+    pub(crate) next_root_lease_id: Arc<AtomicU64>,
 }
 
 impl Default for SubAgentJobRegistry {
@@ -346,6 +353,9 @@ impl Default for SubAgentJobRegistry {
             controls: Arc::default(),
             driver_jobs: Arc::default(),
             next_terminal_sequence: Arc::new(AtomicU64::new(1)),
+            changes: watch::channel(0).0,
+            root_leases: Arc::default(),
+            next_root_lease_id: Arc::new(AtomicU64::new(1)),
         }
     }
 }
@@ -401,6 +411,7 @@ thread_local! {
 /// The adapter-owned half of a job: the status publisher and cancel flag.
 pub(crate) struct JobControl {
     pub(crate) status: watch::Sender<SubAgentJob>,
+    pub(crate) owner: String,
     /// Whether cancellation was requested while the child was still running.
     /// The job remains non-terminal until the child reports its result.
     pub(crate) cancellation_requested: bool,
@@ -413,6 +424,44 @@ pub(crate) struct JobControl {
     pub(crate) waiters: Arc<AtomicUsize>,
     /// Settlement order used to evict the oldest unpinned terminal record.
     pub(crate) terminal_sequence: AtomicU64,
+    /// Native parent-to-attempt edges, including every resumed attempt.
+    pub(crate) lineage: JobLineage,
+}
+
+pub(crate) struct RootLeaseRecord {
+    pub(crate) owner: String,
+    pub(crate) reachable_runs: std::collections::HashSet<tinyagents_harness::ids::RunId>,
+    pub(crate) pinned_jobs: std::collections::HashSet<SubAgentJobId>,
+}
+
+#[derive(Default)]
+pub(crate) struct JobLineage {
+    pub(crate) parents: std::collections::HashSet<tinyagents_harness::ids::RunId>,
+    pub(crate) children: std::collections::HashSet<tinyagents_harness::ids::RunId>,
+}
+
+impl JobLineage {
+    pub(crate) fn new(
+        parent: Option<tinyagents_harness::ids::RunId>,
+        child: Option<tinyagents_harness::ids::RunId>,
+    ) -> Self {
+        let mut lineage = Self::default();
+        lineage.add(parent, child);
+        lineage
+    }
+
+    pub(crate) fn add(
+        &mut self,
+        parent: Option<tinyagents_harness::ids::RunId>,
+        child: Option<tinyagents_harness::ids::RunId>,
+    ) {
+        if let Some(parent) = parent {
+            self.parents.insert(parent);
+        }
+        if let Some(child) = child {
+            self.children.insert(child);
+        }
+    }
 }
 
 pub struct DriverJobRegistration {
@@ -456,4 +505,10 @@ pub enum SubAgentJobError {
     /// The request identifier exceeds the bounded registry size.
     #[error("subagent request id is too long")]
     RequestIdTooLong,
+    /// Descendant settlement reached its one shared absolute deadline.
+    #[error("timed out while settling descendant subagent jobs")]
+    SettlementTimedOut,
+    /// Descendant settlement was interrupted by its caller's cancellation.
+    #[error("descendant subagent settlement was cancelled")]
+    SettlementCancelled,
 }

@@ -76,6 +76,7 @@
 mod delegation_tool;
 mod jobs;
 mod policy_run;
+mod settlement;
 mod status_map;
 mod types;
 
@@ -87,6 +88,7 @@ pub use delegation_tool::{
     MultiTargetDelegationTool, ReviewApprovalPolicy, parse_approval, review_stage_output,
 };
 pub use jobs::InlineJobGuard;
+pub use settlement::RootRunDescendantLease;
 pub use types::*;
 
 #[cfg(test)]
@@ -914,6 +916,8 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
             child.cancellation.clone(),
             JobLink {
                 subagent_run_id: Some(subagent_run_id.clone()),
+                parent_run_id: Some(parent.run_id().clone()),
+                child_run_id: Some(child.run_id().clone()),
                 parent_tool_call_id: tool_call_id.clone(),
                 parent_thread_id: parent.thread_id().map(|thread| thread.as_str().to_owned()),
                 workspace: parent.workspace.clone(),
