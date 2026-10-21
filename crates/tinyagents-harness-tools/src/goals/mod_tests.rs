@@ -291,9 +291,8 @@ mod tool_tests {
     }
 
     #[test]
-    fn goal_tools_builds_the_model_facing_set() {
-        let tools = goal_tools(store());
-        let names: Vec<&str> = tools.iter().map(|t| Tool::name(t.as_ref())).collect();
+    fn model_facing_goal_tool_kinds_have_the_expected_names() {
+        let names: Vec<&str> = GoalToolKind::MODEL_FACING.map(GoalToolKind::name).into();
         assert_eq!(
             names,
             vec!["goal_get", "goal_set", "goal_complete", "goal_resume"]
