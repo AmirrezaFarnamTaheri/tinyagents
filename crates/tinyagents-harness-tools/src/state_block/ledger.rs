@@ -246,10 +246,20 @@ fn runs_executable(command: &str, name: &str) -> bool {
         if first == name {
             return true;
         }
-        if matches!(first.as_str(), "env" | "command") {
-            return words
-                .get(1)
-                .is_some_and(|word| executable_name(word) == name);
+        if first == "env" {
+            return words.iter().skip(1).find(|word| {
+                !word.starts_with('-') && !word.contains('=')
+            }).is_some_and(|word| executable_name(word) == name);
+        }
+        if first == "command" {
+            return match words.get(1).copied() {
+                Some("-v" | "-V") => words
+                    .iter()
+                    .skip(2)
+                    .any(|word| executable_name(word) == name),
+                Some(word) => executable_name(word) == name,
+                None => false,
+            };
         }
         matches!(first.as_str(), "which" | "type")
             && words
