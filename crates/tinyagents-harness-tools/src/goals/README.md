@@ -14,10 +14,12 @@ process. Budgeted goal updates publish once cumulative usage since the last
 published update reaches five percent of the budget (at least one token).
 
 Before a turn, call `prepare_turn(thread_id)`. It reloads the goal without
-changing its status and returns `GoalTurnPreparation` containing the goal,
-optional `active_goal_context_block`, and optional `GoalBudgetGuard`. A paused
-goal remains paused so the model can inspect the new message and call
-`goal_resume` if the user continues that objective. A host that uses
+changing its status and returns `GoalTurnPreparation` containing the goal, an
+optional context block, and an optional `GoalBudgetGuard`. Active and
+budget-limited goals receive their usual context. A paused goal remains paused,
+but its context tells the model to inspect the new message and call
+`goal_resume` if the user continues that objective, use `goal_set` for a
+different task, or leave the goal paused otherwise. A host that uses
 `tinyagents-hooks` constructs `GoalBudgetStopHook::for_goal(store, goal)` from
 the returned goal and installs it for that turn; the guard must remain attached
 for the duration of that turn. Keeping hook construction in the host avoids a
