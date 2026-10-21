@@ -16,7 +16,7 @@ toml = "0.8"
 anyhow.workspace = true
 tracing.workspace = true
 # `AgentDefinition::tool_rules` carries the shared tool-rule vocabulary.
-tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.5.0" }
+tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.6.0" }
 
 [dev-dependencies]
 tempfile = "3"

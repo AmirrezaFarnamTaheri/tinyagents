@@ -278,6 +278,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let truncated_empty = tool_calls.is_empty()
             && crate::finish_reason::is_length_stop(response.finish_reason.as_deref())
             && response.text().trim().is_empty();
+        if truncated_empty {
+            turn_recovery.dead_calls_this_run += 1;
+            let sticky_after = self.policy.truncated_empty_reasoning_off_sticky_after;
+            if sticky_after > 0
+                && !turn_recovery.reasoning_off_sticky
+                && turn_recovery.dead_calls_this_run >= sticky_after
+            {
+                turn_recovery.reasoning_off_sticky = true;
+                tracing::info!(
+                    target: "tinyagents::agent_loop",
+                    run_id = %ctx.run_id(),
+                    dead_calls = turn_recovery.dead_calls_this_run,
+                    "[agent_loop] dead calls keep coming; the rest of the run goes out with reasoning off"
+                );
+            }
+        }
         // What a retry would cost and whether it can change anything. The
         // dead call's own duration and output count give the rate this model
         // emits at here; the next cap divided by that rate is how long the
@@ -297,7 +313,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     .map(std::time::Duration::from_millis),
             )
             .map(|clock| clock.remaining());
-            turn_recovery.truncated_retry_plan(attempt_max_tokens, dead_tokens, dead_ms, remaining)
+            turn_recovery.truncated_retry_plan(
+                attempt_max_tokens,
+                dead_tokens,
+                dead_ms,
+                remaining,
+                self.policy.truncated_empty_constant_cap,
+            )
         });
         if truncated_empty
             && turn_recovery.truncated_empty_retries_used < self.policy.truncated_empty_retries
@@ -310,6 +332,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             ctx.retract_transcript(messages.len());
             let plan = truncated_retry.expect("a truncated-empty reply has a plan");
             turn_recovery.take_truncated_retry(attempt_max_tokens, &plan);
+            turn_recovery.reasoning_off_next = self.policy.truncated_empty_reasoning_off;
             let record = ctx.emit(AgentEvent::RetryScheduled {
                 call_id: call_id.clone(),
                 attempt: turn_recovery.truncated_empty_retries_used as usize,
@@ -386,6 +409,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             messages.pop();
             ctx.retract_transcript(messages.len());
             turn_recovery.truncated_empty_nudges_used += 1;
+            turn_recovery.reasoning_off_next = self.policy.truncated_empty_reasoning_off;
             let retry_was_skipped_for_clock = truncated_retry
                 .as_ref()
                 .is_some_and(|plan| !plan.fits_clock());
