@@ -265,7 +265,14 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
             return;
         }
         let record = ledger::call_record(call);
-        let output = result.output();
+        // Nested tool results do not pass through finish_tool_call's host
+        // output screening hook. Keep their failure fact, but never retain
+        // their raw content in the model-facing ledger.
+        let output = if result.is_error {
+            "nested tool returned an error"
+        } else {
+            ""
+        };
         self.with_run(ctx.instance_id(), |ledger| {
             ledger::record_result(ledger, record, result.is_error, &output);
         });
