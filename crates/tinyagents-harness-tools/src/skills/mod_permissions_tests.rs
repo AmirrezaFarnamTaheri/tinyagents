@@ -145,7 +145,7 @@ fn unresolved_named_calls_keep_the_ceiling_even_in_an_all_read_only_registry() {
     let handle = PackRegistryHandle::default();
     let tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![Box::new(CodeTool("preview_patch"))]);
     handle.bind(Arc::downgrade(&tools));
-    let dispatcher = Arc::new(UseSkillTool::new(handle, CATALOG));
+    let dispatcher = Arc::new(UseSkillTool::new(handle.clone(), CATALOG));
 
 
     for call in [
