@@ -286,8 +286,8 @@ async fn root_settlement_keeps_one_deadline_across_lifecycle_wakes() {
     jobs.mark_running(&child);
     let cancellation = CancellationToken::new();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    let settling =
-        jobs.settle_root_run_descendants(&RunId::new("root"), "owner", deadline, &cancellation);
+    let root_run_id = RunId::new("root");
+    let settling = jobs.settle_root_run_descendants(&root_run_id, "owner", deadline, &cancellation);
     tokio::pin!(settling);
     tokio::select! {
         biased;
@@ -338,8 +338,9 @@ async fn root_settlement_cancellation_while_blocked_releases_waiter_pins() {
     jobs.set_attempt_run_id(&child, "cancel-child-attempt");
     jobs.mark_running(&child);
     let cancellation = CancellationToken::new();
+    let root_run_id = RunId::new("root");
     let settling = jobs.settle_root_run_descendants(
-        &RunId::new("root"),
+        &root_run_id,
         "owner",
         tokio::time::Instant::now() + std::time::Duration::from_secs(30),
         &cancellation,
@@ -410,8 +411,9 @@ async fn root_settlement_pins_terminal_ancestors_while_descendants_remain_live()
     );
 
     let cancellation = CancellationToken::new();
+    let root_run_id = RunId::new("settlement-root");
     let settling = jobs.settle_root_run_descendants(
-        &RunId::new("settlement-root"),
+        &root_run_id,
         "owner",
         tokio::time::Instant::now() + std::time::Duration::from_secs(30),
         &cancellation,
