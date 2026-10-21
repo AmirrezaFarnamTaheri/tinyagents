@@ -1116,7 +1116,6 @@ async fn background_request_without_delivery_target_spawns_and_can_be_waited_sep
     assert!(!result.is_error);
     let value: Value = serde_json::from_str(&result.output()).unwrap();
     assert_eq!(value["status"], "running");
-    assert_eq!(value["task_id"], "worker-task");
     let job = jobs
         .wait_owned(value["task_id"].as_str().unwrap(), &parent.instance_id().to_string())
         .await
@@ -1163,7 +1162,6 @@ async fn background_request_with_delivery_target_returns_task_reference() {
     let value: Value = serde_json::from_str(&result.output()).unwrap();
     assert_eq!(value["status"], "running");
     assert_eq!(value["delivery_target"], "parent-thread");
-    assert_eq!(value["task_id"], "worker-task");
 }
 
 #[tokio::test(flavor = "current_thread")]

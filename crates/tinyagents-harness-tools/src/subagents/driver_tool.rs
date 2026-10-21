@@ -292,6 +292,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         let async_completion = self.async_completion.clone();
         let detached_task_id = task_id.clone();
         let bridge = bridged_job.clone();
+        let callback_target = target.clone();
         let mut job_guard = job_guard;
         tokio::spawn(async move {
             let attempt_bridge = bridge.clone();
@@ -307,7 +308,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                 Ok(result) => {
                     if result.disposition
                         != tinyagents_orchestration::subagent::SubagentPersistenceDisposition::ObserverCancelled
-                        && let (Some(target), Some(callback)) = (&target, &async_completion)
+                        && let (Some(target), Some(callback)) = (&callback_target, &async_completion)
                     {
                         callback(target.clone(), Ok(result.clone())).await;
                     }
@@ -318,14 +319,14 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                         guard.disarm();
                     }
                     if result.should_emit_host_effects()
-                        && let (Some(target), Some(callback)) = (&target, &completion)
+                        && let (Some(target), Some(callback)) = (&callback_target, &completion)
                     {
                         callback(target, Ok(result.outcome));
                     }
                 }
                 Err(error) => {
                     let error = error.to_string();
-                    if let (Some(target), Some(callback)) = (&target, &async_completion) {
+                    if let (Some(target), Some(callback)) = (&callback_target, &async_completion) {
                         callback(target.clone(), Err(error.clone())).await;
                     }
                     if let Some((jobs, id, _)) = &bridge {
@@ -334,7 +335,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                     if let Some(guard) = &mut job_guard {
                         guard.disarm();
                     }
-                    if let (Some(target), Some(callback)) = (&target, &completion) {
+                    if let (Some(target), Some(callback)) = (&callback_target, &completion) {
                         callback(target, Err(error.clone()));
                     }
                     tracing::error!(task_id = %detached_task_id, error, "driver-backed subagent failed");
