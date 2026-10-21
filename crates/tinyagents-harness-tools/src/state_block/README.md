@@ -23,6 +23,7 @@ and the hard facts at the tail of every request.
 | Current approach, Verified facts, Dead ends | `scratchpad::store` for the run's thread | The model's notes, written through the `todo` tool's note arguments and labelled as its own. |
 | From your last finished task | `Scratchpad::last_task` | The facts and dead ends of the last plan that finished, moved there at the end of its turn. |
 | Recent failures | `after_tool` results with `is_error` | The last 3, each with its age, tool, command (or argument summary) and the exit code plus first `[stderr]` line. Dropped after 4 rounds, or when the same command later succeeds. Exit codes 1, 2 or 141 with no `[stderr]` line from a search or compound command (including pipelines and multi-line scripts) are treated as exploration misses and omitted. |
+| Dead-end request | Recent failures since the current step began (or the run, without a plan) | With 2 or more and no dead end recorded since, one line asks the model to record the failing approach with `dead_ends` and set a new `approach`. Gone once it does. |
 | Reported not found | Shell wording in error output (`X: command not found`, `sh: 1: X: not found`, `command not found: X`) | Cleared when a later successful command runs `X`. |
 | Files written this run | Paths extracted from filesystem tool calls, patch envelopes and unified-diff headers | The last 6, distinct. |
 

@@ -47,6 +47,9 @@ pub(super) fn render(
         }
         sections.push(lines.join("\n"));
     }
+    if let Some(nudge) = dead_end_nudge(pad, ledger) {
+        sections.push(nudge);
+    }
     if !ledger.missing.is_empty() {
         let names: Vec<&str> = ledger
             .missing
@@ -192,6 +195,42 @@ fn notes_sections(pad: &Scratchpad) -> Vec<String> {
         sections.push(lines.join("\n"));
     }
     sections
+}
+
+/// Failures since the step began before the block asks for a dead end.
+const DEAD_END_NUDGE_FAILURES: usize = 2;
+
+/// A request to record a failing approach: shown while the current step (or,
+/// without a plan, the run) has [`DEAD_END_NUDGE_FAILURES`] or more recent
+/// failures and the model has written no dead end since it began. The model
+/// otherwise notes facts when it ticks a step and never what did not work.
+fn dead_end_nudge(pad: Option<&Scratchpad>, ledger: &RunLedger) -> Option<String> {
+    let failing = ledger
+        .failures
+        .iter()
+        .filter(|failure| failure.round >= ledger.step_since)
+        .count();
+    if failing < DEAD_END_NUDGE_FAILURES {
+        return None;
+    }
+    let newest = pad.and_then(|pad| pad.dead_ends.last()).cloned();
+    if ledger
+        .dead_end_anchor
+        .as_ref()
+        .is_some_and(|anchor| *anchor != newest)
+    {
+        return None;
+    }
+    let what = if ledger.step.is_some() {
+        "This step keeps failing"
+    } else {
+        "Calls keep failing"
+    };
+    Some(format!(
+        "{what} ({failing} recent failures). If the approach is wrong, record it before \
+         changing course: todo {{\"dead_ends\": [\"what failed and why\"], \"approach\": \
+         \"what you try next\"}}."
+    ))
 }
 
 /// How long ago round `then` was, counting the latest round as 1: the block is

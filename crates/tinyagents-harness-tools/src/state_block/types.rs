@@ -61,6 +61,10 @@ pub(super) struct RunLedger {
     /// The block rendered for the request in flight, for re-application
     /// after request-rewriting middleware.
     pub staged: Option<String>,
+    /// The model's newest dead end when the current step (or, without a
+    /// plan, the run) began: a different newest dead end means it has
+    /// recorded one since. `None` until the first call sets it.
+    pub dead_end_anchor: Option<Option<String>>,
 }
 
 /// What the ledger keeps of one tool call while it runs.

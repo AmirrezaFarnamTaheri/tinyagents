@@ -113,8 +113,8 @@ fn facts_render_without_a_plan() {
     assert!(!block.contains("Plan:"), "{block}");
     assert!(
         block.contains(
-            "Recent failures (oldest first):\n  - last round, shell `python3 x.py`: exit code 127\n  - 3 rounds ago, shell `make`: exit code 2\nReported not found: python3\nFiles written this run: /app/x.py"
-        ),
+            "Recent failures (oldest first):\n  - last round, shell `python3 x.py`: exit code 127\n  - 3 rounds ago, shell `make`: exit code 2\nCalls keep failing (2 recent failures)."
+        ) && block.contains("\nReported not found: python3\nFiles written this run: /app/x.py"),
         "{block}"
     );
 }
@@ -235,5 +235,77 @@ fn notes_alone_make_a_block() {
             &RunLedger::default()
         ),
         None
+    );
+}
+
+fn failed(round: usize) -> Failure {
+    Failure {
+        round,
+        tool: "shell".into(),
+        summary: "make".into(),
+        command: Some("make".into()),
+        error: "exit code 2".into(),
+    }
+}
+
+fn failing_ledger(rounds: &[usize], step_since: usize, step: bool) -> RunLedger {
+    RunLedger {
+        round: 9,
+        step_since,
+        step: step.then(|| (1, "Build".to_string())),
+        failures: rounds.iter().map(|round| failed(*round)).collect(),
+        dead_end_anchor: Some(None),
+        ..RunLedger::default()
+    }
+}
+
+#[test]
+fn a_step_that_keeps_failing_asks_for_a_dead_end() {
+    let items = vec![item("Build", TodoStatus::InProgress)];
+    let block = render(None, None, &items, &failing_ledger(&[7, 8], 6, true)).unwrap();
+    assert!(
+        block.contains("This step keeps failing (2 recent failures)")
+            && block.contains("todo {\"dead_ends\": [\"what failed and why\"]"),
+        "{block}"
+    );
+
+    let one = render(None, None, &items, &failing_ledger(&[8], 6, true)).unwrap();
+    assert!(
+        !one.contains("keeps failing"),
+        "one failure is not a pattern"
+    );
+
+    let before_step = render(None, None, &items, &failing_ledger(&[4, 5], 6, true)).unwrap();
+    assert!(
+        !before_step.contains("keeps failing"),
+        "failures from an earlier step do not count"
+    );
+}
+
+#[test]
+fn a_dead_end_recorded_since_the_step_began_ends_the_request() {
+    let items = vec![item("Build", TodoStatus::InProgress)];
+    let pad = Scratchpad {
+        dead_ends: vec!["make with -j1 still fails: missing libpng".into()],
+        ..Scratchpad::default()
+    };
+    let block = render(None, Some(&pad), &items, &failing_ledger(&[7, 8], 6, true)).unwrap();
+    assert!(!block.contains("keeps failing"), "{block}");
+
+    let mut stale = failing_ledger(&[7, 8], 6, true);
+    stale.dead_end_anchor = Some(Some("make with -j1 still fails: missing libpng".into()));
+    let block = render(None, Some(&pad), &items, &stale).unwrap();
+    assert!(
+        block.contains("keeps failing"),
+        "a dead end from before the step does not count: {block}"
+    );
+}
+
+#[test]
+fn without_a_plan_the_request_names_the_calls() {
+    let block = render(None, None, &[], &failing_ledger(&[7, 8], 0, false)).unwrap();
+    assert!(
+        block.contains("Calls keep failing (2 recent failures)"),
+        "{block}"
     );
 }
