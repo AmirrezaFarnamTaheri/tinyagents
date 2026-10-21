@@ -1543,7 +1543,7 @@ async fn driver_job_tracks_planner_replacement_custom_retry_and_nested_child_lin
         )
         .await
         .unwrap();
-    assert_eq!(settled.len(), 2);
+    assert_eq!(settled.len(), 2, "all registered jobs: {:?}", jobs.list());
     assert!(
         settled
             .iter()
