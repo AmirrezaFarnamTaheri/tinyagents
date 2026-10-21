@@ -212,21 +212,27 @@ async fn only_security_screened_tool_output_enters_the_ledger() {
     Middleware::<(), ()>::after_tool(&mw, &mut ctx, &(), &invocation, &mut raw)
         .await
         .unwrap();
-    let screened = ToolResult::error("redacted output");
+    let mut screened = ToolResult::error("secret-token-in-canonical-content");
+    screened.markdown_formatted = Some("safe markdown summary".to_string());
+    let model_output = screened.output_for_llm(true);
     Middleware::<(), ()>::after_tool_output_screened(
         &mw,
         &mut ctx,
         &(),
         &invocation,
         &screened,
-        "redacted output",
+        &model_output,
     )
     .await
     .unwrap();
 
     let rendered = block(&mw, &mut ctx).await.unwrap();
-    assert!(rendered.contains("redacted output"), "{rendered}");
+    assert!(rendered.contains("safe markdown summary"), "{rendered}");
     assert!(!rendered.contains("secret-token-from-stderr"), "{rendered}");
+    assert!(
+        !rendered.contains("secret-token-in-canonical-content"),
+        "{rendered}"
+    );
 }
 
 #[tokio::test]
