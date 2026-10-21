@@ -88,7 +88,9 @@ pub(super) fn record_result(
         return;
     }
     if let Some(command) = &call.command {
-        ledger.missing.retain(|(name, _)| !runs_executable(command, name));
+        ledger
+            .missing
+            .retain(|(name, _)| !runs_executable(command, name));
     }
     ledger.failures.retain(|failure| {
         failure.tool != call.tool
@@ -247,10 +249,15 @@ fn runs_executable(command: &str, name: &str) -> bool {
                 return true;
             }
             if matches!(first.as_str(), "env" | "command") {
-                return words.get(1).is_some_and(|word| executable_name(word) == name);
+                return words
+                    .get(1)
+                    .is_some_and(|word| executable_name(word) == name);
             }
             matches!(first.as_str(), "which" | "type")
-                && words.iter().skip(1).any(|word| executable_name(word) == name)
+                && words
+                    .iter()
+                    .skip(1)
+                    .any(|word| executable_name(word) == name)
         })
 }
 

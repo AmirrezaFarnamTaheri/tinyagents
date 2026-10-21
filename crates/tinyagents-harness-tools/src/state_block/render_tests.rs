@@ -86,12 +86,14 @@ fn facts_render_without_a_plan() {
         round: 4,
         tool: "shell".to_string(),
         summary: "python3 x.py".to_string(),
+        command: Some("python3 x.py".to_string()),
         error: "exit code 127".to_string(),
     });
     ledger.failures.push_back(Failure {
         round: 2,
         tool: "shell".to_string(),
         summary: "make".to_string(),
+        command: Some("make".to_string()),
         error: "exit code 2".to_string(),
     });
     ledger.missing.push(("python3".to_string(), 4));

@@ -113,16 +113,38 @@ fn a_success_of_the_same_command_clears_its_failure() {
 }
 
 #[test]
-fn a_missing_executable_clears_once_a_command_runs_it() {
+fn failure_correction_uses_the_full_command_not_its_short_display() {
+    let prefix = format!("python3 -c '{}'", "x".repeat(120));
+    let failed = format!("{prefix} fail");
+    let succeeded = format!("{prefix} success");
+    assert_eq!(shell(&failed).summary, shell(&succeeded).summary);
+    let mut ledger = RunLedger::default();
+    record_result(&mut ledger, shell(&failed), true, "exit code 1");
+    record_result(&mut ledger, shell(&succeeded), false, "ok");
+    assert_eq!(ledger.failures.len(), 1);
+    record_result(&mut ledger, shell(&failed), false, "ok");
+    assert!(ledger.failures.is_empty());
+}
+
+#[test]
+fn a_missing_executable_clears_only_when_a_command_runs_it() {
     let mut ledger = RunLedger::default();
     record_result(&mut ledger, shell("python3 x.py"), true, SHELL_127);
     assert_eq!(ledger.missing, vec![("python3".to_string(), 0)]);
+    record_result(&mut ledger, shell("echo python3"), false, "python3");
+    assert_eq!(ledger.missing.len(), 1, "mentioning a name is not evidence");
     record_result(
         &mut ledger,
-        shell("apt-get install -y python3"),
+        shell("grep python3 requirements.txt"),
         false,
-        "done",
+        "python3",
     );
+    assert_eq!(
+        ledger.missing.len(),
+        1,
+        "a search argument is not execution"
+    );
+    record_result(&mut ledger, shell("python3 x.py"), false, "done");
     assert!(ledger.missing.is_empty());
 }
 

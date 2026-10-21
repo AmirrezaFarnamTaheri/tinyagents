@@ -163,6 +163,28 @@ async fn the_block_follows_the_plan_and_the_tool_results() {
 }
 
 #[tokio::test]
+async fn nested_tool_results_are_recorded_in_the_run_state() {
+    let mw = StateBlockMiddleware::new(Arc::new(InMemoryStore::default()));
+    let ctx = ctx();
+    let call = ToolCall::new(
+        "parent/0",
+        "shell",
+        serde_json::json!({"command": "make test"}),
+    );
+    let result = ToolResult::error("exit code 2");
+    Middleware::<(), ()>::observe_nested_result(&mw, &ctx, &(), &call, &result).await;
+
+    let mut ctx = ctx;
+    let rendered = block(&mw, &mut ctx)
+        .await
+        .expect("nested failure is visible");
+    assert!(
+        rendered.contains("shell `make test`: exit code 2"),
+        "{rendered}"
+    );
+}
+
+#[tokio::test]
 async fn a_rewritten_request_gets_the_block_back_once() {
     let mw = StateBlockMiddleware::new(Arc::new(InMemoryStore::default()));
     let mut ctx = ctx();
