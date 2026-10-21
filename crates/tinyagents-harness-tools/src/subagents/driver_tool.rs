@@ -35,7 +35,7 @@ fn status_tool_result(
     if let Some(error) = error {
         value["error"] = Value::String(error);
     }
-    if matches!(status, "completed" | "running" | "queued" | "awaiting_input") {
+    if matches!(status, "completed" | "running" | "queued") {
         ToolResult::json(value)
     } else {
         ToolResult::error(value.to_string())
