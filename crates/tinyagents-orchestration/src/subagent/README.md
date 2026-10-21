@@ -214,8 +214,8 @@ watching across a pause and skips a child whose ledger shows a cancellation.
 ## Policy, result and role (D5/D6/D9)
 
 One `SubAgentPolicy { timeout, retry, budget, retry_after_tool_calls }` governs
-every path (it is defined in `tinyagents-graph` and re-exported here, because
-orchestration depends on graph).
+every path (it is defined in orchestration and temporarily re-exported by
+`tinyagents-graph` for the deprecated graph subagent node).
 
 - **Timeout.** `SubagentDriver` runs the executor under its own child token; on
   elapse the child is cancelled (the caller's token is not) and the outcome is
