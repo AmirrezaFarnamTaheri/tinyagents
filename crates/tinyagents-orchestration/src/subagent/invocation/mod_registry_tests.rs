@@ -209,6 +209,108 @@ async fn root_settlement_uses_one_deadline_and_propagates_cancellation() {
 }
 
 #[tokio::test]
+async fn root_settlement_pins_terminal_ancestors_while_descendants_remain_live() {
+    use tinyagents_harness::cancel::CancellationToken;
+    use tinyagents_harness::ids::RunId;
+
+    let jobs = SubAgentJobRegistry::new();
+    let registration = |task: &str, parent: &str| DriverJobRegistration {
+        key: crate::subagent::SubagentTaskKey {
+            root_run_id: "settlement-retention-root".into(),
+            parent_run_id: parent.into(),
+            thread_id: None,
+            task_id: task.into(),
+        },
+        agent: task.into(),
+        owner: "owner".into(),
+        workspace: None,
+        cancellation: CancellationToken::new(),
+        steering: None,
+        run_queue: None,
+        continuing: false,
+    };
+    let (parent, _, _, _, _) = jobs
+        .register_driver_job_with_parent_run(
+            registration("settlement-parent", "unused"),
+            RunId::new("settlement-root"),
+        )
+        .unwrap();
+    jobs.set_attempt_run_id(&parent, "settlement-parent-attempt");
+    jobs.mark_running(&parent);
+    let (child, _, _, _, _) = jobs
+        .register_driver_job_with_parent_run(
+            registration("settlement-child", "unused"),
+            RunId::new("settlement-parent-attempt"),
+        )
+        .unwrap();
+    jobs.set_attempt_run_id(&child, "settlement-child-attempt");
+    jobs.mark_running(&child);
+    jobs.mark_driver_result(
+        &parent,
+        Ok(SubagentOutcome::completed(
+            parent.as_str(),
+            "parent finished",
+        )),
+    );
+
+    let settling = {
+        let jobs = jobs.clone();
+        tokio::spawn(async move {
+            jobs.settle_root_run_descendants(
+                &RunId::new("settlement-root"),
+                "owner",
+                tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+                &CancellationToken::new(),
+            )
+            .await
+        })
+    };
+    loop {
+        let controls = jobs.controls();
+        if controls[&parent]
+            .waiters
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+        {
+            break;
+        }
+        drop(controls);
+        tokio::task::yield_now().await;
+    }
+
+    for index in 0..=super::types::SUBAGENT_JOB_SOFT_CAP {
+        let task = format!("pressure-{index}");
+        let (id, _, _, _, _) = jobs
+            .register_driver_job_with_parent_run(
+                registration(&task, "unused"),
+                RunId::new("unrelated-root"),
+            )
+            .unwrap();
+        jobs.set_attempt_run_id(&id, &format!("{task}-attempt"));
+        jobs.mark_driver_result(
+            &id,
+            Ok(SubagentOutcome::completed(
+                id.as_str(),
+                "unrelated terminal",
+            )),
+        );
+    }
+
+    assert!(
+        jobs.get(parent.as_str()).is_some(),
+        "the pinned ancestor must survive terminal eviction"
+    );
+    jobs.mark_driver_result(
+        &child,
+        Ok(SubagentOutcome::completed(child.as_str(), "child finished")),
+    );
+    let settled = settling.await.unwrap().unwrap();
+    assert_eq!(settled.len(), 2);
+    assert!(settled.iter().any(|job| job.id == parent));
+    assert!(settled.iter().any(|job| job.id == child));
+}
+
+#[tokio::test]
 async fn resumed_job_keeps_old_attempt_edges_without_importing_new_root_siblings() {
     use tinyagents_harness::cancel::CancellationToken;
     use tinyagents_harness::ids::RunId;
@@ -314,7 +416,8 @@ async fn resumed_job_keeps_old_attempt_edges_without_importing_new_root_siblings
         }
     };
     let old_root_jobs = settle("old-root").await;
-    assert_eq!(old_root_jobs.len(), 3);
+    assert_eq!(old_root_jobs.len(), 4);
+    assert!(old_root_jobs.iter().any(|entry| entry.id == old_grandchild));
     assert!(old_root_jobs.iter().any(|entry| entry.id == new_grandchild));
     assert!(
         !old_root_jobs

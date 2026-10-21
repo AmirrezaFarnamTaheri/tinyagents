@@ -40,9 +40,16 @@ struct JobExecutionControls {
     run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
 }
 
-struct JobWaitGuard {
+pub(super) struct JobWaitGuard {
     jobs: SubAgentJobRegistry,
     waiters: Arc<AtomicUsize>,
+}
+
+impl JobWaitGuard {
+    pub(super) fn pin(jobs: SubAgentJobRegistry, waiters: Arc<AtomicUsize>) -> Self {
+        waiters.fetch_add(1, Ordering::AcqRel);
+        Self { jobs, waiters }
+    }
 }
 
 impl Drop for JobWaitGuard {
