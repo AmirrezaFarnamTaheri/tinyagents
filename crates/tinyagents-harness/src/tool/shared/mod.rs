@@ -181,7 +181,7 @@ impl Tool for CanonicalSharedToolAdapter {
     }
 
     fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
-        None
+        self.resolved_tool().and_then(Tool::host_extension)
     }
 
     // Tool rules read these: a dropped tag lets a tag rule miss, and a
