@@ -453,7 +453,11 @@ async fn root_settlement_pins_terminal_ancestors_while_descendants_remain_live()
     );
     let settled = settling.await.unwrap();
     assert_eq!(settled.len(), 2);
-    assert!(settled.iter().any(|job| job.id == parent));
+    assert!(settled.iter().any(|job| {
+        job.id == parent
+            && job.output.as_deref() == Some("parent finished")
+            && job.status == SubAgentJobStatus::Completed
+    }));
     assert!(settled.iter().any(|job| job.id == child));
 }
 

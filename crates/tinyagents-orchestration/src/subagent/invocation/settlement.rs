@@ -1,5 +1,6 @@
 //! Bounded settlement for native driver-job descendants.
 
+use super::jobs::JobWaitGuard;
 use super::*;
 
 impl SubAgentJobRegistry {
@@ -26,6 +27,7 @@ impl SubAgentJobRegistry {
     ) -> std::result::Result<Vec<SubAgentJob>, SubAgentJobError> {
         let owner = owner.to_string();
         let mut changes = self.changes.subscribe();
+        let mut pinned = std::collections::HashMap::<SubAgentJobId, JobWaitGuard>::new();
         loop {
             let (jobs, pending) = {
                 // Registration and lifecycle transitions take this same lock.
@@ -55,6 +57,9 @@ impl SubAgentJobRegistry {
                             continue;
                         }
                         reachable_jobs.insert(snapshot.status.id.clone());
+                        pinned.entry(snapshot.status.id.clone()).or_insert_with(|| {
+                            JobWaitGuard::pin(self.clone(), control.waiters.clone())
+                        });
                         reachable_runs.extend(control.lineage.children.iter().cloned());
                     }
                 }
