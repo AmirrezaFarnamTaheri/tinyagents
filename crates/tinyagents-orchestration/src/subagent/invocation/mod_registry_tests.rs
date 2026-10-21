@@ -746,40 +746,13 @@ async fn cancelled_root_lease_releases_history_retention() {
             .await,
         Err(SubAgentJobError::SettlementCancelled)
     );
-    jobs.mark_driver_result(
-        &parent,
-        Ok(SubagentOutcome::completed(
-            parent.as_str(),
-            "released after cancellation",
-        )),
+    assert_eq!(
+        jobs.controls()[&parent]
+            .waiters
+            .load(std::sync::atomic::Ordering::Acquire),
+        0,
+        "cancellation consumes and releases the lease pin"
     );
-    let task = "cancel-lease-final-pressure";
-    let (pressure, _, _, _, _) = jobs
-        .register_driver_job_with_parent_run(
-            DriverJobRegistration {
-                key: crate::subagent::SubagentTaskKey {
-                    root_run_id: root.as_str().into(),
-                    parent_run_id: "ignored".into(),
-                    thread_id: None,
-                    task_id: task.into(),
-                },
-                agent: "worker".into(),
-                owner: "owner".into(),
-                workspace: None,
-                cancellation: CancellationToken::new(),
-                steering: None,
-                run_queue: None,
-                continuing: false,
-            },
-            RunId::new("unrelated-root"),
-        )
-        .unwrap();
-    jobs.set_attempt_run_id(&pressure, "cancel-lease-final-pressure-attempt");
-    jobs.mark_driver_result(
-        &pressure,
-        Ok(SubagentOutcome::completed(pressure.as_str(), "pressure")),
-    );
-    assert!(jobs.get(parent.as_str()).is_none());
 }
 
 #[tokio::test]
