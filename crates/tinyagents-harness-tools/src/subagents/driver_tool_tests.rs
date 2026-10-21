@@ -701,7 +701,7 @@ async fn bounded_await_observes_terminal_state_after_deadline_before_same_future
     let task_key = SubagentTaskKey::from_context(&parent, "bounded-await-race", None);
     let request_key = task_key.clone();
     let tool = DriverSubAgentTool::new(
-        "spawn_async_subagent",
+        "spawn_subagent",
         "Run the worker in the background.",
         driver,
         move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
@@ -1665,7 +1665,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
     });
     let tool = DriverSubAgentTool::new(
-        "spawn_async_subagent",
+        "spawn_subagent",
         "Run the allowed worker in the background.",
         driver,
         |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
@@ -2177,7 +2177,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
         "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"continue":{"type":"boolean"}}
     });
     let tool = DriverSubAgentTool::new(
-        "spawn_async_subagent",
+        "spawn_subagent",
         "worker description",
         driver,
         move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
@@ -2315,7 +2315,7 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
     let key = SubagentTaskKey::from_context(&parent, "cancel-task", None);
     let request_key = key.clone();
     let owner_scope: Arc<dyn Fn(u64) -> String + Send + Sync> = Arc::new(|_| "parent-a".into());
-    let tool = DriverSubAgentTool::new("spawn_async_subagent", "worker description", driver, move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+    let tool = DriverSubAgentTool::new("spawn_subagent", "worker description", driver, move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("child-run"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
@@ -2736,7 +2736,7 @@ async fn panicking_background_driver_alias_settles_and_replays_as_tool_error() {
         .unwrap(),
     );
     let tool = DriverSubAgentTool::new(
-        "spawn_async_subagent",
+        "spawn_subagent",
         "worker description",
         driver,
         |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
