@@ -9,15 +9,21 @@
 //! model can't address another thread's list; the bare [`Tool::call`] entry
 //! point (no context) errors. Returns the updated items plus a markdown
 //! rendering.
+//!
+//! The same call (or one on its own) takes the model's notes for the thread's
+//! [scratchpad](crate::scratchpad): `facts`, `dead_ends`, `approach` and
+//! `retract`. They are written first, then the plan arguments run as if the
+//! notes were not there; notes alone read the list.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::store;
 use super::types::{TodoItem, TodoStatus, TodosSnapshot, parse_status};
+use crate::scratchpad::{Scratchpad, ScratchpadUpdate, store as scratchpad_store};
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::store::Store;
 use tinytools::{Tool, ToolPolicy, ToolResult, ToolRunContext, ToolSideEffects};
@@ -34,7 +40,12 @@ const TODO_DESCRIPTION: &str = "This thread's plan, for work with 3+ steps. Writ
     Drop a step with `{\"cancel\": N, \"reason\": \"...\"}`. No arguments reads the list. \
     Ticking is bookkeeping, not work: in the same response (or your next turn, if you cannot call \
     tools in parallel) do the next step unless the list is finished. Replace the list at most \
-    once per assistant response.";
+    once per assistant response. Notes, in any call: `facts` (what a result proved), `dead_ends` \
+    (what failed and why), `approach` (what you are trying now), `retract` (text of a note that \
+    was wrong). They stay in [run state] on every call; write one when you learn it.";
+
+/// The note arguments, taken out before the plan arguments are read.
+const NOTE_ARGS: [&str; 4] = ["facts", "dead_ends", "approach", "retract"];
 
 /// The `todo` harness [`Tool`], backed by a [`Store`](tinyagents_harness::store::Store).
 pub struct TodoTool {
@@ -99,6 +110,39 @@ impl TodoTool {
                 "arguments must be an object".to_string(),
             ));
         };
+        let (update, args) = match split_notes(args) {
+            Ok(split) => split,
+            Err(message) => return Ok(TodoOutcome::Error(message)),
+        };
+        let pad = if update.is_empty() {
+            None
+        } else {
+            match scratchpad_store::apply(&self.store, thread_id, &update).await {
+                Ok(pad) => Some(pad),
+                Err(TinyAgentsError::Validation(message)) => {
+                    return Ok(TodoOutcome::Error(message));
+                }
+                Err(e) => return Ok(TodoOutcome::Error(e.to_string())),
+            }
+        };
+        let outcome = self.dispatch_plan(thread_id, &args).await?;
+        Ok(match (outcome, pad) {
+            (TodoOutcome::Ok(mut payload), Some(pad)) => {
+                payload["scratchpad"] = notes_payload(&pad);
+                TodoOutcome::Ok(payload)
+            }
+            (TodoOutcome::Error(message), Some(_)) => {
+                TodoOutcome::Error(format!("{message} (your notes were saved)"))
+            }
+            (outcome, None) => outcome,
+        })
+    }
+
+    async fn dispatch_plan(
+        &self,
+        thread_id: &str,
+        args: &Map<String, Value>,
+    ) -> Result<TodoOutcome> {
         let unknown = |allowed: &[&str]| {
             let extra: Vec<&String> = args
                 .keys()
@@ -163,6 +207,62 @@ impl TodoTool {
         };
         Ok(outcome(snap))
     }
+}
+
+/// Splits the note arguments from the plan arguments.
+fn split_notes(
+    args: &Map<String, Value>,
+) -> std::result::Result<(ScratchpadUpdate, Map<String, Value>), String> {
+    let mut rest = args.clone();
+    let mut update = ScratchpadUpdate::default();
+    for name in NOTE_ARGS {
+        let Some(value) = rest.remove(name) else {
+            continue;
+        };
+        match name {
+            "facts" => update.facts = note_list(name, value)?,
+            "dead_ends" => update.dead_ends = note_list(name, value)?,
+            "retract" => update.retract = note_list(name, value)?,
+            _ => {
+                update.approach = match value {
+                    Value::Null => None,
+                    Value::String(text) => Some(text),
+                    other => {
+                        return Err(format!("`approach` is a string, got {other}"));
+                    }
+                }
+            }
+        }
+    }
+    Ok((update, rest))
+}
+
+/// A list of notes; a lone string is one note.
+fn note_list(name: &str, value: Value) -> std::result::Result<Vec<String>, String> {
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::String(text) => Ok(vec![text]),
+        Value::Array(values) => values
+            .into_iter()
+            .map(|value| match value {
+                Value::String(text) => Ok(text),
+                other => Err(format!("`{name}` holds strings, got {other}")),
+            })
+            .collect(),
+        other => Err(format!("`{name}` is a list of strings, got {other}")),
+    }
+}
+
+/// The working notes as the `todo` result shows them.
+fn notes_payload(pad: &Scratchpad) -> Value {
+    let mut payload = json!({
+        "facts": pad.facts,
+        "deadEnds": pad.dead_ends,
+    });
+    if let Some(approach) = &pad.approach {
+        payload["approach"] = json!(approach);
+    }
+    payload
 }
 
 /// A store outcome as the model reads it. A domain error (an order the plan
@@ -257,7 +357,26 @@ fn parameters_schema() -> Value {
                 "minimum": 1,
                 "description": "Cancel step N (from 1); needs `reason`."
             },
-            "reason": { "type": "string" }
+            "reason": { "type": "string" },
+            "facts": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Facts a tool result proved, one line each."
+            },
+            "dead_ends": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Approaches that failed, with why, one line each."
+            },
+            "approach": {
+                "type": "string",
+                "description": "What you are trying now; replaces the last one, \"\" clears it."
+            },
+            "retract": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Drop every note containing this text."
+            }
         },
         "additionalProperties": false
     })
@@ -315,3 +434,7 @@ impl Tool for TodoTool {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tool_notes_tests.rs"]
+mod notes_tests;

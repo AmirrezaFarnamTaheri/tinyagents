@@ -68,6 +68,13 @@ from `ToolExecutionContext::thread_id` (never a tool argument); the bare
 content, unknown status, an out-of-order step) are surfaced to the model as
 tool errors rather than failing the run.
 
+The same call, or one on its own, also takes the model's notes for the
+thread's [scratchpad](../scratchpad/mod.rs): `facts`, `dead_ends`, `approach`
+and `retract`. They are written first and taken out of the arguments, so each
+plan mode keeps its own argument rules; notes alone read the list. A result
+after a note write carries `scratchpad` (`facts`, `deadEnds`, `approach`); a
+plan refusal still keeps the notes and says so.
+
 ## Middleware (`middleware.rs`)
 
 `TodoSequenceMiddleware::new(store)` holds a run to the thread's plan. It is
