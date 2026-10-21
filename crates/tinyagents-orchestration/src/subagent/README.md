@@ -39,9 +39,10 @@ Paused `AwaitingInput` jobs remain nonterminal and keep settlement open.
 
 The legacy `register_driver_job` API can recover a historical parent run from
 its durable key but cannot infer the native child attempt id. Use
-`register_driver_job_with_lineage` when both live run contexts are available;
-the settlement traversal can only follow descendants whose actual child
-attempt ids have been recorded.
+`register_driver_job_with_parent_run` when the live caller context is
+available, then report every actual attempt with `set_attempt_run_id`; the
+settlement traversal can only follow descendants whose actual child attempt
+ids have been recorded.
 
 The durable lifecycle surface coordinates a host-resolved subagent lifecycle
 without making product-policy decisions. Its dependency direction is:

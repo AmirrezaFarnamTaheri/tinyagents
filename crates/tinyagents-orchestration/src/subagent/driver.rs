@@ -212,6 +212,21 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         request: SubagentRequest<C, H>,
         cancellation: CancellationToken,
     ) -> Result<SubagentRunResult, SubagentError> {
+        self.run_with_attempt_observer(request, cancellation, |_| {}).await
+    }
+
+    /// Runs a lifecycle and reports each actual native attempt run id before
+    /// that attempt reaches the executor. Detached-job registries use this to
+    /// retain the complete parent-to-attempt lineage across retries.
+    pub async fn run_with_attempt_observer<F>(
+        &self,
+        request: SubagentRequest<C, H>,
+        cancellation: CancellationToken,
+        on_attempt: F,
+    ) -> Result<SubagentRunResult, SubagentError>
+    where
+        F: Fn(&RunId) + Send + Sync,
+    {
         let task_key = request.task_key().clone();
         let turn_fence = request.turn_fence();
         ensure_turn_fence(turn_fence.as_ref(), None)?;
@@ -461,6 +476,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
             cancellation: child_token,
             turn_fence: turn_fence.clone(),
         };
+        on_attempt(execution.prepared.run_context.run_id());
         let mut timed_out = false;
         let mut turn_lease_lost = false;
         let mut omitted_chars = 0usize;
@@ -546,6 +562,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
             let next_token = cancellation.child_token();
             match attempts.next(attempt as u32, next_token.clone()) {
                 Ok(next) => {
+                    on_attempt(next.run_context.run_id());
                     execution = SubagentExecution {
                         prepared: next,
                         task_key: task_key.clone(),

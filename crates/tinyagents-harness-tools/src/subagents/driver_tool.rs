@@ -263,7 +263,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         let bridged_job = if let Some(jobs) = &self.jobs {
             let continuing = request.resume().is_some();
             let (id, steering, run_queue, cancellation, created) =
-                jobs.register_driver_job_with_lineage(DriverJobRegistration {
+                jobs.register_driver_job_with_parent_run(DriverJobRegistration {
                     key: request.task_key().clone(),
                     agent: request.target().unwrap_or(&self.name).to_owned(),
                     owner: owner.clone(),
@@ -272,7 +272,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                     steering: request.run_context().steering.clone(),
                     run_queue: request.run_context().run_queue.clone(),
                     continuing,
-                }, parent_run_id.clone(), request.run_context().run_id().clone())?;
+                }, parent_run_id.clone())?;
             if created {
                 jobs.mark_running(&id);
             }
@@ -324,7 +324,16 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             let bridge = bridged_job.clone();
             let mut job_guard = job_guard;
             tokio::spawn(async move {
-                match driver.run(request, cancellation).await {
+                let attempt_bridge = bridge.clone();
+                let attempt_observer = move |run_id: &tinyagents_harness::ids::RunId| {
+                    if let Some((jobs, id, _)) = &attempt_bridge {
+                        jobs.set_attempt_run_id(id, run_id.as_str());
+                    }
+                };
+                match driver
+                    .run_with_attempt_observer(request, cancellation, attempt_observer)
+                    .await
+                {
                     Ok(result) => {
                         if result.disposition
                             != tinyagents_orchestration::subagent::SubagentPersistenceDisposition::ObserverCancelled
@@ -371,7 +380,17 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
 
         let cancellation = request.run_context().cancellation.clone();
         let mut job_guard = job_guard;
-        match self.driver.run(request, cancellation).await {
+        let attempt_bridge = bridged_job.clone();
+        let attempt_observer = move |run_id: &tinyagents_harness::ids::RunId| {
+            if let Some((jobs, id, _)) = &attempt_bridge {
+                jobs.set_attempt_run_id(id, run_id.as_str());
+            }
+        };
+        match self
+            .driver
+            .run_with_attempt_observer(request, cancellation, attempt_observer)
+            .await
+        {
             Ok(result) => {
                 let outcome = result.outcome;
                 if let Some((jobs, id, _)) = &bridged_job {

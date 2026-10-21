@@ -73,15 +73,19 @@ async fn root_settlement_includes_late_grandchildren_and_only_owned_root_jobs() 
             continuing: false,
         }
     };
+    let register_with_runs = |registration, parent: &str, child: &str| {
+        let (id, _, _, _, _) = jobs
+            .register_driver_job_with_parent_run(registration, RunId::new(parent))
+            .unwrap();
+        jobs.set_attempt_run_id(&id, child);
+        id
+    };
 
-    let child = jobs
-        .register_driver_job_with_lineage(
-            registration("child", "root", "key-parent", "owner"),
-            RunId::new("root"),
-            RunId::new("child-run"),
-        )
-        .unwrap()
-        .0;
+    let child = register_with_runs(
+        registration("child", "root", "key-parent", "owner"),
+        "root",
+        "child-run",
+    );
     let unrelated = jobs
         .register_driver_job(registration("unrelated", "other-root", "other-root", "owner"))
         .unwrap()
@@ -111,14 +115,11 @@ async fn root_settlement_includes_late_grandchildren_and_only_owned_root_jobs() 
     // A running descendant can still admit a grandchild. Its terminal
     // transition happens only after that registration, so settlement must
     // observe and wait for both jobs.
-    let grandchild = jobs
-        .register_driver_job_with_lineage(
-            registration("grandchild", "root", "durable-parent", "owner"),
-            RunId::new("child-run"),
-            RunId::new("grandchild-run"),
-        )
-        .unwrap()
-        .0;
+    let grandchild = register_with_runs(
+        registration("grandchild", "root", "durable-parent", "owner"),
+        "child-run",
+        "grandchild-run",
+    );
     jobs.mark_running(&grandchild);
     jobs.mark_driver_result(&child, Err("child failed".into()));
     assert!(!settling.is_finished());
@@ -151,7 +152,7 @@ async fn root_settlement_uses_one_deadline_and_propagates_cancellation() {
 
     let jobs = SubAgentJobRegistry::new();
     let (child, _, _, _, _) = jobs
-        .register_driver_job_with_lineage(
+        .register_driver_job_with_parent_run(
             DriverJobRegistration {
                 key: crate::subagent::SubagentTaskKey {
                     root_run_id: "root".into(),
@@ -168,9 +169,9 @@ async fn root_settlement_uses_one_deadline_and_propagates_cancellation() {
                 continuing: false,
             },
             RunId::new("root"),
-            RunId::new("child"),
         )
         .unwrap();
+    jobs.set_attempt_run_id(&child, "child");
     jobs.mark_running(&child);
     let deadline_result = jobs
         .settle_root_run_descendants(
@@ -218,21 +219,21 @@ async fn resumed_job_keeps_old_attempt_edges_without_importing_new_root_siblings
     };
 
     let (job, _, _, _, _) = jobs
-        .register_driver_job_with_lineage(
+        .register_driver_job_with_parent_run(
             registration("resumed", "durable-parent"),
             RunId::new("old-root"),
-            RunId::new("old-attempt"),
         )
         .unwrap();
+    jobs.set_attempt_run_id(&job, "old-attempt");
     jobs.set_attempt_run_id(&job, "old-retry-attempt");
 
     let (old_grandchild, _, _, _, _) = jobs
-        .register_driver_job_with_lineage(
+        .register_driver_job_with_parent_run(
             registration("old-grandchild", "durable-parent"),
             RunId::new("old-retry-attempt"),
-            RunId::new("old-grandchild-run"),
         )
         .unwrap();
+    jobs.set_attempt_run_id(&old_grandchild, "old-grandchild-run");
     jobs.mark_running(&old_grandchild);
 
     let mut paused = SubagentOutcome::completed(job.as_str(), "waiting");
@@ -259,30 +260,27 @@ async fn resumed_job_keeps_old_attempt_edges_without_importing_new_root_siblings
     let mut resumed = registration("resumed", "durable-parent");
     resumed.continuing = true;
     let (resumed_id, _, _, _, continued) = jobs
-        .register_driver_job_with_lineage(
-            resumed,
-            RunId::new("new-root"),
-            RunId::new("new-attempt"),
-        )
+        .register_driver_job_with_parent_run(resumed, RunId::new("new-root"))
         .unwrap();
     assert_eq!(resumed_id, job);
     assert!(continued);
+    jobs.set_attempt_run_id(&resumed_id, "new-attempt");
 
     let (new_grandchild, _, _, _, _) = jobs
-        .register_driver_job_with_lineage(
+        .register_driver_job_with_parent_run(
             registration("new-grandchild", "durable-parent"),
             RunId::new("new-attempt"),
-            RunId::new("new-grandchild-run"),
         )
         .unwrap();
+    jobs.set_attempt_run_id(&new_grandchild, "new-grandchild-run");
     jobs.mark_running(&new_grandchild);
     let (new_root_sibling, _, _, _, _) = jobs
-        .register_driver_job_with_lineage(
+        .register_driver_job_with_parent_run(
             registration("new-root-sibling", "new-root"),
             RunId::new("new-root"),
-            RunId::new("sibling-run"),
         )
         .unwrap();
+    jobs.set_attempt_run_id(&new_root_sibling, "sibling-run");
     jobs.mark_running(&new_root_sibling);
 
     jobs.mark_driver_result(&job, Err("resumed job finished".into()));

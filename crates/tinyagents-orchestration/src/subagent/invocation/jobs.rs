@@ -322,10 +322,11 @@ impl SubAgentJobRegistry {
         self.register_driver_job_inner(registration, None)
     }
 
-    /// Registers a driver job with native run edges from the actual live
-    /// caller to the child attempt created for this invocation. Resuming the
-    /// same durable task appends another edge and retains every earlier one.
-    pub fn register_driver_job_with_lineage(
+    /// Registers a driver job with the actual live caller run. The driver
+    /// reports each planned attempt with [`Self::set_attempt_run_id`]. Resuming
+    /// the same durable task appends another parent edge and retains earlier
+    /// attempts.
+    pub fn register_driver_job_with_parent_run(
         &self,
         registration: DriverJobRegistration,
         parent_run_id: tinyagents_harness::ids::RunId,
@@ -718,7 +719,9 @@ impl SubAgentJobRegistry {
     }
 
     /// Points the job link at the attempt that is now running.
-    pub(crate) fn set_attempt_run_id(&self, id: &SubAgentJobId, run_id: &str) {
+    /// Records the actual native run id of one driver attempt for descendant
+    /// settlement. Call once for every attempt, including retries.
+    pub fn set_attempt_run_id(&self, id: &SubAgentJobId, run_id: &str) {
         let mut controls = self.controls();
         if let Some(control) = controls.get_mut(id) {
             control
