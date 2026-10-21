@@ -20,7 +20,7 @@ and the hard facts at the tail of every request.
 |---|---|---|
 | Goal | `goals::store` for the run's thread | One line: status (active with budget left, paused, budget exhausted, complete) and the objective. |
 | Plan | `todos::store` for the run's thread | Every step with its mark (`[x]` `[>]` `[ ]` `[-]`), the step in progress and the tool rounds it has run. At most 20 steps. |
-| Recent failures | `after_tool` results with `is_error` | The last 3, each with its age, tool, command (or argument summary) and the exit code plus first `[stderr]` line. Dropped after 4 rounds, or when the same command later succeeds. Exit code 1 or 2 from a search command (`grep`, `find`, `test`, `diff`…) or a compound command (`;`, `&&`, `|`) is an exploration miss and not listed. |
+| Recent failures | `after_tool` results with `is_error` | The last 3, each with its age, tool, command (or argument summary) and the exit code plus first `[stderr]` line. Dropped after 4 rounds, or when the same command later succeeds. Exit codes 1, 2 or 141 with no `[stderr]` line from a search or compound command (including pipelines and multi-line scripts) are treated as exploration misses and omitted. |
 | Reported not found | Shell wording in error output (`X: command not found`, `sh: 1: X: not found`, `command not found: X`) | Cleared when a later successful command runs `X`. |
 | Files written this run | Path argument of tools whose name contains write/edit/patch/create/replace | The last 6, distinct. |
 

@@ -134,15 +134,12 @@ impl GoalStore {
         Ok(Some(updated))
     }
 
-    /// Loads the goal for a turn, reactivating a paused goal first.
+    /// Loads the goal for a turn without changing its lifecycle status.
+    ///
+    /// Paused goals stay paused so the model can decide whether the incoming
+    /// user message continues the goal and call `goal_resume` when appropriate.
     pub async fn prepare_turn(&self, thread_id: &str) -> Result<GoalTurnPreparation> {
-        let mut goal = store::get(&self.store, thread_id).await?;
-        if goal
-            .as_ref()
-            .is_some_and(|goal| goal.status == ThreadGoalStatus::Paused)
-        {
-            goal = Some(self.resume(thread_id).await?);
-        }
+        let goal = store::get(&self.store, thread_id).await?;
         let context_block = goal.as_ref().and_then(active_goal_context_block);
         let budget_guard = goal.as_ref().and_then(GoalBudgetGuard::for_goal);
         Ok(GoalTurnPreparation {
