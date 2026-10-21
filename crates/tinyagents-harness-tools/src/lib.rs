@@ -12,6 +12,7 @@ mod plan_exit;
 pub mod thread_locks;
 mod time;
 mod time_parse;
+mod wait;
 
 #[cfg(feature = "goals")]
 pub mod goals;
@@ -25,6 +26,7 @@ pub mod todos;
 pub use ask_clarification::AskClarificationTool;
 pub use plan_exit::{PLAN_EXIT_MARKER, PlanExitModeLookup, PlanExitTool};
 pub use time::{CurrentTimeTool, ResolveTimeTool, register_time_tools, time_tools};
+pub use wait::{WaitLoopTool, WaitTool};
 
 #[cfg(test)]
 #[path = "time_parse_tests.rs"]
