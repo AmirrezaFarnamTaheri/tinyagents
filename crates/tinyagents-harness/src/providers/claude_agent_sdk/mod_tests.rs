@@ -325,9 +325,15 @@ async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_froz
         "dontAsk",
         "model-for-inspection",
     ] {
-        assert!(args.contains(flag), "missing inspection argument {flag}: {args:?}");
+        assert!(
+            args.contains(flag),
+            "missing inspection argument {flag}: {args:?}"
+        );
     }
-    assert!(args.contains("--tools\n\n"), "built-in tools must be disabled: {args:?}");
+    assert!(
+        args.contains("--tools\n\n"),
+        "built-in tools must be disabled: {args:?}"
+    );
     assert_eq!(
         std::fs::read_to_string(input_path).expect("captured prompt"),
         "Reply OK",
