@@ -131,7 +131,7 @@ async fn provider_spawn_error_includes_the_os_source() {
     let provider = ClaudeAgentSdkProvider::new(config);
 
     let error = provider
-        .invoke_cli(None, "hello", "claude-sonnet-4-6")
+        .invoke_cli(None, "hello", "claude-sonnet-4-6", None)
         .await
         .expect_err("missing binary must fail");
 
