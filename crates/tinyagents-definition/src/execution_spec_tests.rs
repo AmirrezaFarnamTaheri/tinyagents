@@ -5,6 +5,15 @@ fn named(names: &[&str]) -> ToolScope {
 }
 
 #[test]
+fn spawn_tool_roster_contains_only_the_async_subagent_tool() {
+    assert_eq!(SPAWN_TOOL_NAMES, &["spawn_subagent"]);
+    assert!(named(&["spawn_subagent"]).names_a_spawn_tool());
+    assert!(!named(&["spawn_async_subagent"]).names_a_spawn_tool());
+    assert!(!named(&["spawn_parallel_agents"]).names_a_spawn_tool());
+    assert!(!named(&["spawn_worker_thread"]).names_a_spawn_tool());
+}
+
+#[test]
 fn a_named_scope_listing_a_spawn_tool_is_detected() {
     for spawn in SPAWN_TOOL_NAMES {
         assert!(named(&["memory", spawn]).names_a_spawn_tool(), "{spawn}");

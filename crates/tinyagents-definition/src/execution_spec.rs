@@ -74,11 +74,7 @@ pub enum SandboxMode {
 /// The tools through which an agent spawns sub-agents of its own choosing.
 /// A named scope that lists none of them delegates only to what its host
 /// declared, never to an inherited roster.
-pub const SPAWN_TOOL_NAMES: &[&str] = &[
-    "spawn_subagent",
-    "spawn_parallel_agents",
-    "spawn_worker_thread",
-];
+pub const SPAWN_TOOL_NAMES: &[&str] = &["spawn_subagent"];
 
 impl ToolScope {
     /// Whether this is a named scope that lists one of [`SPAWN_TOOL_NAMES`].
