@@ -1,6 +1,7 @@
 //! Rendering the run-state block from the goal, the plan and the ledger.
 
 use crate::goals::{ThreadGoal, ThreadGoalStatus};
+use crate::scratchpad::Scratchpad;
 use crate::todos::{TodoItem, TodoStatus};
 
 use super::ledger::one_line;
@@ -15,10 +16,11 @@ const MAX_STEP_CHARS: usize = 160;
 /// Plan steps shown before the rest are summarised as a count.
 const MAX_STEPS_SHOWN: usize = 20;
 
-/// The block for this request, or `None` when there is no goal, plan or fact
-/// to show.
+/// The block for this request, or `None` when there is no goal, plan, note or
+/// fact to show.
 pub(super) fn render(
     goal: Option<&ThreadGoal>,
+    pad: Option<&Scratchpad>,
     items: &[TodoItem],
     ledger: &RunLedger,
 ) -> Option<String> {
@@ -28,6 +30,9 @@ pub(super) fn render(
     }
     if let Some(plan) = plan_section(items, ledger) {
         sections.push(plan);
+    }
+    if let Some(pad) = pad {
+        sections.extend(notes_sections(pad));
     }
     if !ledger.failures.is_empty() {
         let mut lines = vec!["Recent failures (oldest first):".to_string()];
@@ -60,8 +65,8 @@ pub(super) fn render(
         return None;
     }
     Some(format!(
-        "{STATE_BLOCK_HEADER} Rebuilt by the harness for this call from your goal, plan and \
-         tool results; it is not part of the conversation.\n{}",
+        "{STATE_BLOCK_HEADER} Rebuilt by the harness for this call from your goal, plan, notes \
+         and tool results; it is not part of the conversation.\n{}",
         sections.join("\n")
     ))
 }
@@ -156,6 +161,37 @@ fn plan_section(items: &[TodoItem], ledger: &RunLedger) -> Option<String> {
         lines.push(format!("  … {omitted} more"));
     }
     Some(lines.join("\n"))
+}
+
+/// The model's own notes: the approach it is on, what it verified, what failed.
+/// Kept apart from the ledger below, which the harness derives itself.
+fn notes_sections(pad: &Scratchpad) -> Vec<String> {
+    let mut sections = Vec::new();
+    if let Some(approach) = &pad.approach {
+        sections.push(format!("Current approach (your note): {approach}"));
+    }
+    let list = |title: &str, notes: &[String]| {
+        let mut lines = vec![format!("{title} (your notes, oldest first):")];
+        lines.extend(notes.iter().map(|note| format!("  - {note}")));
+        lines.join("\n")
+    };
+    if !pad.facts.is_empty() {
+        sections.push(list("Verified facts", &pad.facts));
+    }
+    if !pad.dead_ends.is_empty() {
+        sections.push(list("Dead ends", &pad.dead_ends));
+    }
+    if let Some(last) = pad.last_task.as_ref().filter(|last| !last.is_empty()) {
+        let mut lines = vec!["From your last finished task:".to_string()];
+        lines.extend(last.facts.iter().map(|fact| format!("  - fact: {fact}")));
+        lines.extend(
+            last.dead_ends
+                .iter()
+                .map(|dead_end| format!("  - dead end: {dead_end}")),
+        );
+        sections.push(lines.join("\n"));
+    }
+    sections
 }
 
 /// How long ago round `then` was, counting the latest round as 1: the block is

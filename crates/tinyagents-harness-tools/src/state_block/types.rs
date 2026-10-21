@@ -3,7 +3,28 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
+use serde::Serialize;
 use tinyagents_harness::store::Store;
+
+use crate::goals::ThreadGoal;
+use crate::scratchpad::Scratchpad;
+use crate::todos::TodoItem;
+
+/// What a thread has saved, read in one place: its goal, plan and notes. The
+/// block is rendered from it on every call, and a host reads it the same way
+/// ([`RunState::load`]) to show or debug the state outside a run.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunState {
+    /// The thread (or fallback key) read.
+    pub thread_id: String,
+    /// The thread goal, if any.
+    pub goal: Option<ThreadGoal>,
+    /// The plan; empty without one.
+    pub todos: Vec<TodoItem>,
+    /// The model's notes, if it wrote any.
+    pub notes: Option<Scratchpad>,
+}
 
 /// Adds a freshly rendered run-state block to every model request.
 ///
