@@ -98,7 +98,7 @@ fn read_only_session_keeps_mixed_pack_disclosure_and_preview_available() {
 #[test]
 fn packed_preview_permission_requires_literal_true_and_survives_binding() {
     let (_tools, dispatcher) = tools();
-    let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
+    let mut registry = tinyagents_harness::tool::ToolRegistry::<(), ()>::new();
     registry.register(dispatcher.clone());
     let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
 
@@ -129,7 +129,7 @@ fn unresolved_named_calls_keep_the_ceiling_even_in_an_all_read_only_registry() {
     let tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![Box::new(CodeTool("preview_patch"))]);
     handle.bind(Arc::downgrade(&tools));
     let dispatcher = Arc::new(UseSkillTool::new(handle, CATALOG));
-    let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
+    let mut registry = tinyagents_harness::tool::ToolRegistry::<(), ()>::new();
     registry.register(dispatcher.clone());
     let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
 
@@ -157,7 +157,7 @@ fn unresolved_named_calls_keep_the_ceiling_even_in_an_all_read_only_registry() {
 #[test]
 fn pinned_disclosure_stays_read_only_in_a_mixed_pack() {
     let (_tools, dispatcher) = tools();
-    let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
+    let mut registry = tinyagents_harness::tool::ToolRegistry::<(), ()>::new();
     registry.register(dispatcher);
     let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
     let bound = dispatch
