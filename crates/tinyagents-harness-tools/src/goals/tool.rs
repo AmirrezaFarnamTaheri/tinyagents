@@ -54,7 +54,7 @@ impl GoalToolKind {
     /// The default model-facing controls (asymmetric ownership).
     pub const MODEL_FACING: [Self; 4] = [Self::Get, Self::Set, Self::Complete, Self::Resume];
 
-    /// Every control, including the host-driven pause/resume/clear.
+    /// Every control, including the host-driven pause/clear.
     pub const ALL: [Self; 6] = [
         Self::Get,
         Self::Set,
