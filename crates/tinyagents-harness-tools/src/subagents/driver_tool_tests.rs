@@ -742,14 +742,14 @@ async fn bounded_await_observes_terminal_state_after_deadline_before_same_future
     .with_parameters(json!({
         "type":"object",
         "required":["agent_id","prompt"],
-        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
+        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"}}
     }))
     .with_job_registry(jobs.clone());
     let spawned = ToolDispatch::<(), ()>::execute(
         &tool,
         &(),
         CallId::new("spawn-bounded-await-race"),
-        json!({"agent_id":"worker","prompt":"finish at the deadline","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"finish at the deadline"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1230,7 +1230,7 @@ async fn background_request_with_delivery_target_returns_task_reference() {
         &tool,
         &(),
         CallId::new("call-2"),
-        json!({"input":"do work", "mode":"background"}),
+        json!({"input":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1288,7 +1288,7 @@ async fn awaited_background_completion_commits_before_jobs_become_terminal() {
         &tool,
         &(),
         CallId::new("call-await-completion"),
-        json!({"input":"do work", "mode":"background"}),
+        json!({"input":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1370,7 +1370,7 @@ async fn awaited_completion_repairs_replayed_terminal_before_jobs_become_termina
         &tool,
         &(),
         CallId::new("call-replayed-completion"),
-        json!({"input":"do work", "mode":"background"}),
+        json!({"input":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1409,7 +1409,7 @@ fn driver_subagent_tool_preserves_host_name_description_and_schema() {
     let schema = json!({
         "type":"object",
         "required":["agent_id","prompt"],
-        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
+        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"}}
     });
     let tool = DriverSubAgentTool::new(
         "delegate_to",
@@ -1468,7 +1468,7 @@ async fn driver_subagent_tool_routes_execution_through_the_driver() {
         &tool,
         &(),
         CallId::new("driver-route"),
-        json!({"input":"do work", "mode":"inline"}),
+        json!({"input":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1674,7 +1674,7 @@ async fn driver_subagent_tool_routes_detached_completion_to_host_callback() {
         &tool,
         &(),
         CallId::new("driver-background"),
-        json!({"input":"do work", "mode":"background"}),
+        json!({"input":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1741,7 +1741,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     let schema = json!({
         "type":"object",
         "required":["agent_id","prompt"],
-        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
+        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"}}
     });
     let tool = DriverSubAgentTool::new(
         "spawn_subagent",
@@ -1785,7 +1785,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         &tool,
         &(),
         CallId::new("spawn"),
-        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1799,7 +1799,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         &tool,
         &(),
         CallId::new("spawn-again"),
-        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1937,7 +1937,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         &tool,
         &(),
         CallId::new("spawn-foreign"),
-        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"do work"}),
         tinytools::ToolCallOptions::default(),
         &foreign,
     )
@@ -2065,7 +2065,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         &tool,
         &(),
         CallId::new("spawn-terminal-replay"),
-        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2110,7 +2110,7 @@ async fn jobs_tool_treats_a_null_action_as_query() {
         &tool,
         &(),
         CallId::new("spawn-null-action"),
-        json!({"input":"work", "mode":"background"}),
+        json!({"input":"work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2164,7 +2164,7 @@ async fn oversized_message_request_ids_are_rejected_by_the_moved_shell() {
         &tool,
         &(),
         CallId::new("spawn-oversized-request"),
-        json!({"input":"work", "mode":"background"}),
+        json!({"input":"work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2295,7 +2295,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
         &tool,
         &(),
         CallId::new("spawn-pausing-child"),
-        json!({"agent_id":"worker","prompt":"wait","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"wait"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2352,7 +2352,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
         &tool,
         &(),
         CallId::new("continue-child"),
-        json!({"agent_id":"worker","prompt":"answer","continue":true,"mode":"background"}),
+        json!({"agent_id":"worker","prompt":"answer","continue":true}),
         tinytools::ToolCallOptions::default(),
         &next_turn,
     )
@@ -2410,13 +2410,13 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
         }, |_| Some("thread-a".into())).with_parameters(json!({
         "type":"object",
         "required":["agent_id","prompt"],
-        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
+        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"}}
     })).with_job_registry(jobs.clone()).with_owner_scope(owner_scope);
     let spawned = ToolDispatch::<(), ()>::execute(
         &tool,
         &(),
         CallId::new("spawn-cancellable"),
-        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2498,7 +2498,7 @@ async fn parent_cancellation_cascades_to_running_driver_jobs() {
         &tool,
         &(),
         CallId::new("spawn-parent-cancel"),
-        json!({"input":"work", "mode":"background"}),
+        json!({"input":"work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2561,7 +2561,7 @@ async fn cancelling_one_driver_job_leaves_its_sibling_running() {
             &tool,
             &(),
             CallId::new(call_id),
-            json!({"task_id":task_id,"input":"work","mode":"background"}),
+            json!({"task_id":task_id,"input":"work"}),
             tinytools::ToolCallOptions::default(),
             &parent,
         )
@@ -2845,7 +2845,7 @@ async fn panicking_background_driver_alias_settles_and_replays_as_tool_error() {
         &tool,
         &(),
         CallId::new("panic-spawn"),
-        json!({"prompt":"panic","mode":"background"}),
+        json!({"prompt":"panic"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2882,7 +2882,7 @@ async fn panicking_background_driver_alias_settles_and_replays_as_tool_error() {
         &tool,
         &(),
         CallId::new("panic-replay"),
-        json!({"prompt":"panic","mode":"background"}),
+        json!({"prompt":"panic"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
