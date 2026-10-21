@@ -58,12 +58,10 @@ fn only_filesystem_tools_and_patch_envelopes_record_written_paths() {
 
 #[test]
 fn diff_text_from_non_patch_tools_is_not_treated_as_written_paths() {
-    let shell = call_record(
-        &call(
-            "shell",
-            serde_json::json!({"command": "cat <<'EOF'\n+++ b/src/main.rs\nEOF"}),
-        ),
-    );
+    let shell = call_record(&call(
+        "shell",
+        serde_json::json!({"command": "cat <<'EOF'\n+++ b/src/main.rs\nEOF"}),
+    ));
     let issue = call_record(&call(
         "create_issue",
         serde_json::json!({"body": "example diff:\n+++ b/src/main.rs"}),

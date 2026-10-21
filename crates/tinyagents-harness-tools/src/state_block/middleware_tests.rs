@@ -58,9 +58,16 @@ async fn round(
     Middleware::<(), ()>::after_tool(mw, ctx, &(), &invocation, &mut result)
         .await
         .unwrap();
-    Middleware::<(), ()>::after_tool_output_screened(mw, ctx, &(), &invocation, &result, &result.output())
-        .await
-        .unwrap();
+    Middleware::<(), ()>::after_tool_output_screened(
+        mw,
+        ctx,
+        &(),
+        &invocation,
+        &result,
+        &result.output(),
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -214,8 +221,8 @@ async fn only_security_screened_tool_output_enters_the_ledger() {
         &screened,
         "redacted output",
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
 
     let rendered = block(&mw, &mut ctx).await.unwrap();
     assert!(rendered.contains("redacted output"), "{rendered}");
@@ -256,8 +263,20 @@ async fn truncated_state_block_is_removed_before_restoring_full_copy() {
         .filter(|message| message.text().contains(STATE_BLOCK_HEADER))
         .count();
     assert_eq!(blocks, 1);
-    assert!(request.messages.last().unwrap().text().contains("Files written this run: /a"));
-    assert!(!request.messages.iter().any(|message| message.text().contains("truncated old state")));
+    assert!(
+        request
+            .messages
+            .last()
+            .unwrap()
+            .text()
+            .contains("Files written this run: /a")
+    );
+    assert!(
+        !request
+            .messages
+            .iter()
+            .any(|message| message.text().contains("truncated old state"))
+    );
 }
 
 #[tokio::test]
