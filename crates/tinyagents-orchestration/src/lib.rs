@@ -10,8 +10,8 @@
 //! `TryFrom` (see the `tinyagents-tasks` status mapping docs).
 //!
 //! Dependency direction is deliberately one way:
-//! `orchestration -> {harness, runtime}`. The lower-level crates never
-//! depend on this composition layer.
+//! `orchestration -> {harness, session, tasks, storage ports}`. Lower-level
+//! crates never depend on this composition layer.
 
 pub mod steering;
 pub mod subagent;
