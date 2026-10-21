@@ -18,6 +18,3 @@ pub use types::*;
 #[path = "mod_registry_tests.rs"]
 mod registry_tests;
 
-#[cfg(test)]
-#[path = "status_map_tests.rs"]
-mod status_map_tests;

@@ -37,6 +37,15 @@ struct JobExecutionControls {
     run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
 }
 
+struct JobInsert {
+    id: SubAgentJobId,
+    agent: String,
+    owner: String,
+    parent_run_id: tinyagents_harness::ids::RunId,
+    metadata: JobMeta,
+    execution: JobExecutionControls,
+}
+
 pub(super) struct JobWaitGuard {
     jobs: SubAgentJobRegistry,
     waiters: Arc<AtomicUsize>,
@@ -103,30 +112,28 @@ impl SubAgentJobRegistry {
 
     fn insert_job(
         &self,
-        id: SubAgentJobId,
-        agent: &str,
-        owner: String,
-        parent_run_id: tinyagents_harness::ids::RunId,
-        parent_thread_id: Option<String>,
-        workspace: Option<tinytools::WorkspaceDescriptor>,
-        execution: JobExecutionControls,
+        insert: JobInsert,
         driver_jobs: &mut std::collections::HashMap<
             crate::subagent::SubagentTaskKey,
             SubAgentJobId,
         >,
     ) -> Result<(), SubAgentJobError> {
+        let JobInsert {
+            id,
+            agent,
+            owner,
+            parent_run_id,
+            metadata,
+            execution,
+        } = insert;
         if id.as_str().is_empty() {
             return Err(SubAgentJobError::Registry("empty job id".into()));
         }
-        let metadata = JobMeta {
-            parent_thread_id,
-            workspace,
-        };
         let lineage = super::types::JobLineage::new(Some(parent_run_id), None);
         let task_id = TaskId::new(id.as_str());
         let job = SubAgentJob {
             id: id.clone(),
-            agent: agent.to_owned(),
+            agent,
             status: SubAgentJobStatus::Queued,
             output: None,
             error: None,
@@ -389,16 +396,20 @@ impl SubAgentJobRegistry {
             tinyagents_harness::ids::RunId::new(key.parent_run_id.clone())
         });
         self.insert_job(
-            id.clone(),
-            &agent,
-            owner,
-            parent_run_id,
-            key.thread_id.clone(),
-            workspace,
-            JobExecutionControls {
-                cancellation,
-                steering: steering.clone(),
-                run_queue: Some(queue.clone()),
+            JobInsert {
+                id: id.clone(),
+                agent,
+                owner,
+                parent_run_id,
+                metadata: JobMeta {
+                    parent_thread_id: key.thread_id.clone(),
+                    workspace,
+                },
+                execution: JobExecutionControls {
+                    cancellation,
+                    steering: steering.clone(),
+                    run_queue: Some(queue.clone()),
+                },
             },
             &mut driver_jobs,
         )?;
