@@ -258,12 +258,13 @@ impl Tool for ExtensionTool {
 #[test]
 fn canonical_adapter_forwards_host_extension_from_the_resolved_tool() {
     let sets: Vec<Arc<Vec<Box<dyn Tool>>>> = vec![Arc::new(vec![Box::new(ExtensionTool)])];
-    let adapter = CanonicalSharedToolAdapter::for_name(sets, "extension")
-        .expect("registered tool");
+    let adapter = CanonicalSharedToolAdapter::for_name(sets, "extension").expect("registered tool");
 
-    assert!(adapter
-        .host_extension()
-        .is_some_and(|extension| extension.is::<HostExtension>()));
+    assert!(
+        adapter
+            .host_extension()
+            .is_some_and(|extension| extension.is::<HostExtension>())
+    );
 }
 
 #[async_trait]
