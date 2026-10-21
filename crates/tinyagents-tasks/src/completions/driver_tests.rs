@@ -151,8 +151,8 @@ async fn a_settled_record_is_persisted_without_its_result() {
     ] {
         let persisted = doc_of(task).await;
         assert_eq!(persisted["state"], state, "{task}");
-        assert_eq!(persisted["taskId"], task, "{task}");
-        assert_eq!(persisted["parentKey"], "p", "{task}");
+        assert_eq!(persisted["task_id"], task, "{task}");
+        assert_eq!(persisted["parent_key"], "p", "{task}");
         assert_eq!(persisted["result"]["text"], "", "{task}");
         assert_eq!(persisted["result"]["omitted_chars"], 0, "{task}");
         assert!(
