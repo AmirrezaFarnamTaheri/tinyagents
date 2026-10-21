@@ -5,7 +5,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use tinyagents_harness::tool::CanonicalSharedToolAdapter;
 use tinytools::{PermissionLevel, Tool, ToolPolicyEngine, ToolResult};
+
+struct PackExtension;
+
+static PACK_EXTENSION: PackExtension = PackExtension;
 
 static PACKS: &[ToolPack] = &[ToolPack {
     id: "code",
@@ -49,6 +54,10 @@ impl Tool for CodeTool {
         } else {
             PermissionLevel::Write
         }
+    }
+
+    fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        Some(&PACK_EXTENSION)
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
@@ -118,6 +127,17 @@ fn packed_preview_permission_requires_literal_true_and_survives_binding() {
             "a wrapper cannot replace the arguments whose permission was admitted"
         );
     }
+}
+
+#[test]
+fn shared_tool_adapter_preserves_packed_host_extension() {
+    let (_handle, tools, _dispatcher) = tools();
+    let adapter = CanonicalSharedToolAdapter::for_name(vec![tools], "preview_patch")
+        .expect("registered packed tool");
+
+    assert!(adapter
+        .host_extension()
+        .is_some_and(|extension| extension.is::<PackExtension>()));
 }
 
 #[test]
