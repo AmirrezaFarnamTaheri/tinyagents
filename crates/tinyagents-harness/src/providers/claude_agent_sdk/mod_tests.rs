@@ -269,6 +269,7 @@ async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_froz
     let input_path = dir.path().join("input.txt");
     let auth_path = dir.path().join("auth.txt");
     let cap_path = dir.path().join("cap.txt");
+    let endpoint_path = dir.path().join("endpoint.txt");
     let home_path = dir.path().join("home.txt");
     let state_path = dir.path().join("state.txt");
     let staging = dir.path().join("claude-inspection.staging");
@@ -278,6 +279,7 @@ async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_froz
          cat > '{}'\n\
          printf '%s' \"${{ANTHROPIC_API_KEY-}}\" > '{}'\n\
          printf '%s' \"${{CLAUDE_CODE_MAX_OUTPUT_TOKENS-}}\" > '{}'\n\
+         printf '%s' \"${{ANTHROPIC_BASE_URL-}}\" > '{}'\n\
          printf '%s' \"$HOME\" > '{}'\n\
          if [ -e \"$HOME/.claude\" ]; then printf yes > '{}'; else printf no > '{}'; fi\n\
          printf '%s\\n' '{{\"type\":\"result\",\"result\":\"OK\",\"is_error\":false}}'\n",
@@ -285,6 +287,7 @@ async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_froz
         input_path.display(),
         auth_path.display(),
         cap_path.display(),
+        endpoint_path.display(),
         home_path.display(),
         state_path.display(),
         state_path.display(),
@@ -347,6 +350,10 @@ async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_froz
         std::fs::read_to_string(cap_path).expect("captured token cap"),
         "5"
     );
+    assert_eq!(
+        std::fs::read_to_string(endpoint_path).expect("captured endpoint"),
+        "https://anthropic.example.test"
+    );
     let cli_home = std::fs::read_to_string(home_path).expect("captured isolated HOME");
     assert!(cli_home.starts_with(std::env::temp_dir().to_str().unwrap()));
     assert_eq!(
@@ -393,6 +400,50 @@ async fn inspection_invocation_clamps_requested_output_cap_to_five_tokens() {
         std::fs::read_to_string(cap_path).expect("captured cap"),
         "5",
         "caller-supplied limits cannot raise the inspection cap"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn inspection_invocation_rejects_tool_requests_before_spawning() {
+    use std::os::unix::fs::PermissionsExt;
+    use tinyinference_llm::tool::ToolSchema;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = dir.path().join("claude-inspection");
+    let marker_path = dir.path().join("spawned.txt");
+    let staging = dir.path().join("claude-inspection.staging");
+    std::fs::write(
+        &staging,
+        format!("#!/bin/sh\nprintf spawned > '{}'\n", marker_path.display()),
+    )
+    .expect("write fake claude");
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
+        .expect("make fake claude executable");
+    std::fs::rename(&staging, &script).expect("publish fake claude");
+
+    let config = ClaudeAgentSdkConfig {
+        binary: script.display().to_string(),
+        ..Default::default()
+    };
+    let auth = ClaudeAgentSdkInspectionAuth::new(Some("dummy-key".into()), None, None)
+        .expect("explicit key is required");
+    let provider = ClaudeAgentSdkProvider::for_inspection(config, "model", auth);
+    let mut request = ModelRequest::new(vec![Message::user("Reply OK")]);
+    request.tools.push(ToolSchema::new(
+        "should-never-run",
+        "test tool",
+        serde_json::json!({"type": "object"}),
+    ));
+
+    let error = provider
+        .invoke(&(), request)
+        .await
+        .expect_err("inspection must refuse a request that could execute a tool");
+    assert!(matches!(error, tinyinference_llm::Error::Unsupported(_)));
+    assert!(
+        !marker_path.exists(),
+        "rejected calls must not spawn the CLI"
     );
 }
 
