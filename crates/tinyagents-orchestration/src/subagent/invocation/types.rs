@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex};
 
-use serde_json::Value;
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_tasks::{DetachedTaskRegistry, SteeringRegistry};
 use tokio::sync::watch;

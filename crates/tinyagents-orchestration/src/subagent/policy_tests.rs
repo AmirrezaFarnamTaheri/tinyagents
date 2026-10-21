@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tinyagents_harness::retry::RetryPolicy;
+use crate::subagent::SubAgentIncompleteKind as IncompleteKind;
 
 use super::*;
 
@@ -72,8 +73,7 @@ fn does_not_retry_after_tools_ran_unless_the_policy_allows_it() {
 
 #[test]
 fn the_orchestration_path_names_the_same_policy_type_as_the_graph() {
-    let policy: tinyagents_graph::SubAgentPolicy =
-        SubAgentPolicy::default().with_timeout(Duration::from_secs(1));
+    let policy: SubAgentPolicy = SubAgentPolicy::default().with_timeout(Duration::from_secs(1));
     assert_eq!(policy.timeout, Some(Duration::from_secs(1)));
 }
 

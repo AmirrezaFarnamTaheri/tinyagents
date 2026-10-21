@@ -1,4 +1,5 @@
 use super::*;
+use crate::subagent::SubAgentIncompleteKind as IncompleteKind;
 use tinyagents_tasks::NoEquivalentStatus;
 use crate::subagent::SubAgentJobId;
 use tinyagents_session::run_ledger::AgentRunStatus as Run;

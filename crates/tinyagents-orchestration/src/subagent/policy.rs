@@ -327,7 +327,7 @@ pub(crate) async fn apply_outcome_policies(
     if !matches!(outcome.status, SubagentOutcomeKind::Completed) {
         return (outcome, omitted_chars);
     }
-    let measured = tinyagents_graph::SubAgentOutput {
+    let measured = SubAgentOutput {
         usage: outcome.usage,
         ..Default::default()
     };
