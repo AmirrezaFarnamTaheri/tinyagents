@@ -274,7 +274,7 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
             ""
         };
         self.with_run(ctx.instance_id(), |ledger| {
-            ledger::record_result(ledger, record, result.is_error, &output);
+            ledger::record_result(ledger, record, result.is_error, output);
         });
     }
 
