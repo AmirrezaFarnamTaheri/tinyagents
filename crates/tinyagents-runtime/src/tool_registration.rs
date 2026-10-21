@@ -85,6 +85,28 @@ pub enum ToolRegistration<State, C> {
     Dispatch(Arc<dyn ToolDispatch<State, C>>),
 }
 
+/// Depth and ceiling supplied by a host that explicitly permits nested
+/// sub-agent creation for this turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NestedSpawnDepth {
+    depth: usize,
+    max_depth: usize,
+}
+
+impl NestedSpawnDepth {
+    /// Creates a depth grant only when the current depth is within its ceiling.
+    pub fn try_new(depth: usize, max_depth: usize) -> Option<Self> {
+        (depth <= max_depth).then_some(Self { depth, max_depth })
+    }
+
+    /// Returns whether one more child fits within the host's ceiling.
+    pub fn allows_child(self) -> bool {
+        self.depth
+            .checked_add(1)
+            .is_some_and(|child_depth| child_depth <= self.max_depth)
+    }
+}
+
 /// Admission rules for one turn's tool registration.
 #[derive(Clone, Default)]
 pub struct ToolAdmission {
@@ -99,6 +121,9 @@ pub struct ToolAdmission {
     pub thread_scoped: HashSet<String>,
     /// Names of spawn/delegate tools a sub-agent must never receive.
     pub spawn_tools: HashSet<String>,
+    /// Explicit host grant for bounded nested spawning. `None` keeps the
+    /// default leaf-subagent behavior.
+    pub nested_spawn_depth: Option<NestedSpawnDepth>,
 }
 
 /// The outcome of [`plan_registration`].
@@ -164,7 +189,12 @@ where
         if !allowed {
             continue;
         }
-        if admission.is_subagent_run && admission.spawn_tools.contains(name) {
+        if admission.is_subagent_run
+            && admission.spawn_tools.contains(name)
+            && !admission
+                .nested_spawn_depth
+                .is_some_and(NestedSpawnDepth::allows_child)
+        {
             tracing::warn!(
                 tool = name,
                 "[tool-registration] refused spawn tool on sub-agent"

@@ -142,6 +142,45 @@ fn subagent_never_gets_spawn_tools_even_if_allowlisted() {
 }
 
 #[test]
+fn bounded_subagent_spawn_requires_depth_room_and_exact_allowlisting() {
+    let below_cap = ToolAdmission {
+        allowed: Some(set(&["spawn", "read"])),
+        is_subagent_run: true,
+        spawn_tools: set(&["spawn"]),
+        nested_spawn_depth: Some(NestedSpawnDepth::try_new(1, 3).unwrap()),
+        ..open()
+    };
+    let plan = plan_registration(["spawn", "read", "other"], &below_cap);
+    assert_eq!(plan.admitted, ["spawn", "read"]);
+    assert!(plan.spawn_refused.is_empty());
+
+    let at_cap = ToolAdmission {
+        nested_spawn_depth: Some(NestedSpawnDepth::try_new(3, 3).unwrap()),
+        ..below_cap.clone()
+    };
+    let plan = plan_registration(["spawn", "read"], &at_cap);
+    assert_eq!(plan.admitted, ["read"]);
+    assert_eq!(plan.spawn_refused, ["spawn"]);
+
+    let not_allowlisted = ToolAdmission {
+        allowed: Some(set(&["read"])),
+        nested_spawn_depth: Some(NestedSpawnDepth::try_new(1, 3).unwrap()),
+        ..below_cap
+    };
+    let plan = plan_registration(["spawn", "read"], &not_allowlisted);
+    assert_eq!(plan.admitted, ["read"]);
+    assert!(plan.spawn_refused.is_empty());
+}
+
+#[test]
+fn nested_spawn_depth_rejects_invalid_or_overflowing_depths() {
+    assert!(NestedSpawnDepth::try_new(4, 3).is_none());
+    assert!(!NestedSpawnDepth::try_new(u32::MAX, u32::MAX)
+        .unwrap()
+        .allows_child());
+}
+
+#[test]
 fn root_run_keeps_spawn_tools() {
     let admission = ToolAdmission {
         spawn_tools: set(&["spawn"]),
