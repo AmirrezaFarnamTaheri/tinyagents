@@ -287,7 +287,7 @@ async fn inspection_invocation_uses_supported_cli_flags_and_caps_output_with_fro
          printf '%s' \"${{CLAUDE_CODE_MAX_OUTPUT_TOKENS-}}\" > '{}'\n\
          printf '%s' \"${{ANTHROPIC_BASE_URL-}}\" > '{}'\n\
          printf '%s' \"$HOME\" > '{}'\n\
-         pwd > '{}'; printf '%s|' "$TMPDIR" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$USERPROFILE" "$APPDATA" "$LOCALAPPDATA" "$TEMP" "$TMP" > '{}'\n\
+         pwd > '{}'; printf '%s|' \"$TMPDIR\" \"$XDG_CONFIG_HOME\" \"$XDG_DATA_HOME\" \"$XDG_STATE_HOME\" \"$XDG_CACHE_HOME\" \"$USERPROFILE\" \"$APPDATA\" \"$LOCALAPPDATA\" \"$TEMP\" \"$TMP\" > '{}'\n\
          if [ -e \"$HOME/.claude\" ]; then printf yes > '{}'; else printf no > '{}'; fi\n\
          printf '%s\\n' '{{\"type\":\"result\",\"result\":\"OK\",\"is_error\":false}}'\n",
         args_path.display(),
