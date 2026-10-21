@@ -1134,16 +1134,17 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
     {
         let observer = std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(
             move |run, succeeded, error: Option<String>| {
-                spawn_host_finalizer(
-                    prepared,
-                    run,
-                    succeeded,
-                    error.map(|error| {
-                        let _ = error;
-                        tracing::warn!("[host] agent run failed");
-                        "agent run failed".to_string()
-                    }),
-                );
+                let error = error.map(|error| {
+                    let error = terminal_error_message(&error);
+                    tracing::warn!(
+                        run_id = %prepared.run_id,
+                        agent_id = %prepared.binding.agent_id,
+                        %error,
+                        "[host] agent run failed"
+                    );
+                    error
+                });
+                spawn_host_finalizer(prepared, run, succeeded, error);
             },
         )
             as crate::context::TerminalObserver)));
@@ -1241,6 +1242,20 @@ fn sanitize_hosted_preparation_error(error: TinyAgentsError) -> TinyAgentsError 
         | TinyAgentsError::CallTimeout(_) => error,
         _ => TinyAgentsError::Model("hosted agent invocation failed".to_string()),
     }
+}
+
+/// Longest failure text a terminal log line or [`ProgressEvent::Error`] carries.
+const TERMINAL_ERROR_MAX_CHARS: usize = 500;
+
+/// The failed run's error, credential-scrubbed and bounded, for the warn log
+/// and the progress event. Without it a failed hosted run logged no reason
+/// anywhere (openhuman#7830); scrubbing keeps provider/tool text that echoes
+/// a secret out of both.
+fn terminal_error_message(error: &str) -> String {
+    crate::close::truncate_chars(
+        &tinyinference_core::sanitize::scrub_credentials(error),
+        TERMINAL_ERROR_MAX_CHARS,
+    )
 }
 
 /// Runs [`finish_host_turn`] on a Tokio task, tolerating the case where the
@@ -1464,3 +1479,7 @@ async fn screen_stored<State: Send + Sync>(
 #[cfg(test)]
 #[path = "agent_progress_dispatcher_tests.rs"]
 mod progress_dispatcher_tests;
+
+#[cfg(test)]
+#[path = "agent_terminal_error_tests.rs"]
+mod terminal_error_tests;
