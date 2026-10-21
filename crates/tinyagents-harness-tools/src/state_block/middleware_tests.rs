@@ -182,7 +182,7 @@ async fn nested_tool_results_are_recorded_in_the_run_state() {
         .await
         .expect("nested failure is visible");
     assert!(
-        rendered.contains("shell `make test`: exit code 2"),
+        rendered.contains("shell `make test`: nested tool returned an error"),
         "{rendered}"
     );
 }
