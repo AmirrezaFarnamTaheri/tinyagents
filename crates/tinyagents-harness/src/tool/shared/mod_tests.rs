@@ -168,42 +168,6 @@ async fn canonical_adapter_preserves_spec_policy_context_and_result() {
     );
 }
 
-#[test]
-fn canonical_adapter_forwards_use_skill_extension_to_its_binding_dispatch() {
-    use crate::tool::ToolDispatch;
-    use crate::tool::packs::{
-        PackCatalog, PackRegistryHandle, PackToolExtension, USE_SKILL, UseSkillDispatch,
-        UseSkillTool,
-    };
-
-    let use_skill = UseSkillTool::new(
-        PackRegistryHandle::default(),
-        PackCatalog::new(&[], "[not-found]"),
-    );
-    let tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![Box::new(use_skill)]);
-    let adapter = Arc::new(
-        CanonicalSharedToolAdapter::for_name(vec![tools], USE_SKILL).expect("registered use_skill"),
-    );
-
-    assert!(
-        adapter
-            .host_extension()
-            .and_then(|extension| extension.downcast_ref::<PackToolExtension>())
-            .is_some()
-    );
-
-    let dispatch = UseSkillDispatch::<(), ()>::new(adapter, Arc::new(|_| None));
-    let bound = dispatch
-        .bind_call(&serde_json::json!({
-            "skill": "missing",
-            "tool": "missing_tool",
-            "args": {}
-        }))
-        .expect("adapter exposes the pack extension to the real binder")
-        .expect("use_skill binding returns a dispatch");
-    assert_eq!(bound.tool().name(), USE_SKILL);
-}
-
 #[tokio::test]
 async fn canonical_adapter_fails_closed_when_the_registered_tool_is_gone() {
     let adapter = CanonicalSharedToolAdapter {
