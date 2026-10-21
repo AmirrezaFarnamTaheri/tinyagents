@@ -275,7 +275,12 @@ impl ClaudeAgentSdkProvider {
             build_invocation(system_prompt, message, model, self.config.max_budget_usd)
         };
 
-        let mut cmd = Command::new(&self.config.binary);
+        let executable = if inspection_home.is_some() {
+            inspection_binary_path(&self.config.binary)?
+        } else {
+            self.config.binary.clone().into()
+        };
+        let mut cmd = Command::new(executable);
         cmd.args(&invocation.args)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -291,7 +296,8 @@ impl ClaudeAgentSdkProvider {
                 .env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", max_tokens.to_string())
                 .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
                 .env("DISABLE_TELEMETRY", "1")
-                .env("DISABLE_ERROR_REPORTING", "1");
+                .env("DISABLE_ERROR_REPORTING", "1")
+                .current_dir(home_path);
             if let Some(key) = auth.api_key.as_deref() {
                 cmd.env("ANTHROPIC_API_KEY", key);
             } else if let Some(token) = auth.auth_token.as_deref() {
@@ -455,6 +461,14 @@ impl ClaudeAgentSdkProvider {
 
         Ok(output)
     }
+}
+
+fn inspection_binary_path(binary: &str) -> anyhow::Result<std::path::PathBuf> {
+    let path = std::path::PathBuf::from(binary);
+    if path.is_absolute() || (!binary.contains('/') && !binary.contains('\\')) {
+        return Ok(path);
+    }
+    Ok(std::env::current_dir()?.join(path))
 }
 
 #[async_trait]
