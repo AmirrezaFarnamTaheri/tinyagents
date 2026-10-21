@@ -159,6 +159,7 @@ impl SubAgentJobRegistry {
         let metadata = JobMeta {
             parent_thread_id: link.parent_thread_id.clone(),
             workspace: link.workspace.clone(),
+            root_run_id: link.root_run_id.clone(),
         };
         let task_id = TaskId::new(id.as_str());
         let job = SubAgentJob {
@@ -206,6 +207,7 @@ impl SubAgentJobRegistry {
                 terminal_sequence: AtomicU64::new(0),
             },
         );
+        self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
         Ok(())
     }
 
@@ -385,6 +387,7 @@ impl SubAgentJobRegistry {
             JobLink {
                 parent_thread_id: key.thread_id.clone(),
                 workspace,
+                root_run_id: Some(tinyagents_harness::ids::RunId::new(key.root_run_id.clone())),
                 ..JobLink::default()
             },
             JobExecutionControls {
@@ -406,7 +409,7 @@ impl SubAgentJobRegistry {
 
     pub fn mark_running(&self, id: &SubAgentJobId) {
         if let Some(control) = self.controls().get(id) {
-            control.status.send_if_modified(|job| {
+            let changed = control.status.send_if_modified(|job| {
                 if matches!(
                     job.status,
                     SubAgentJobStatus::Queued | SubAgentJobStatus::AwaitingInput
@@ -417,6 +420,9 @@ impl SubAgentJobRegistry {
                     false
                 }
             });
+            if changed {
+                self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+            }
         }
     }
 
@@ -442,6 +448,7 @@ impl SubAgentJobRegistry {
                 .send_modify(|job| settle(job, cancellation_requested));
             if control.status.borrow().status.is_terminal() {
                 self.stamp_terminal_sequence(control);
+                self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
             }
             self.steering.deregister(&task_id);
             true
@@ -670,13 +677,16 @@ impl SubAgentJobRegistry {
     /// Points the job link at the attempt that is now running.
     pub(crate) fn set_attempt_run_id(&self, id: &SubAgentJobId, run_id: &str) {
         if let Some(control) = self.controls().get(id) {
-            control.status.send_if_modified(|job| {
+            let changed = control.status.send_if_modified(|job| {
                 if job.status.is_terminal() {
                     return false;
                 }
                 job.subagent_run_id = Some(run_id.to_owned());
                 true
             });
+            if changed {
+                self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+            }
         }
     }
 
@@ -959,6 +969,62 @@ impl SubAgentJobRegistry {
                 let snapshot = status.borrow().clone();
                 drop(waiter_guard);
                 return Ok(snapshot);
+            }
+        }
+    }
+
+    /// Waits for every registered driver job in `root_run_id`'s native run
+    /// tree to reach a terminal state and returns their final snapshots.
+    ///
+    /// The root run itself is not a registered driver job. Call this only
+    /// after that root run has completed and can no longer admit direct child
+    /// jobs. A live descendant remains an admission source until it becomes
+    /// terminal, so grandchildren registered while settling are included.
+    /// Paused (`AwaitingInput`) jobs are not terminal and keep settlement open.
+    /// Jobs without native driver lineage and jobs owned by another owner are
+    /// excluded. The deadline is absolute and shared by the whole operation.
+    pub async fn settle_root_run_descendants(
+        &self,
+        root_run_id: &tinyagents_harness::ids::RunId,
+        owner: impl ToString,
+        deadline: tokio::time::Instant,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<SubAgentJob>, SubAgentJobError> {
+        let owner = owner.to_string();
+        let mut changes = self.changes.subscribe();
+        loop {
+            let (jobs, pending) = {
+                // Registration and lifecycle transitions take this same lock.
+                // Subscribing before the scan while holding it closes the
+                // scan/subscribe race; a later change remains visible in the
+                // watch receiver even if it precedes the await below.
+                let _controls = self.controls();
+                let snapshots = self
+                    .tasks
+                    .snapshots(Some(&owner))
+                    .map_err(registry_failure)?;
+                let jobs: Vec<_> = snapshots
+                    .into_iter()
+                    .filter(|snapshot| {
+                        snapshot.metadata.root_run_id.as_ref() == Some(root_run_id)
+                    })
+                    .map(|snapshot| snapshot.status)
+                    .collect();
+                let pending = jobs.iter().any(|job| !job.status.is_terminal());
+                (jobs, pending)
+            };
+            if !pending {
+                return Ok(jobs);
+            }
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err(SubAgentJobError::SettlementCancelled),
+                _ = tokio::time::sleep_until(deadline) => return Err(SubAgentJobError::SettlementTimedOut),
+                result = changes.changed() => {
+                    if result.is_err() {
+                        return Err(SubAgentJobError::Registry("job registry change stream closed".into()));
+                    }
+                }
             }
         }
     }

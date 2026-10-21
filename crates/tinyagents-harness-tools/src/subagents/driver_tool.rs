@@ -253,11 +253,19 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         mut request: SubagentRequest<Ctx, H>,
         target: Option<String>,
         owner: String,
+        root_run_id: tinyagents_harness::ids::RunId,
+        parent_run_id: tinyagents_harness::ids::RunId,
     ) -> anyhow::Result<ToolResult>
     where
         Ctx: Send + 'static,
         H: Send + 'static,
     {
+        let key = request.task_key();
+        if key.root_run_id != root_run_id.as_str()
+            || key.parent_run_id != parent_run_id.as_str()
+        {
+            anyhow::bail!("subagent task lineage does not match the calling run");
+        }
         let task_id = request.task_id().to_owned();
         let bridged_job = if let Some(jobs) = &self.jobs {
             let continuing = request.resume().is_some();
@@ -451,7 +459,13 @@ where
         } else {
             None
         };
-        self.execute_request(request, target, (self.owner_scope)(parent.instance_id()))
+        self.execute_request(
+            request,
+            target,
+            (self.owner_scope)(parent.instance_id()),
+            parent.lineage().root_run_id.clone(),
+            parent.run_id().clone(),
+        )
             .await
     }
 }

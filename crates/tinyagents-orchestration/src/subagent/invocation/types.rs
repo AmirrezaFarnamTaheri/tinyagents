@@ -301,6 +301,7 @@ pub struct SubAgentJob {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct JobLink {
     pub(crate) subagent_run_id: Option<String>,
+    pub(crate) root_run_id: Option<tinyagents_harness::ids::RunId>,
     pub(crate) parent_tool_call_id: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
     pub(crate) workspace: Option<tinytools::WorkspaceDescriptor>,
@@ -331,6 +332,8 @@ pub struct SubAgentJobRegistry {
     pub(crate) driver_jobs: Arc<Mutex<HashMap<crate::subagent::SubagentTaskKey, SubAgentJobId>>>,
     /// Monotonic settlement order for deterministic bounded terminal retention.
     pub(crate) next_terminal_sequence: Arc<AtomicU64>,
+    /// Changes whenever root-lineage membership or a job lifecycle changes.
+    pub(crate) changes: watch::Sender<u64>,
 }
 
 impl Default for SubAgentJobRegistry {
@@ -346,6 +349,7 @@ impl Default for SubAgentJobRegistry {
             controls: Arc::default(),
             driver_jobs: Arc::default(),
             next_terminal_sequence: Arc::new(AtomicU64::new(1)),
+            changes: watch::channel(0).0,
         }
     }
 }
@@ -358,6 +362,7 @@ pub(super) const SUBAGENT_JOB_SOFT_CAP: usize = 128;
 pub(crate) struct JobMeta {
     pub(crate) parent_thread_id: Option<String>,
     pub(crate) workspace: Option<tinytools::WorkspaceDescriptor>,
+    pub(crate) root_run_id: Option<tinyagents_harness::ids::RunId>,
 }
 
 impl Clone for JobMeta {
@@ -369,6 +374,7 @@ impl Clone for JobMeta {
         Self {
             parent_thread_id: self.parent_thread_id.clone(),
             workspace: self.workspace.clone(),
+            root_run_id: self.root_run_id.clone(),
         }
     }
 }
@@ -456,4 +462,10 @@ pub enum SubAgentJobError {
     /// The request identifier exceeds the bounded registry size.
     #[error("subagent request id is too long")]
     RequestIdTooLong,
+    /// Descendant settlement reached its one shared absolute deadline.
+    #[error("timed out while settling descendant subagent jobs")]
+    SettlementTimedOut,
+    /// Descendant settlement was interrupted by its caller's cancellation.
+    #[error("descendant subagent settlement was cancelled")]
+    SettlementCancelled,
 }

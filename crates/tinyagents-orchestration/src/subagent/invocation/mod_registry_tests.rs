@@ -49,6 +49,113 @@ async fn jobs_are_registered_in_the_shared_detached_registry() {
 }
 
 #[tokio::test]
+async fn root_settlement_includes_late_grandchildren_and_only_owned_root_jobs() {
+    use tinyagents_harness::cancel::CancellationToken;
+    use tinyagents_harness::ids::RunId;
+
+    let jobs = SubAgentJobRegistry::new();
+    let register = |task: &str, root: &str, parent: &str, owner: &str| {
+        let key = crate::subagent::SubagentTaskKey {
+            root_run_id: root.into(),
+            parent_run_id: parent.into(),
+            thread_id: None,
+            task_id: task.into(),
+        };
+        jobs.register_driver_job(DriverJobRegistration {
+            key,
+            agent: task.into(),
+            owner: owner.into(),
+            workspace: None,
+            cancellation: CancellationToken::new(),
+            steering: None,
+            run_queue: None,
+            continuing: false,
+        })
+        .unwrap()
+        .0
+    };
+
+    let child = register("child", "root", "root", "owner");
+    let unrelated = register("unrelated", "other-root", "other-root", "owner");
+    let foreign = register("foreign", "root", "root", "other-owner");
+    jobs.mark_running(&child);
+    jobs.mark_driver_result(&unrelated, Err("unrelated failure".into()));
+    jobs.mark_driver_result(&foreign, Err("foreign failure".into()));
+
+    let settling = {
+        let jobs = jobs.clone();
+        tokio::spawn(async move {
+            jobs.settle_root_run_descendants(
+                &RunId::new("root"),
+                "owner",
+                tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+                &CancellationToken::new(),
+            )
+            .await
+        })
+    };
+    tokio::task::yield_now().await;
+
+    // A running descendant can still admit a grandchild. Its terminal
+    // transition happens only after that registration, so settlement must
+    // observe and wait for both jobs.
+    let grandchild = register("grandchild", "root", "child-run", "owner");
+    jobs.mark_running(&grandchild);
+    jobs.mark_driver_result(&child, Err("child failed".into()));
+    assert!(!settling.is_finished());
+    jobs.mark_driver_result(&grandchild, Err("grandchild failed".into()));
+
+    let settled = settling.await.unwrap().unwrap();
+    assert_eq!(
+        settled.iter().map(|job| job.id.as_str()).collect::<Vec<_>>(),
+        vec![child.as_str(), grandchild.as_str()]
+    );
+    assert!(settled.iter().all(|job| job.status == SubAgentJobStatus::Failed));
+
+    let repeated = jobs
+        .settle_root_run_descendants(
+            &RunId::new("root"),
+            "owner",
+            tokio::time::Instant::now(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(repeated, settled);
+}
+
+#[tokio::test]
+async fn root_settlement_uses_one_deadline_and_propagates_cancellation() {
+    use tinyagents_harness::cancel::CancellationToken;
+    use tinyagents_harness::ids::RunId;
+
+    let jobs = SubAgentJobRegistry::new();
+    let (_, child) = register_driver_job(&jobs, "pending");
+    jobs.mark_running(&child);
+    let deadline_result = jobs
+        .settle_root_run_descendants(
+            &RunId::new("root"),
+            "owner",
+            tokio::time::Instant::now(),
+            &CancellationToken::new(),
+        )
+        .await;
+    assert_eq!(deadline_result, Err(SubAgentJobError::SettlementTimedOut));
+
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let cancelled_result = jobs
+        .settle_root_run_descendants(
+            &RunId::new("root"),
+            "owner",
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            &cancellation,
+        )
+        .await;
+    assert_eq!(cancelled_result, Err(SubAgentJobError::SettlementCancelled));
+}
+
+#[tokio::test]
 async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
     use tinyagents_harness::cancel::CancellationToken;
     use tinyagents_tasks::{
