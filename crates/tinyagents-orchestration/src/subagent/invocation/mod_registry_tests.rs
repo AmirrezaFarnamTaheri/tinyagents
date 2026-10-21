@@ -776,6 +776,9 @@ async fn resumed_job_keeps_old_attempt_edges_without_importing_new_root_siblings
         run_queue: None,
         continuing: false,
     };
+    let root_lease = jobs
+        .retain_root_run_descendants(&RunId::new("old-root"), "owner")
+        .unwrap();
 
     let (job, _, _, _, _) = jobs
         .register_driver_job_with_parent_run(
@@ -860,7 +863,13 @@ async fn resumed_job_keeps_old_attempt_edges_without_importing_new_root_siblings
             .unwrap()
         }
     };
-    let old_root_jobs = settle("old-root").await;
+    let old_root_jobs = root_lease
+        .settle(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
     assert_eq!(old_root_jobs.len(), 3);
     assert!(old_root_jobs.iter().any(|entry| entry.id == old_grandchild));
     assert!(old_root_jobs.iter().any(|entry| entry.id == new_grandchild));
