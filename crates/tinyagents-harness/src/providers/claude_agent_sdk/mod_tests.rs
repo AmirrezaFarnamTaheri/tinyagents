@@ -272,6 +272,7 @@ async fn inspection_invocation_uses_supported_cli_flags_and_caps_output_with_fro
     let endpoint_path = dir.path().join("endpoint.txt");
     let home_path = dir.path().join("home.txt");
     let cwd_path = dir.path().join("cwd.txt");
+    let isolated_paths = dir.path().join("isolated-paths.txt");
     let state_path = dir.path().join("state.txt");
     let staging = dir.path().join("claude-inspection.staging");
     let source = format!(
@@ -286,7 +287,7 @@ async fn inspection_invocation_uses_supported_cli_flags_and_caps_output_with_fro
          printf '%s' \"${{CLAUDE_CODE_MAX_OUTPUT_TOKENS-}}\" > '{}'\n\
          printf '%s' \"${{ANTHROPIC_BASE_URL-}}\" > '{}'\n\
          printf '%s' \"$HOME\" > '{}'\n\
-         pwd > '{}'\n\
+         pwd > '{}'; printf '%s|' "$TMPDIR" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$USERPROFILE" "$APPDATA" "$LOCALAPPDATA" "$TEMP" "$TMP" > '{}'\n\
          if [ -e \"$HOME/.claude\" ]; then printf yes > '{}'; else printf no > '{}'; fi\n\
          printf '%s\\n' '{{\"type\":\"result\",\"result\":\"OK\",\"is_error\":false}}'\n",
         args_path.display(),
@@ -296,6 +297,7 @@ async fn inspection_invocation_uses_supported_cli_flags_and_caps_output_with_fro
         endpoint_path.display(),
         home_path.display(),
         cwd_path.display(),
+        isolated_paths.display(),
         state_path.display(),
         state_path.display(),
     );
@@ -385,6 +387,23 @@ async fn inspection_invocation_uses_supported_cli_flags_and_caps_output_with_fro
         cli_cwd.trim(),
         cli_home,
         "the CLI must not discover repository instructions from the caller's working directory"
+    );
+    let isolated = std::fs::read_to_string(isolated_paths).expect("captured isolated user paths");
+    let isolated_paths = isolated.split('|').collect::<Vec<_>>();
+    assert_eq!(isolated_paths.len(), 11, "all path variables were captured");
+    assert!(
+        isolated_paths[..5].iter().all(|path| *path == cli_home),
+        "temporary and XDG profile paths must stay private: {isolated_paths:?}"
+    );
+    #[cfg(windows)]
+    assert!(
+        isolated_paths[5..10].iter().all(|path| *path == cli_home),
+        "Windows user and temporary profile paths must stay private: {isolated_paths:?}"
+    );
+    #[cfg(unix)]
+    assert!(
+        isolated_paths[5..10].iter().all(|path| path.is_empty()),
+        "Windows-only profile variables must not be inherited on Unix: {isolated_paths:?}"
     );
     assert_eq!(
         std::fs::read_to_string(state_path).expect("captured session state"),
