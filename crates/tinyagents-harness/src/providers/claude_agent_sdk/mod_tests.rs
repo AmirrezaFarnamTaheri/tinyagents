@@ -431,10 +431,11 @@ fn inspection_child_environment_is_isolated_from_platform_profiles() {
         Some("https://anthropic.example.test".into()),
     )
     .expect("explicit inspection key");
-    let mut command = std::process::Command::new("claude");
+    let mut command = tokio::process::Command::new("claude");
     configure_inspection_child(&mut command, &auth, home.path(), 5);
 
     let environment = command
+        .as_std()
         .get_envs()
         .filter_map(|(name, value)| {
             value.map(|value| {
