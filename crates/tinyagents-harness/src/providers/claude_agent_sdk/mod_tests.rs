@@ -490,6 +490,50 @@ fn inspection_child_environment_is_isolated_from_platform_profiles() {
 }
 
 #[test]
+fn inspection_child_environment_passes_an_explicit_gateway_bearer_without_an_api_key() {
+    let home = tempfile::tempdir().expect("private inspection home");
+    let private_home = home.path().to_string_lossy().into_owned();
+    let auth = ClaudeAgentSdkInspectionAuth::new(
+        None,
+        Some("dummy-gateway-bearer".into()),
+        Some("https://gateway.example.test".into()),
+    )
+    .expect("explicit gateway bearer");
+    let mut command = tokio::process::Command::new("claude");
+    configure_inspection_child(&mut command, &auth, home.path(), 5);
+
+    let environment = command
+        .as_std()
+        .get_envs()
+        .filter_map(|(name, value)| {
+            value.map(|value| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    assert_eq!(
+        environment.get("ANTHROPIC_AUTH_TOKEN"),
+        Some(&"dummy-gateway-bearer".into())
+    );
+    assert!(!environment.contains_key("ANTHROPIC_API_KEY"));
+    assert_eq!(
+        environment.get("ANTHROPIC_BASE_URL"),
+        Some(&"https://gateway.example.test".into())
+    );
+    assert_eq!(environment.get("HOME"), Some(&private_home));
+    assert_eq!(environment.get("TMPDIR"), Some(&private_home));
+    assert_eq!(
+        environment.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS"),
+        Some(&"5".into())
+    );
+    assert!(environment.contains_key("PATH"));
+}
+
+#[test]
 fn inspection_binary_path_is_resolved_before_switching_to_private_home() {
     let caller_dir = std::env::current_dir().expect("current directory");
     assert_eq!(
