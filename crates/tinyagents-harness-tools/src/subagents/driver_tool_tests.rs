@@ -1525,7 +1525,7 @@ async fn driver_subagent_tool_routes_execution_through_the_driver() {
         .await
         .unwrap();
     assert_eq!(job.status, SubAgentJobStatus::Completed);
-    assert_eq!(job.agent, "worker");
+    assert_eq!(job.agent, "subagent");
     assert_eq!(job.output.as_deref(), Some("driver result"));
 
     let requests = requests.lock().unwrap();
