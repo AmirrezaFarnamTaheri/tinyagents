@@ -329,7 +329,6 @@ impl SubAgentJobRegistry {
         &self,
         registration: DriverJobRegistration,
         parent_run_id: tinyagents_harness::ids::RunId,
-        child_run_id: tinyagents_harness::ids::RunId,
     ) -> Result<(
         SubAgentJobId,
         SteeringHandle,
@@ -337,16 +336,13 @@ impl SubAgentJobRegistry {
         CancellationToken,
         bool,
     ), SubAgentJobError> {
-        self.register_driver_job_inner(registration, Some((parent_run_id, child_run_id)))
+        self.register_driver_job_inner(registration, Some(parent_run_id))
     }
 
     fn register_driver_job_inner(
         &self,
         registration: DriverJobRegistration,
-        lineage: Option<(
-            tinyagents_harness::ids::RunId,
-            tinyagents_harness::ids::RunId,
-        )>,
+        parent_run_id: Option<tinyagents_harness::ids::RunId>,
     ) -> Result<DriverJobControls, SubAgentJobError> {
         let DriverJobRegistration {
             key,
@@ -390,8 +386,8 @@ impl SubAgentJobRegistry {
                 .clone()
                 .ok_or_else(|| SubAgentJobError::LaneUnavailable(id.as_str().to_owned()))?;
             if status == SubAgentJobStatus::AwaitingInput && continuing {
-                if let Some((parent_run_id, child_run_id)) = lineage {
-                    control.lineage.add(Some(parent_run_id), Some(child_run_id));
+                if let Some(parent_run_id) = parent_run_id {
+                    control.lineage.add(Some(parent_run_id), None);
                 }
                 control.status.send_modify(|job| {
                     job.status = SubAgentJobStatus::Running;
@@ -421,12 +417,10 @@ impl SubAgentJobRegistry {
         let steering = steering.unwrap_or_else(|| {
             SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage))
         });
-        let (parent_run_id, child_run_id) = lineage
-            .map(|(parent, child)| (Some(parent), Some(child)))
-            .unwrap_or_else(|| {
+        let parent_run_id = parent_run_id.unwrap_or_else(|| {
                 // A legacy caller's durable key proves its historical parent,
                 // but does not prove the current child attempt's native RunId.
-                (Some(tinyagents_harness::ids::RunId::new(key.parent_run_id.clone())), None)
+                tinyagents_harness::ids::RunId::new(key.parent_run_id.clone())
             });
         self.insert_job(
             id.clone(),
@@ -435,8 +429,7 @@ impl SubAgentJobRegistry {
             JobLink {
                 parent_thread_id: key.thread_id.clone(),
                 workspace,
-                parent_run_id,
-                child_run_id,
+                parent_run_id: Some(parent_run_id),
                 ..JobLink::default()
             },
             JobExecutionControls {
