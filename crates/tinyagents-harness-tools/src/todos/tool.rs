@@ -36,7 +36,8 @@ pub(super) const TODO_TOOL_NAME: &str = "todo";
 const TODO_DESCRIPTION: &str = "This thread's plan, for work with 3+ steps. Write it once with \
     `todos` (the complete list; it replaces the old one, and step 1 starts). Steps run one at a \
     time, in order. Tick a step with `{\"complete\": N}` (N from 1) only after its work has run \
-    and its result is in the conversation, before starting the next: that call starts step N+1. \
+    and its result is in the conversation, before starting the next: that call starts step N+1 \
+    (several finished steps: `{\"complete\": [N, M]}`). \
     Drop a step with `{\"cancel\": N, \"reason\": \"...\"}`. No arguments reads the list. \
     Ticking is bookkeeping, not work: in the same response (or your next turn, if you cannot call \
     tools in parallel) do the next step unless the list is finished. Replace the list at most \
@@ -125,7 +126,14 @@ impl TodoTool {
                 Err(e) => return Ok(TodoOutcome::Error(e.to_string())),
             }
         };
-        let outcome = self.dispatch_plan(thread_id, &args).await?;
+        let before = closed_steps(&self.store, thread_id).await;
+        let mut outcome = self.dispatch_plan(thread_id, &args).await?;
+        if let TodoOutcome::Ok(payload) = &mut outcome
+            && update.facts.is_empty()
+            && update.dead_ends.is_empty()
+        {
+            note_unrecorded_closes(payload, &before);
+        }
         Ok(match (outcome, pad) {
             (TodoOutcome::Ok(mut payload), Some(pad)) => {
                 payload["scratchpad"] = notes_payload(&pad);
@@ -155,15 +163,17 @@ impl TodoTool {
                 ))
             })
         };
-        if let Some(step) = args.get("complete") {
+        if let Some(raw) = args.get("complete") {
             if let Some(error) = unknown(&["complete"]) {
                 return Ok(error);
             }
-            let step = match step_number(step) {
-                Ok(step) => step,
+            let steps = match step_numbers(raw) {
+                Ok(steps) => steps,
                 Err(message) => return Ok(TodoOutcome::Error(message)),
             };
-            return Ok(outcome(store::complete(&self.store, thread_id, step).await));
+            return Ok(outcome(
+                store::complete_steps(&self.store, thread_id, &steps).await,
+            ));
         }
         if let Some(step) = args.get("cancel") {
             if let Some(error) = unknown(&["cancel", "reason"]) {
@@ -285,6 +295,65 @@ fn outcome(snap: Result<TodosSnapshot>) -> TodoOutcome {
     }
 }
 
+/// One 1-based step number, or a list of them.
+fn step_numbers(raw: &Value) -> std::result::Result<Vec<usize>, String> {
+    match raw {
+        Value::Array(values) if values.is_empty() => {
+            Err("`complete` needs at least one step number".to_string())
+        }
+        Value::Array(values) => values.iter().map(step_number).collect(),
+        single => step_number(single).map(|step| vec![step]),
+    }
+}
+
+/// The thread's closed steps, by content, before a write; empty when unreadable.
+async fn closed_steps(store: &Arc<dyn Store>, thread_id: &str) -> Vec<String> {
+    store::get(store, thread_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|list| {
+            list.items
+                .into_iter()
+                .filter(|item| item.status == TodoStatus::Completed)
+                .map(|item| item.content)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A call that completed several steps and recorded nothing gets a note
+/// asking for what they established: a model that ticks late, in a batch,
+/// otherwise keeps none of what those steps found.
+fn note_unrecorded_closes(payload: &mut Value, before: &[String]) {
+    let Some(todos) = payload.get("todos").and_then(Value::as_array) else {
+        return;
+    };
+    let newly: Vec<String> = todos
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item["status"] == "completed")
+        .filter(|(_, item)| {
+            item["content"]
+                .as_str()
+                .is_some_and(|content| !before.iter().any(|old| old == content))
+        })
+        .map(|(index, _)| (index + 1).to_string())
+        .collect();
+    if newly.len() < 2 {
+        return;
+    }
+    let note = format!(
+        "Steps {} were closed in one call with no notes. Record what they established (and \
+         anything that failed) now: todo {{\"facts\": [...], \"dead_ends\": [...]}}.",
+        newly.join(", ")
+    );
+    match payload.get_mut("notes").and_then(Value::as_array_mut) {
+        Some(notes) => notes.push(json!(note)),
+        None => payload["notes"] = json!([note]),
+    }
+}
+
 /// A 1-based step number.
 fn step_number(raw: &Value) -> std::result::Result<usize, String> {
     match raw.as_u64() {
@@ -348,9 +417,10 @@ fn parameters_schema() -> Value {
                 }
             },
             "complete": {
-                "type": "integer",
+                "type": ["integer", "array"],
                 "minimum": 1,
-                "description": "Complete step N (from 1) and start the next one."
+                "items": { "type": "integer", "minimum": 1 },
+                "description": "Complete step N (from 1), or several finished steps in order, and start the next one."
             },
             "cancel": {
                 "type": "integer",

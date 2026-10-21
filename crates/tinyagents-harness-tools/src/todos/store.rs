@@ -173,6 +173,19 @@ pub async fn complete(
     mutate(store, thread_id, |items| sequence::complete(items, step)).await
 }
 
+/// Complete several steps (1-based) top to bottom in one write, all or none,
+/// and start the next open one.
+pub async fn complete_steps(
+    store: &Arc<dyn Store>,
+    thread_id: &str,
+    steps: &[usize],
+) -> Result<TodosSnapshot> {
+    mutate(store, thread_id, |items| {
+        sequence::complete_steps(items, steps)
+    })
+    .await
+}
+
 /// Cancel step `step` (1-based) with `reason`; when it was the step in
 /// progress, the next open one starts.
 pub async fn cancel(

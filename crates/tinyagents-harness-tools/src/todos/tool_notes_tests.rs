@@ -145,3 +145,127 @@ fn the_schema_and_description_advertise_the_notes() {
         );
     }
 }
+
+async fn plan(tool: &TodoTool, steps: &[&str]) {
+    let todos: Vec<Value> = steps.iter().map(|step| json!({"content": step})).collect();
+    let result = run(tool, json!({ "todos": todos })).await;
+    assert!(!result.is_error, "{}", result.output());
+}
+
+fn notes_of(result: &ToolResult) -> Vec<String> {
+    payload(result)["notes"]
+        .as_array()
+        .map(|notes| {
+            notes
+                .iter()
+                .map(|note| note.as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn complete_takes_several_steps_in_order_all_or_none() {
+    let (tool, store) = tool();
+    plan(&tool, &["a", "b", "c", "d"]).await;
+
+    let refused = run(&tool, json!({"complete": [1, 3]})).await;
+    assert!(refused.is_error, "step 2 is still open");
+    let list = crate::todos::store::get(&store, "t")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        list.items[0].status,
+        TodoStatus::InProgress,
+        "a refused batch changes nothing"
+    );
+
+    let done = run(&tool, json!({"complete": [2, 1]})).await;
+    assert!(!done.is_error, "{}", done.output());
+    let statuses: Vec<&str> = payload(&done)["todos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        statuses,
+        ["completed", "completed", "in_progress", "pending"]
+    );
+    let notes = notes_of(&done);
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|note| note.ends_with("is now in progress."))
+            .count(),
+        1,
+        "only the step that is now current is announced: {notes:?}"
+    );
+
+    for bad in [
+        json!({"complete": []}),
+        json!({"complete": [0]}),
+        json!({"complete": "2"}),
+    ] {
+        assert!(run(&tool, bad.clone()).await.is_error, "{bad} is refused");
+    }
+}
+
+#[tokio::test]
+async fn closing_several_steps_without_notes_asks_for_them() {
+    let (tool, _store) = tool();
+    plan(&tool, &["a", "b", "c", "d"]).await;
+    let one = run(&tool, json!({"complete": 1})).await;
+    assert!(
+        !notes_of(&one).iter().any(|note| note.contains("no notes")),
+        "a single tick is not nagged"
+    );
+    let batch = run(&tool, json!({"complete": [2, 3]})).await;
+    assert!(
+        notes_of(&batch)
+            .iter()
+            .any(|note| note.contains("Steps 2, 3 were closed in one call with no notes")),
+        "{:?}",
+        notes_of(&batch)
+    );
+}
+
+#[tokio::test]
+async fn a_batch_with_facts_is_not_asked_again() {
+    let (tool, _store) = tool();
+    plan(&tool, &["a", "b", "c"]).await;
+    let batch = run(
+        &tool,
+        json!({"complete": [1, 2], "facts": ["a and b work"]}),
+    )
+    .await;
+    assert!(
+        !notes_of(&batch)
+            .iter()
+            .any(|note| note.contains("no notes"))
+    );
+}
+
+#[tokio::test]
+async fn a_rewrite_that_closes_several_steps_without_notes_asks_for_them() {
+    let (tool, _store) = tool();
+    plan(&tool, &["a", "b", "c"]).await;
+    let rewrite = run(
+        &tool,
+        json!({"todos": [
+            {"content": "a", "status": "completed"},
+            {"content": "b", "status": "completed"},
+            {"content": "c", "status": "in_progress"}
+        ]}),
+    )
+    .await;
+    assert!(!rewrite.is_error, "{}", rewrite.output());
+    assert!(
+        notes_of(&rewrite)
+            .iter()
+            .any(|note| note.contains("Steps 1, 2 were closed in one call")),
+        "{:?}",
+        notes_of(&rewrite)
+    );
+}

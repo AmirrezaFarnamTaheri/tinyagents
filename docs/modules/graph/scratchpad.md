@@ -25,6 +25,11 @@ Through optional arguments of the `todo` tool, so there is no new tool:
 | `approach` | Replace the current approach; `""` clears it. |
 | `retract` | Remove every note (facts, dead ends, approach, last task) containing this text, case-insensitively. Runs before the additions. |
 
+A `todo` call that closes several steps at once with no notes is answered with
+a request for them, and the plan-order reminder and gate suggest
+`{"complete": N, "facts": [...]}`: notes come with the ticks the model makes
+anyway.
+
 Each note is one line of at most 300 characters; a restated note moves to the
 end instead of repeating. At most 12 facts and 8 dead ends are kept, the oldest
 dropped first.
