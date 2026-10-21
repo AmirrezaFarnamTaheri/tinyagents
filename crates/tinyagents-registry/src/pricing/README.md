@@ -15,9 +15,14 @@ This module performs no I/O and does not refresh prices. The seed catalog and
 its validation remain independent; this additive API preserves the migrated
 consumer snapshot without silently changing existing seed lookups.
 
-Inherited compatibility limitations remain: unlisted hyphenated variants can
-match a base id; some cached rates are historical assumptions; long-context
-pricing other than the MiniMax M3 estimate branch is unmodeled. The flat
-metadata projection deliberately preserves row rates with no tiers, so it is
-not equivalent to the tier-aware M3 call estimator. These need separate
-behavioral corrections rather than silent changes in this migration.
+Lookup first matches an exact canonical id, then an id with a leading vendor
+segment removed. Its fallback accepts only dated or preview snapshot decorations
+of a listed id, such as `gpt-5.4-mini-2026-05-01` or
+`gemini-2.5-pro-preview-06-05`. Unlisted variants such as `gpt-4.1-nano` and
+`o3-pro` return `None`; they do not inherit the rates or context window of a
+listed base model.
+
+Some cached rates remain historical assumptions, and long-context pricing other
+than the MiniMax M3 estimate branch is unmodeled. The flat metadata projection
+preserves row rates with no tiers, so it is not equivalent to the tier-aware M3
+call estimator. Those limitations need separate behavioral corrections.
