@@ -10,7 +10,6 @@ use tinyagents_harness::run_queue::{QueueLane, RunQueueHandle};
 use super::format::{CompletionFormatter, NeutralCompletionFormatter};
 use super::store::CompletionStore;
 use super::types::{CompletionRecord, CompletionState, NotifyMode};
-use crate::recovery::{RecoveryChild, build_restart_recovery_note};
 
 const LOG_PREFIX: &str = "[completion-router]";
 
@@ -567,32 +566,6 @@ impl CompletionRouter {
         let dropped = state.store.compact(retain)?;
         tracing::debug!(dropped, "{LOG_PREFIX} compacted");
         Ok(dropped)
-    }
-
-    /// The restart recovery note for `parent_key`: the interrupted `children`
-    /// (see [`recovery_children`](crate::recovery_children)) plus every
-    /// completion that finished but was never delivered, framed by the
-    /// formatter. Empty when there is nothing to say. Read-only; the host
-    /// settles the completions with [`Self::mark_delivered`] once it has
-    /// injected the note. `Off` (pull-only) records and ones a claim currently
-    /// holds are left out. Nothing is relaunched.
-    pub fn restart_recovery_note(&self, parent_key: &str, children: &[RecoveryChild]) -> String {
-        let interrupted = build_restart_recovery_note(children);
-        let leased = self.lock().map(|s| s.leased.clone()).unwrap_or_default();
-        let pending: Vec<_> = self
-            .pending_for(parent_key)
-            .into_iter()
-            .filter(|r| r.notify_mode != NotifyMode::Off && !leased.contains(&r.task_id))
-            .collect();
-        if pending.is_empty() {
-            return interrupted;
-        }
-        let finished = self.formatter.format_batch(&pending);
-        if interrupted.is_empty() {
-            finished
-        } else {
-            format!("{finished}\n\n{interrupted}")
-        }
     }
 }
 

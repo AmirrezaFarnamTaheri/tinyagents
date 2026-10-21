@@ -1,52 +1,13 @@
 # tinyagents-tasks
 
 Graph-independent detached-task machinery: task model, `TaskStore`
-implementations, the detached task registry, restart reconciliation and the
-orchestration control tools. `tinyagents-graph` and `tinyagents-orchestration`
-both depend on this crate; it does not depend on the graph engine. The old
-`tinyagents_graph::orchestration::*` paths remain as plain re-exports.
-
-This crate is the managed child-work surface. It gives
-language-model orchestrators stable task ids and typed controls — `spawn`,
-`await`, `cancel`, `kill`, `status`, `list`, `timeout`, `race`, `yield`, and
-`steer` — without exposing raw executor handles such as `tokio::JoinHandle`.
-A model asks for work by task id and observes lifecycle status; it never
-touches an in-process future/handle directly, so the same tool surface works
-whether the "child" is an in-process subgraph, a sub-agent, or (in principle)
-out-of-process work fronted by a `TaskStore` implementation.
-
-The controls are ordinary harness tools. Use `OrchestrationTool` directly,
-call `orchestration_tools` to build the full set, or call
-`register_orchestration_tools` to insert them into a
-`harness::tool::ToolRegistry` alongside any other tools.
+implementations, the detached task registry and restart reconciliation.
+`tinyagents-graph` and `tinyagents-orchestration` depend on this crate; it does
+not depend on the graph engine. The task store and runtime registry provide
+hosts with stable task ids without exposing executor handles such as
+`tokio::JoinHandle`.
 
 ## Public surface
-
-### Tools (`tool.rs`)
-
-- `OrchestrationTool` — a single control, constructed with an
-  `OrchestrationToolKind` and a `TaskStore`; `.with_steering(..)` wires it to a
-  `SteeringRegistry` for controls that need to reach a running task (e.g.
-  `steer`, `cancel`).
-- `.with_status_overlay(..)` adds host-owned durable session snapshots and
-  collected completion records to the `list` and `await` JSON payloads. The
-  `OrchestrationStatusOverlay` port keeps storage and session policy outside
-  this crate; tools without an overlay retain their original array responses.
-- `orchestration_tools(store)` — builds the full default set of controls
-  against one store.
-- `orchestration_tools_with_steering(store, steering)` — same, with steering
-  wired.
-- `orchestration_tools_with_status_overlay(store, overlay)` and
-  `register_orchestration_tools_with_status_overlay(..)` — build or register
-  the full set with a host's durable session/completion snapshots.
-- `register_orchestration_tools(registry, store, ..)` — inserts the full set
-  into a `ToolRegistry`.
-- `orchestration_tool_schema(kind)` / `orchestration_tool_schemas()` — the
-  JSON tool schemas, independent of a concrete store (useful for prompting or
-  schema inspection without constructing tools).
-- `SteeringRegistry` — a concurrent map from `TaskId` to `SteeringHandle`
-  (`register` / `deregister` / `get`), letting a `steer`/`cancel` control reach
-  a task that is currently running.
 
 ### Task model (`types.rs`)
 
@@ -67,9 +28,6 @@ call `orchestration_tools` to build the full set, or call
   initial record; `task_id()` / `is_terminal()` accessors.
 - `OrchestrationTaskFilter` — filters for `list` (`with_kind`,
   `created_between`, `matches(&record)`).
-- `OrchestrationToolKind` — the control identifiers (`spawn`, `await`,
-  `cancel`, `kill`, `status`, `list`, `timeout`, `race`, `yield`, `steer`);
-  `name()` / `description()` give the tool-facing strings.
 - `OrchestrationControlOutcome` — the typed result of invoking a control.
 
 ### Storage (`store.rs`)
@@ -111,29 +69,6 @@ call `orchestration_tools` to build the full set, or call
   per-task and aggregate results; `task_status_label(status)` gives the
   stable lowercase label used in logs.
 
-### Restart recovery note (`recovery.rs`)
-
-Reconciliation fixes the store; the *parent agent* still has to be told its
-children died. These pure functions turn a `ReconcileReport` into a note for the
-parent's next turn (wiring it into a host is the host's job):
-
-- `recovery_children(report, reason)` — selects the interrupted children
-  (everything the sweep failed or could not settle; tasks settled as cancelled
-  are user intent and are skipped), ordered by creation time then task id. Each
-  `RecoveryChild` carries `task_id`, `kind`, `label` (the `label` metadata, else
-  the agent/graph/tool name), `last_status`, and `interrupted_reason` (the sweep's persisted reason).
-  Labels and reasons are truncated to `MAX_RECOVERY_LABEL_CHARS` = 256 chars
-  here, in `recovery_children`; the builder does not re-truncate rows a caller
-  constructs by hand.
-- `build_restart_recovery_note(children)` — a capped roster (at most
-  `MAX_RECOVERY_CHILDREN` = 32 rows, then a `+N more` line) as JSON inside
-  a `<child_task_facts>` block (`<` is escaped so labels cannot close it),
-  followed by `RESTART_RECOVERY_INSTRUCTION`: reconcile against saved results,
-  verify uncertain side effects, never blindly re-run. Empty input gives `""`.
-
-Nothing here ever relaunches a task. For the per-tool-call side of recovery see
-`tinyagents_session::run_ledger::classify_recovery`.
-
 ### Durable completion router (`completions/`)
 
 A detached child finishes whenever it finishes; its parent still has to hear
@@ -160,8 +95,7 @@ hand-off and nothing product-specific:
   `mark_failed(ids)` (moves a record to `GaveUp` once `attempts >=
   max_attempts`, default `DEFAULT_MAX_ATTEMPTS` = 5, and returns those records
   for the host's give-up policy), `pending_for(parent)`, `cancel_parent` /
-  `resume_parent` (the flag is a durable marker record, so it survives a restart), `attach_parent` / `detach_parent`, `compact`, and
-  `restart_recovery_note(parent, children)`.
+  `resume_parent` (the flag is a durable marker record, so it survives a restart), `attach_parent` / `detach_parent`, `compact`.
 - `NotifyMode`, set per spawn: `Followup` (default) pushes onto the parent's
   `QueueLane::Followup` when the parent is attached, `Collect` onto
   `QueueLane::Collect`, `HoldForNextTurn` waits for `begin_turn`, `Off` is
@@ -180,10 +114,9 @@ Task ids are the dedupe key and must be unique across parents: recording an id
 already held by another parent returns `RecordOutcome::IdCollision` and stores
 nothing.
 
-After a restart, `pending_for(parent)` returns what was never delivered and
-`restart_recovery_note` folds it into the recovery note beside the interrupted
-children. Nothing relaunches a child. The host keeps: deciding when a parent is
-idle, the delivery turn, its formatter, and what to do with a `GaveUp` record.
+After a restart, `pending_for(parent)` returns completions that were never
+delivered. The host decides when a parent is idle, how to deliver the records,
+and what to do with a `GaveUp` record.
 `tinyagents-orchestration` records into a router from `SubagentDriver` and from
 `spawn_status_watcher_with_completions`; with no router configured its behaviour
 is unchanged.
@@ -229,22 +162,20 @@ README.
 | --- | --- |
 | `lib.rs` | Module declarations and re-exports. |
 | `status.rs` | The `CompletionStatus` <-> `OrchestrationTaskStatus` conversions (tests in `status_tests.rs`); `NoEquivalentStatus` itself is in `types.rs`. |
-| `types.rs` | `NoEquivalentStatus`, task kind/status/spec/result/record/filter types, `OrchestrationToolKind`, `OrchestrationControlOutcome`, and the `DetachedTaskRegistry` snapshot/error types. |
-| `tool.rs` | `OrchestrationTool`, `SteeringRegistry`, tool constructors and schemas. |
+| `types.rs` | `NoEquivalentStatus`, task kind/status/spec/result/record/filter types, `OrchestrationControlOutcome`, and the `DetachedTaskRegistry` snapshot/error types. |
+| `steering_registry.rs` | The process-local `SteeringRegistry` of live handles. |
 | `store.rs` | `TaskStore` trait, `InMemoryTaskStore`, and the shared transition rules. |
 | `store_registry.rs` | `TaskStoreRegistry<K>`, `open_driver_task_store_or_memory`. |
 | `runtime.rs` | `DetachedTaskRegistry<Metadata, Status>` — process-local executor handles keyed by task id. |
 | `reconcile.rs` | `reconcile_orphaned_tasks` and its report types, for settling orphans left by a dead executor. |
-| `recovery.rs` | `recovery_children` / `build_restart_recovery_note`: the parent-facing roster of interrupted children after a reconcile sweep (tests in `recovery_tests.rs`). |
 | `completions/` | `types.rs`, `store.rs`, `driver.rs`, `router.rs`, `format.rs`: the completion router (tests in `router_tests.rs`, `driver_tests.rs`). |
-| `lib_tests.rs` | Unit tests (spawn/await/cancel/timeout/race semantics, store round-trips, filters, reconciliation, detached-task registry). |
+| `lib_tests.rs` | Unit tests for store round-trips, filters, reconciliation, detached-task registry, and store registry. |
 
 ## Operational constraints
 
-- Controls that reach a *running* task (`steer`, `cancel`) require a
-  `SteeringRegistry` populated with that task's `SteeringHandle`; without one,
-  those controls only affect terminal-state bookkeeping in the `TaskStore`,
-  not the in-flight task itself.
+- `DetachedTaskRegistry` shares a `SteeringRegistry` with the executor. The
+  orchestration layer uses live handles for running children and delegates
+  steering of finished children to a host-owned fallback.
 - `TaskStore` is a synchronous trait, so `DriverTaskStore` bridges the async
   driver ports with `tinystoragedrivers_core::Blocking`; build it from a
   multi-thread runtime or outside one. History snapshots grow one per
