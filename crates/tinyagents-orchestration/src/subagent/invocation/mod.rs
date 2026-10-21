@@ -76,6 +76,7 @@
 mod delegation_tool;
 mod jobs;
 mod policy_run;
+mod settlement;
 mod status_map;
 mod types;
 
