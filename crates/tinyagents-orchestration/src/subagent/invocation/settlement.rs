@@ -178,7 +178,7 @@ impl SubAgentJobRegistry {
                 let controls = self.controls();
                 let snapshots = self
                     .tasks
-                    .snapshots(Some(&owner))
+                    .snapshots(Some(owner))
                     .map_err(|error| SubAgentJobError::Registry(error.to_string()))?;
                 let mut reachable_runs = vec![root_run_id.clone()];
                 let mut seen_runs = std::collections::HashSet::new();
