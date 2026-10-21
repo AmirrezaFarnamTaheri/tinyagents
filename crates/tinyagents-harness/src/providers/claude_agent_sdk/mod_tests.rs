@@ -271,6 +271,7 @@ async fn inspection_invocation_uses_supported_cli_flags_and_caps_output_with_fro
     let cap_path = dir.path().join("cap.txt");
     let endpoint_path = dir.path().join("endpoint.txt");
     let home_path = dir.path().join("home.txt");
+    let canonical_home_path = dir.path().join("canonical-home.txt");
     let cwd_path = dir.path().join("cwd.txt");
     let isolated_paths = dir.path().join("isolated-paths.txt");
     let state_path = dir.path().join("state.txt");
@@ -287,6 +288,7 @@ async fn inspection_invocation_uses_supported_cli_flags_and_caps_output_with_fro
          printf '%s' \"${{CLAUDE_CODE_MAX_OUTPUT_TOKENS-}}\" > '{}'\n\
          printf '%s' \"${{ANTHROPIC_BASE_URL-}}\" > '{}'\n\
          printf '%s' \"$HOME\" > '{}'\n\
+         (cd \"$HOME\" && pwd) > '{}'\n\
          pwd > '{}'; printf '%s|' \"$TMPDIR\" \"$XDG_CONFIG_HOME\" \"$XDG_DATA_HOME\" \"$XDG_STATE_HOME\" \"$XDG_CACHE_HOME\" \"$USERPROFILE\" \"$APPDATA\" \"$LOCALAPPDATA\" \"$TEMP\" \"$TMP\" > '{}'\n\
          if [ -e \"$HOME/.claude\" ]; then printf yes > '{}'; else printf no > '{}'; fi\n\
          printf '%s\\n' '{{\"type\":\"result\",\"result\":\"OK\",\"is_error\":false}}'\n",
@@ -296,6 +298,7 @@ async fn inspection_invocation_uses_supported_cli_flags_and_caps_output_with_fro
         cap_path.display(),
         endpoint_path.display(),
         home_path.display(),
+        canonical_home_path.display(),
         cwd_path.display(),
         isolated_paths.display(),
         state_path.display(),
@@ -383,9 +386,11 @@ async fn inspection_invocation_uses_supported_cli_flags_and_caps_output_with_fro
     let cli_home = std::fs::read_to_string(home_path).expect("captured isolated HOME");
     assert!(cli_home.starts_with(std::env::temp_dir().to_str().unwrap()));
     let cli_cwd = std::fs::read_to_string(cwd_path).expect("captured isolated working directory");
+    let canonical_home = std::fs::read_to_string(canonical_home_path)
+        .expect("captured isolated HOME resolved while it existed");
     assert_eq!(
         cli_cwd.trim(),
-        cli_home,
+        canonical_home.trim(),
         "the CLI must not discover repository instructions from the caller's working directory"
     );
     let isolated = std::fs::read_to_string(isolated_paths).expect("captured isolated user paths");
