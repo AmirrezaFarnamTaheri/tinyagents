@@ -155,7 +155,11 @@ output cap that caused the truncation. With no cap, the request is reissued
 unchanged: the failure is stochastic, so a plain retry still helps.
 `RunPolicy::truncated_empty_constant_cap` (default `false`) instead keeps every
 retry at the original cap, including later retries that would normally grow.
-The wall-clock and model-call limits still bound these retries. Each attempt counts as a model call and emits
+The wall-clock and model-call limits still bound these retries.
+When truncated-empty recovery is enabled, blank length-stopped responses are
+neither stored in the response cache nor accepted from existing cache entries,
+so retries at an unchanged cap still reach the provider. Usable answers remain
+cacheable; disabling both truncated-empty retries and nudges retains replay. Each attempt counts as a model call and emits
 `AgentEvent::RetryScheduled`. The retry runs *before*
 `RunPolicy::error_on_empty_response`; only once the retries are exhausted does
 that guard (if enabled) turn the still-blank final into

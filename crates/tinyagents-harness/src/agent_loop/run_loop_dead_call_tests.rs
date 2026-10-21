@@ -142,14 +142,18 @@ async fn constant_cap_retries_reach_the_provider_instead_of_replaying_cached_bla
     });
     let input = vec![Message::user("same question")];
     for run_id in ["recover", "reuse-answer"] {
-        let ctx = RunContext::new(
-            RunConfig::new(run_id).with_max_turn_output_tokens(2048),
-            (),
-        );
-        let run = harness.invoke_in_context(&(), ctx, input.clone()).await.unwrap();
+        let ctx = RunContext::new(RunConfig::new(run_id).with_max_turn_output_tokens(2048), ());
+        let run = harness
+            .invoke_in_context(&(), ctx, input.clone())
+            .await
+            .unwrap();
         assert_eq!(run.text(), Some("recovered".into()));
     }
-    assert_eq!(model.requests().len(), 2, "only the usable answer is cached");
+    assert_eq!(
+        model.requests().len(),
+        2,
+        "only the usable answer is cached"
+    );
 }
 
 #[tokio::test]
@@ -166,15 +170,20 @@ async fn truncated_empty_recovery_bypasses_a_blank_cached_before_retries_were_en
         ..RunPolicy::default()
     });
     for run_id in ["seed-blank", "replay-with-recovery-disabled"] {
-        let ctx = RunContext::new(
-            RunConfig::new(run_id).with_max_turn_output_tokens(2048),
-            (),
-        );
-        seed.invoke_in_context(&(), ctx, input.clone()).await.unwrap();
+        let ctx = RunContext::new(RunConfig::new(run_id).with_max_turn_output_tokens(2048), ());
+        seed.invoke_in_context(&(), ctx, input.clone())
+            .await
+            .unwrap();
     }
-    assert_eq!(seed_model.requests().len(), 1, "disabled recovery retains exact replay");
+    assert_eq!(
+        seed_model.requests().len(),
+        1,
+        "disabled recovery retains exact replay"
+    );
 
-    let model = Arc::new(ScriptedModel::new(vec![crate::testkit::text_response("fresh answer")]));
+    let model = Arc::new(ScriptedModel::new(vec![crate::testkit::text_response(
+        "fresh answer",
+    )]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("mock", model.clone());
     harness.with_response_cache(cache);
@@ -184,8 +193,15 @@ async fn truncated_empty_recovery_bypasses_a_blank_cached_before_retries_were_en
         truncated_empty_nudges: 0,
         ..RunPolicy::default()
     });
-    let ctx = RunContext::new(RunConfig::new("recover-cached-blank").with_max_turn_output_tokens(2048), ());
+    let ctx = RunContext::new(
+        RunConfig::new("recover-cached-blank").with_max_turn_output_tokens(2048),
+        (),
+    );
     let run = harness.invoke_in_context(&(), ctx, input).await.unwrap();
     assert_eq!(run.text(), Some("fresh answer".into()));
-    assert_eq!(model.requests().len(), 1, "the prior blank cache hit is bypassed");
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "the prior blank cache hit is bypassed"
+    );
 }
