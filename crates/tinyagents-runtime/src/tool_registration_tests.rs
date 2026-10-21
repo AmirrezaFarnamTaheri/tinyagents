@@ -175,9 +175,11 @@ fn bounded_subagent_spawn_requires_depth_room_and_exact_allowlisting() {
 #[test]
 fn nested_spawn_depth_rejects_invalid_or_overflowing_depths() {
     assert!(NestedSpawnDepth::try_new(4, 3).is_none());
-    assert!(!NestedSpawnDepth::try_new(usize::MAX, usize::MAX)
-        .unwrap()
-        .allows_child());
+    assert!(
+        !NestedSpawnDepth::try_new(usize::MAX, usize::MAX)
+            .unwrap()
+            .allows_child()
+    );
 }
 
 #[test]
