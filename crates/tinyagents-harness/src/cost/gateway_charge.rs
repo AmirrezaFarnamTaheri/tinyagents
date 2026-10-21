@@ -27,6 +27,22 @@ fn rounded_micros(micros: Option<f64>) -> Option<ChargedAmount> {
         .map(|amount| ChargedAmount::usd_micros(amount.ceil() as i64))
 }
 
+/// Returns a provider USD cost only when it can be represented by the budget ledger.
+pub(crate) fn provider_cost_usd(raw: &serde_json::Value) -> Option<f64> {
+    let amount = raw.pointer("/usage/cost")?.as_f64()?;
+    rounded_micros(Some(amount * 1_000_000.0)).map(|_| amount)
+}
+
+/// Whether raw metadata declares a billing source that outranks provider cost.
+///
+/// Presence is authoritative even when the value is malformed: in that case
+/// charge normalization deliberately leaves the measured charge unknown.
+pub(crate) fn has_authoritative_billing_source(raw: &serde_json::Value) -> bool {
+    raw.pointer("/openhuman_usage_meta/charged_amount_usd")
+        .is_some()
+        || raw.pointer("/usage/buyer_cost_micro").is_some()
+}
+
 fn normalize_charge(response: &mut ModelResponse) {
     let Some(usage) = response.usage.as_mut() else {
         // Missing usage must retain conservative token and charge reservations.
@@ -60,10 +76,12 @@ fn normalize_charge(response: &mut ModelResponse) {
                 rounded_micros(buyer.as_f64())
             };
             ("gateway_buyer", charge)
-        } else if let Some(cost) = raw.pointer("/usage/cost") {
+        } else if raw.pointer("/usage/cost").is_some() {
             (
                 "provider_cost",
-                rounded_micros(cost.as_f64().map(|amount| amount * 1_000_000.0)),
+                provider_cost_usd(raw)
+                    .map(|amount| amount * 1_000_000.0)
+                    .and_then(|micros| rounded_micros(Some(micros))),
             )
         } else {
             tracing::trace!(
@@ -99,6 +117,14 @@ impl ChatModel<()> for GatewayChargeModel {
 
     fn cache_identity(&self) -> Option<String> {
         self.inner.cache_identity()
+    }
+
+    fn tracks_physical_attempts(&self) -> bool {
+        self.inner.tracks_physical_attempts()
+    }
+
+    fn has_pre_invocation_admission_gate(&self) -> bool {
+        self.inner.has_pre_invocation_admission_gate()
     }
 
     async fn invoke(

@@ -113,6 +113,10 @@ pub enum TinyAgentsError {
     #[error("model error: {0}")]
     Provider(Box<tinyinference_llm::model::ProviderError>),
 
+    /// The host's physical-dispatch policy refused a model call.
+    #[error("physical dispatch refused: {0}")]
+    PhysicalDispatchAdmission(#[source] crate::cost::DispatchRefusal),
+
     /// The request did not fit in the model's context window.
     ///
     /// Distinguished from the generic [`TinyAgentsError::Provider`] because the
@@ -357,7 +361,10 @@ pub enum TinyAgentsError {
 impl TinyAgentsError {
     /// Whether this is a terminal configured or provider budget limit.
     pub fn is_terminal_limit(&self) -> bool {
-        matches!(self, Self::LimitExceeded(_))
+        matches!(
+            self,
+            Self::LimitExceeded(_) | Self::PhysicalDispatchAdmission(_)
+        )
     }
 }
 
