@@ -34,7 +34,6 @@ pub mod orchestration;
 pub mod parallel;
 pub mod recursion;
 pub mod reducer;
-pub mod state_block;
 pub mod status;
 pub mod storage;
 pub mod stream;
@@ -103,7 +102,6 @@ pub use reducer::{
     AppendReducer, ClosureReducer, ClosureStateReducer, MaxReducer, MinReducer, OverwriteReducer,
     OverwriteStateReducer, Reducer, SetUnionReducer, StateReducer,
 };
-pub use state_block::{STATE_BLOCK_HEADER, StateBlockMiddleware};
 pub use status::GraphRunStatus;
 pub use storage::{import_legacy_leases, import_legacy_task_cache, storage_schema};
 pub use stream::{
