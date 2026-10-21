@@ -6,6 +6,84 @@ use crate::subagent::{SubagentOutcome, SubagentOutcomeKind, SubagentPause, Subag
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::TaskId;
 
+/// Test fixture builder: all fixture jobs enter through the same driver
+/// registration path used by `DriverSubAgentTool`.
+#[derive(Default)]
+struct JobLink {
+    parent_thread_id: Option<String>,
+    workspace: Option<tinytools::WorkspaceDescriptor>,
+}
+
+trait RegistryTestHelpers {
+    fn create(&self, agent: &str, owner: impl ToString) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle);
+    fn create_with_cancellation(
+        &self,
+        agent: &str,
+        owner: impl ToString,
+        cancellation: tinyagents_harness::cancel::CancellationToken,
+        link: JobLink,
+    ) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle);
+    fn mark_result(&self, id: &SubAgentJobId, result: Result<(), TinyAgentsError>);
+    fn mark_budget_overrun(&self, id: &SubAgentJobId);
+}
+
+impl RegistryTestHelpers for SubAgentJobRegistry {
+    fn create(&self, agent: &str, owner: impl ToString) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle) {
+        self.create_with_cancellation(
+            agent,
+            owner,
+            tinyagents_harness::cancel::CancellationToken::new(),
+            JobLink::default(),
+        )
+    }
+
+    fn create_with_cancellation(
+        &self,
+        agent: &str,
+        owner: impl ToString,
+        cancellation: tinyagents_harness::cancel::CancellationToken,
+        link: JobLink,
+    ) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle) {
+        use tinyagents_harness::ids::next_seq;
+        let task = format!("registry-fixture-{}", next_seq());
+        let key = crate::subagent::SubagentTaskKey {
+            root_run_id: "fixture-root".into(),
+            parent_run_id: "fixture-parent".into(),
+            thread_id: link.parent_thread_id,
+            task_id: task,
+        };
+        let (id, steering, _, _, created) = self.register_driver_job(DriverJobRegistration {
+            key,
+            agent: agent.to_owned(),
+            owner: owner.to_string(),
+            workspace: link.workspace,
+            cancellation,
+            steering: None,
+            run_queue: None,
+            continuing: false,
+        }).expect("driver fixture registration");
+        assert!(created);
+        (id, steering)
+    }
+
+    fn mark_result(&self, id: &SubAgentJobId, result: Result<(), TinyAgentsError>) {
+        let owner = self.controls.lock().unwrap().get(id).unwrap().owner.clone();
+        if matches!(result, Err(TinyAgentsError::Cancelled)) {
+            let _ = self.cancel_owned(id.as_str(), owner);
+            self.mark_driver_result(id, Err(TinyAgentsError::Cancelled.to_string()));
+        } else {
+            self.mark_driver_result(id, result.map_err(|error| error.to_string()));
+        }
+    }
+
+    fn mark_budget_overrun(&self, id: &SubAgentJobId) {
+        let mut outcome = SubagentOutcome::completed(id.as_str(), "late");
+        outcome.status = SubagentOutcomeKind::Incomplete(crate::subagent::SubagentIncomplete::new("over budget")
+            .with_kind(crate::subagent::IncompleteKind::BudgetExceeded));
+        self.mark_driver_result(id, Ok(outcome));
+    }
+}
+
 fn register_driver_job(
     jobs: &SubAgentJobRegistry,
     task_id: impl Into<String>,
