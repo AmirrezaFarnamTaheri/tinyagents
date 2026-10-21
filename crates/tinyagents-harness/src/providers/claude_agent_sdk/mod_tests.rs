@@ -276,9 +276,9 @@ async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_froz
     let staging = dir.path().join("claude-inspection.staging");
     let source = format!(
         "#!/bin/sh\n\
-         case " $* " in *" --no-color "*) echo 'unsupported --no-color' >&2; exit 64;; esac\n\
-         case " $* " in *" --output-format stream-json "*)\n\
-           case " $* " in *" --verbose "*) ;; *) echo 'stream-json requires --verbose' >&2; exit 65;; esac;;\n\
+         case \" $* \" in *\" --no-color \"*) echo 'unsupported --no-color' >&2; exit 64;; esac\n\
+         case \" $* \" in *\" --output-format stream-json \"*)\n\
+           case \" $* \" in *\" --verbose \"*) ;; *) echo 'stream-json requires --verbose' >&2; exit 65;; esac;;\n\
          esac\n\
          printf '%s\\n' \"$@\" > '{}'\n\
          cat > '{}'\n\
