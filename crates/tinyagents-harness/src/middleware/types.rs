@@ -354,6 +354,7 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
         _state: &State,
         _invocation: &ToolInvocationIdentity,
         _result: &ToolResult,
+        _model_output: &str,
     ) -> Result<()> {
         Ok(())
     }

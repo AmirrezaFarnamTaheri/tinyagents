@@ -37,9 +37,11 @@ pub(super) fn call_record(call: &ToolCall) -> CallRecord {
         .into_iter()
         .map(|path| one_line(path, MAX_SUMMARY_CHARS))
         .collect();
-    for path in patch_paths(&call.arguments) {
-        if !written_paths.contains(&path) {
-            written_paths.push(path);
+    if matches!(call.name.as_str(), "apply_patch" | "patch") {
+        for path in patch_paths(&call.arguments) {
+            if !written_paths.contains(&path) {
+                written_paths.push(path);
+            }
         }
     }
     let summary = match &command {

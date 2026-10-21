@@ -6,7 +6,7 @@
 //! paused one when the user's message continues it (`goal_resume`). Pause and
 //! clear are host-driven controls — constructible as tools for a host that
 //! wants to expose them, but not part of the default model-facing set returned
-//! by [`goal_tools`]. Resume is model-facing for the same reason: only the
+//! by [`GoalToolKind::MODEL_FACING`]. Resume is model-facing for the same reason: only the
 //! model reads the new message against the paused objective, so a host that
 //! resumes on every turn would revive the goal for unrelated messages too.
 //!

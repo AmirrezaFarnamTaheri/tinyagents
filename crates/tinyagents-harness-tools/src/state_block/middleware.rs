@@ -18,7 +18,7 @@ use crate::goals::{ThreadGoal, store as goal_store};
 use crate::todos::{TodoItem, TodoStatus, store as todo_store};
 
 use super::ledger;
-use super::render::render;
+use super::render::{STATE_BLOCK_HEADER, render};
 use super::types::{CallRecord, RunLedger, StateBlockMiddleware};
 
 /// The `todo` tool's name: its own result already shows the plan.
@@ -95,7 +95,7 @@ impl StateBlockMiddleware {
 
 /// Takes the block out of whichever message carries it, dropping a message that
 /// held nothing else (a tail system message or trailing user turn of its own).
-fn remove_block(request: &mut ModelRequest, block: &str) {
+fn remove_block(request: &mut ModelRequest) {
     request.messages.retain_mut(|message| {
         let content = match message {
             Message::System(system) => &mut system.content,
@@ -104,7 +104,9 @@ fn remove_block(request: &mut ModelRequest, block: &str) {
             _ => return true,
         };
         let before = content.len();
-        content.retain(|part| !matches!(part, ContentBlock::Text(text) if text.contains(block)));
+        content.retain(
+            |part| !matches!(part, ContentBlock::Text(text) if text.contains(STATE_BLOCK_HEADER)),
+        );
         !(content.len() != before && content.is_empty())
     });
 }
@@ -183,7 +185,7 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
         }) {
             return Ok(());
         }
-        remove_block(request, &block);
+        remove_block(request);
         push_ephemeral_instruction(request, block, ctx.model_profile.as_ref());
         Ok(())
     }
@@ -231,11 +233,11 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
         _state: &S,
         invocation: &ToolInvocationIdentity,
         result: &ToolResult,
+        model_output: &str,
     ) -> Result<()> {
         if invocation.tool_name() == TODO_TOOL_NAME {
             return Ok(());
         }
-        let output = result.output();
         let is_error = result.is_error;
         self.with_run(ctx.instance_id(), |ledger| {
             // A call refused before `before_tool` reached this middleware has
@@ -249,7 +251,7 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
                     command: None,
                     written_paths: Vec::new(),
                 });
-            ledger::record_result(ledger, record, is_error, &output);
+            ledger::record_result(ledger, record, is_error, model_output);
         });
         Ok(())
     }

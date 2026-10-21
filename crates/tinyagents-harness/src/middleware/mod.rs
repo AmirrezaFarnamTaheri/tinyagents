@@ -544,9 +544,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         state: &State,
         invocation: &ToolInvocationIdentity,
         result: &ToolResult,
+        model_output: &str,
     ) -> Result<()> {
         for mw in self.middlewares.iter() {
-            mw.after_tool_output_screened(ctx, state, invocation, result)
+            mw.after_tool_output_screened(ctx, state, invocation, result, model_output)
                 .await?;
         }
         Ok(())

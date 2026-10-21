@@ -58,7 +58,7 @@ async fn round(
     Middleware::<(), ()>::after_tool(mw, ctx, &(), &invocation, &mut result)
         .await
         .unwrap();
-    Middleware::<(), ()>::after_tool_output_screened(mw, ctx, &(), &invocation, &result)
+    Middleware::<(), ()>::after_tool_output_screened(mw, ctx, &(), &invocation, &result, &result.output())
         .await
         .unwrap();
 }
@@ -206,13 +206,58 @@ async fn only_security_screened_tool_output_enters_the_ledger() {
         .await
         .unwrap();
     let screened = ToolResult::error("redacted output");
-    Middleware::<(), ()>::after_tool_output_screened(&mw, &mut ctx, &(), &invocation, &screened)
+    Middleware::<(), ()>::after_tool_output_screened(
+        &mw,
+        &mut ctx,
+        &(),
+        &invocation,
+        &screened,
+        "redacted output",
+    )
         .await
         .unwrap();
 
     let rendered = block(&mw, &mut ctx).await.unwrap();
     assert!(rendered.contains("redacted output"), "{rendered}");
     assert!(!rendered.contains("secret-token-from-stderr"), "{rendered}");
+}
+
+#[tokio::test]
+async fn truncated_state_block_is_removed_before_restoring_full_copy() {
+    let mw = StateBlockMiddleware::new(Arc::new(InMemoryStore::default()));
+    let mut ctx = ctx();
+    round(
+        &mw,
+        &mut ctx,
+        "file_write",
+        serde_json::json!({"path": "/a"}),
+        false,
+        "ok",
+    )
+    .await;
+    let mut request = request();
+    Middleware::<(), ()>::before_model_dispatch(&mw, &mut ctx, &(), &mut request)
+        .await
+        .unwrap();
+    let Message::System(system) = request.messages.last_mut().unwrap() else {
+        panic!("state block is a system instruction in the default profile");
+    };
+    system.content[0] = ContentBlock::Text(
+        "[run state] truncated old state that no longer contains its original tail".into(),
+    );
+
+    Middleware::<(), ()>::after_model_rewrite(&mw, &mut ctx, &(), &mut request)
+        .await
+        .unwrap();
+
+    let blocks = request
+        .messages
+        .iter()
+        .filter(|message| message.text().contains(STATE_BLOCK_HEADER))
+        .count();
+    assert_eq!(blocks, 1);
+    assert!(request.messages.last().unwrap().text().contains("Files written this run: /a"));
+    assert!(!request.messages.iter().any(|message| message.text().contains("truncated old state")));
 }
 
 #[tokio::test]

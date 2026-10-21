@@ -1537,6 +1537,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     prepared.tool_name.clone(),
                 ),
                 &result,
+                &result.output_for_llm(prepared.options.prefer_markdown),
             )
             .await
         {

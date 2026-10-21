@@ -173,6 +173,7 @@ impl Middleware<()> for RejectScreenedOutput {
         _state: &(),
         _invocation: &ToolInvocationIdentity,
         _result: &ToolResult,
+        _model_output: &str,
     ) -> crate::error::Result<()> {
         Err(crate::error::TinyAgentsError::Middleware(
             "screening failed".to_string(),

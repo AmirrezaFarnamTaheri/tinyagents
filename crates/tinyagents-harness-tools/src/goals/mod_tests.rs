@@ -61,7 +61,10 @@ fn context_block_present_only_for_active_and_budget_limited() {
     let block = active_goal_context_block(&limited).expect("budget-limited has a stop block");
     assert!(block.contains("budget"));
 
-    assert!(active_goal_context_block(&goal(ThreadGoalStatus::Paused, None, 0)).is_none());
+    let paused = active_goal_context_block(&goal(ThreadGoalStatus::Paused, None, 0))
+        .expect("paused goals explain the resume decision");
+    assert!(paused.contains("call `goal_resume`"));
+    assert!(paused.contains("leave the goal paused"));
     assert!(active_goal_context_block(&goal(ThreadGoalStatus::Complete, None, 0)).is_none());
 }
 
