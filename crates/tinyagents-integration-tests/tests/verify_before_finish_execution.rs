@@ -507,5 +507,5 @@ async fn cancellation_after_executor_entry_retains_the_started_attempt() {
     assert_eq!(observations[0].target, "patch");
 }
 
-#[path = "verify_before_finish_execution_boundary.rs"]
+#[path = "common/verify_before_finish_execution_boundary.rs"]
 mod boundary_tests;
