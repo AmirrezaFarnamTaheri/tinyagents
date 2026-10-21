@@ -140,15 +140,22 @@ pub(super) fn age_out(ledger: &mut RunLedger) {
 
 /// Paths named in apply_patch envelopes or unified-diff headers.
 fn patch_paths(arguments: &Value) -> Vec<String> {
-    let Value::Object(map) = arguments else { return Vec::new() };
+    let Value::Object(map) = arguments else {
+        return Vec::new();
+    };
     let mut paths = Vec::new();
     for value in map.values().filter_map(Value::as_str) {
         for line in value.lines() {
-            let path = ["*** Update File:", "*** Add File:", "*** Delete File:", "+++ b/"]
-                .iter()
-                .find_map(|prefix| line.strip_prefix(prefix))
-                .map(str::trim)
-                .filter(|path| !path.is_empty() && *path != "/dev/null");
+            let path = [
+                "*** Update File:",
+                "*** Add File:",
+                "*** Delete File:",
+                "+++ b/",
+            ]
+            .iter()
+            .find_map(|prefix| line.strip_prefix(prefix))
+            .map(str::trim)
+            .filter(|path| !path.is_empty() && *path != "/dev/null");
             if let Some(path) = path {
                 let path = one_line(path, MAX_SUMMARY_CHARS);
                 if !paths.contains(&path) {
