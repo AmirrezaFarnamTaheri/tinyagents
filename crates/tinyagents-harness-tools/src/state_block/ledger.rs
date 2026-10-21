@@ -238,27 +238,25 @@ pub(super) fn missing_executables(output: &str) -> Vec<String> {
 /// Whether `command` invokes `name` in executable position or checks it with
 /// `which`/`type`, rather than merely mentioning it as an argument.
 fn runs_executable(command: &str, name: &str) -> bool {
-    command
-        .split(['\n', ';', '&', '|', '(', ')'])
-        .any(|part| {
-            let words: Vec<_> = part.split_whitespace().collect();
-            let Some(first) = words.first().map(|word| executable_name(word)) else {
-                return false;
-            };
-            if first == name {
-                return true;
-            }
-            if matches!(first.as_str(), "env" | "command") {
-                return words
-                    .get(1)
-                    .is_some_and(|word| executable_name(word) == name);
-            }
-            matches!(first.as_str(), "which" | "type")
-                && words
-                    .iter()
-                    .skip(1)
-                    .any(|word| executable_name(word) == name)
-        })
+    command.split(['\n', ';', '&', '|', '(', ')']).any(|part| {
+        let words: Vec<_> = part.split_whitespace().collect();
+        let Some(first) = words.first().map(|word| executable_name(word)) else {
+            return false;
+        };
+        if first == name {
+            return true;
+        }
+        if matches!(first.as_str(), "env" | "command") {
+            return words
+                .get(1)
+                .is_some_and(|word| executable_name(word) == name);
+        }
+        matches!(first.as_str(), "which" | "type")
+            && words
+                .iter()
+                .skip(1)
+                .any(|word| executable_name(word) == name)
+    })
 }
 
 fn exit_code(output: &str) -> Option<i64> {
