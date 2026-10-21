@@ -209,6 +209,174 @@ async fn root_settlement_uses_one_deadline_and_propagates_cancellation() {
 }
 
 #[tokio::test]
+async fn root_settlement_returns_empty_for_unlinked_jobs_and_empty_roots() {
+    use tinyagents_harness::cancel::CancellationToken;
+    use tinyagents_harness::ids::RunId;
+
+    let jobs = SubAgentJobRegistry::new();
+    let (legacy, _, _, _, _) = jobs
+        .register_driver_job(DriverJobRegistration {
+            key: crate::subagent::SubagentTaskKey {
+                root_run_id: "root".into(),
+                parent_run_id: "legacy-parent".into(),
+                thread_id: None,
+                task_id: "legacy-unlinked".into(),
+            },
+            agent: "worker".into(),
+            owner: "owner".into(),
+            workspace: None,
+            cancellation: CancellationToken::new(),
+            steering: None,
+            run_queue: None,
+            continuing: false,
+        })
+        .unwrap();
+    jobs.mark_driver_result(&legacy, Err("legacy terminal".into()));
+    assert!(jobs
+        .settle_root_run_descendants(
+            &RunId::new("root"),
+            "owner",
+            tokio::time::Instant::now(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(jobs
+        .settle_root_run_descendants(
+            &RunId::new("empty-root"),
+            "owner",
+            tokio::time::Instant::now(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn root_settlement_keeps_one_deadline_across_lifecycle_wakes() {
+    use tinyagents_harness::cancel::CancellationToken;
+    use tinyagents_harness::ids::RunId;
+
+    let jobs = SubAgentJobRegistry::new();
+    let (child, _, _, _, _) = jobs
+        .register_driver_job_with_parent_run(
+            DriverJobRegistration {
+                key: crate::subagent::SubagentTaskKey {
+                    root_run_id: "root".into(),
+                    parent_run_id: "ignored".into(),
+                    thread_id: None,
+                    task_id: "deadline-child".into(),
+                },
+                agent: "worker".into(),
+                owner: "owner".into(),
+                workspace: None,
+                cancellation: CancellationToken::new(),
+                steering: None,
+                run_queue: None,
+                continuing: false,
+            },
+            RunId::new("root"),
+        )
+        .unwrap();
+    jobs.set_attempt_run_id(&child, "deadline-child-attempt");
+    jobs.mark_running(&child);
+    let cancellation = CancellationToken::new();
+    let settle = {
+        let jobs = jobs.clone();
+        let cancellation = cancellation.clone();
+        tokio::spawn(async move {
+            jobs.settle_root_run_descendants(
+                &RunId::new("root"),
+                "owner",
+                tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+                &cancellation,
+            )
+            .await
+        })
+    };
+    loop {
+        if jobs.controls()[&child]
+            .waiters
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+        {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(std::time::Duration::from_secs(4)).await;
+    jobs.set_attempt_run_id(&child, "deadline-child-another-observed-attempt");
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    assert_eq!(settle.await.unwrap(), Err(SubAgentJobError::SettlementTimedOut));
+}
+
+#[tokio::test]
+async fn root_settlement_cancellation_while_blocked_releases_waiter_pins() {
+    use tinyagents_harness::cancel::CancellationToken;
+    use tinyagents_harness::ids::RunId;
+
+    let jobs = SubAgentJobRegistry::new();
+    let (child, _, _, _, _) = jobs
+        .register_driver_job_with_parent_run(
+            DriverJobRegistration {
+                key: crate::subagent::SubagentTaskKey {
+                    root_run_id: "root".into(),
+                    parent_run_id: "ignored".into(),
+                    thread_id: None,
+                    task_id: "cancel-child".into(),
+                },
+                agent: "worker".into(),
+                owner: "owner".into(),
+                workspace: None,
+                cancellation: CancellationToken::new(),
+                steering: None,
+                run_queue: None,
+                continuing: false,
+            },
+            RunId::new("root"),
+        )
+        .unwrap();
+    jobs.set_attempt_run_id(&child, "cancel-child-attempt");
+    jobs.mark_running(&child);
+    let cancellation = CancellationToken::new();
+    let settle = {
+        let jobs = jobs.clone();
+        let cancellation = cancellation.clone();
+        tokio::spawn(async move {
+            jobs.settle_root_run_descendants(
+                &RunId::new("root"),
+                "owner",
+                tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+                &cancellation,
+            )
+            .await
+        })
+    };
+    loop {
+        if jobs.controls()[&child]
+            .waiters
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+        {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    cancellation.cancel();
+    assert_eq!(settle.await.unwrap(), Err(SubAgentJobError::SettlementCancelled));
+    assert_eq!(
+        jobs.controls()[&child]
+            .waiters
+            .load(std::sync::atomic::Ordering::Acquire),
+        0
+    );
+    assert_eq!(jobs.get(child.as_str()).unwrap().status, SubAgentJobStatus::Running);
+}
+
+#[tokio::test]
 async fn root_settlement_pins_terminal_ancestors_while_descendants_remain_live() {
     use tinyagents_harness::cancel::CancellationToken;
     use tinyagents_harness::ids::RunId;
