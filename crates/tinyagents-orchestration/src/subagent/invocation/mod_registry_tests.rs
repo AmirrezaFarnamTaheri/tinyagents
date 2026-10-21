@@ -426,8 +426,9 @@ async fn resumed_job_keeps_old_attempt_edges_without_importing_new_root_siblings
     );
 
     let new_root_jobs = settle("new-root").await;
-    assert_eq!(new_root_jobs.len(), 3);
+    assert_eq!(new_root_jobs.len(), 4);
     assert!(new_root_jobs.iter().any(|entry| entry.id == job));
+    assert!(new_root_jobs.iter().any(|entry| entry.id == old_grandchild));
     assert!(new_root_jobs.iter().any(|entry| entry.id == new_grandchild));
     assert!(
         new_root_jobs
