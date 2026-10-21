@@ -4,11 +4,11 @@
 job and message tool shells live in `tinyagents_harness_tools::subagents`.
 It contains two complementary surfaces.
 
-The invocation surface provides `SubAgent`, `SubAgentTool`,
-`SubAgentJobRegistry`, `SubAgentSession`, and `ChildDataPolicy`. It wraps an
+The async invocation surface provides `SubagentDriver` and
+`SubAgentJobRegistry`. It wraps a
 `AgentHarness` as a child run, enforces recursion depth, and inherits live
 parent cancellation, events, and host authority. Model-facing delegation is
-background by default: `SubAgentTool` returns a job id immediately while the
+background by default: `DriverSubAgentTool` returns a job id immediately while the
 child continues in the background. Callers can request `mode: "inline"` to
 wait for the child and receive its final result in the same tool call. A host
 constructs `tinyagents_harness_tools::subagents::SubAgentJobsTool` and
@@ -153,7 +153,7 @@ Enforcement uses *reservation* semantics: `try_reserve` checks every limit and
 claims the slot under one lock, returning a `SpawnReservation` guard, so
 concurrent spawns cannot race past a cap. Dropping the guard releases the live
 slot; dropping it without `commit()` (the spawn failed before the child
-launched) also refunds the total budget. `SubAgentTool` (background and inline)
+launched) also refunds the total budget. `DriverSubAgentTool`
 reserves before creating the child and moves the guard into the child's task
 for its whole lifetime (a panic, abort, or dropped inline call still releases
 it); `SubagentDriver::run` reserves after the cancellation and resume checks and
@@ -161,19 +161,18 @@ before the planner runs, and commits just before the executor launches.
 Coalesced followers and cached terminal results never reserve; a resumed
 lifecycle takes a live slot but no new total budget.
 
-An over-limit `SubAgentTool` call returns a tool error worded as a limit signal
+An over-limit `DriverSubAgentTool` call returns a tool error worded as a limit signal
 ("...treat this as a delegated-agent limit signal, not a completed answer"),
 like the depth-limit error; the driver returns `SubagentError::SpawnRejected`.
 Because the neutral `SubagentRequest` carries no agent identity, a driver host
 that configures `allowed_targets` must name each request with
 `SubagentRequest::with_target`; an unnamed request is refused (fail closed).
 
-**Bypass.** Only `SubAgentTool` and `SubagentDriver` enforce admission. Calling
-`SubAgent::invoke_in_parent` / `invoke_hosted_in_parent` (or `SubAgentSession`)
+**Bypass.** Admission is enforced through `SubagentDriver`.
 directly bypasses it; a host exposing those paths must reserve itself.
 
 Every limit defaults to `None` (unlimited), so nothing changes until a host opts
-in with `SubAgentTool::with_spawn_admission` /
+in with `DriverSubAgentTool::with_spawn_admission` /
 `SubagentDriver::with_spawn_admission`. Recommended guard-rail starting point:
 `max_children_per_parent: Some(5)` (OpenClaw's default) and a
 `max_total_per_root` of a few dozen.
@@ -223,13 +222,13 @@ orchestration depends on graph).
 
 - **Timeout.** `SubagentDriver` runs the executor under its own child token; on
   elapse the child is cancelled (the caller's token is not) and the outcome is
-  `Incomplete(kind: Timeout)`. `SubAgentTool` cancels the job token and marks
+  `Incomplete(kind: Timeout)`. `DriverSubAgentTool` cancels the job token and marks
   the job `Incomplete` (`incomplete_kind: "timeout"`). A timeout is never retried.
 - **Retry.** Only a failure the `RetryPolicy` deems retryable, and never after
   the attempt ran tools unless `retry_after_tool_calls`. The driver retries
   `SubagentError::Transient { tools_ran, .. }` (adapters classify; anything else
   is never retried) and needs `PreparedSubagent::retry_context`, a factory for a
-  fresh run context per attempt; without it one attempt runs. `SubAgentTool`
+  fresh run context per attempt; without it one attempt runs. `DriverSubAgentTool`
   pre-mints one child per attempt and watches `ToolStarted` events to learn
   whether tools ran. A host-visible side effect of retry: the job's recorded
   `subagent_run_id` is the first attempt's.
@@ -263,14 +262,14 @@ orchestration depends on graph).
   `restrict_tools` drops `subagent_jobs`, `subagent_message` and the host's
   `delegation_tools` for a leaf and intersects with `tool_ceiling` so a child
   never widens what it inherited; the driver applies it to
-  `PreparedSubagent::tools`. `SubAgentTool` cannot filter a shared harness, so a
+  `PreparedSubagent::tools`. The host driver cannot filter a shared harness, so a
   leaf tool refuses to spawn when the child harness exposes a delegation tool.
   `subagent_framing(role, depth, task)` is an optional neutral preamble hosts
   may prepend; nothing applies it by default.
 
 **Retry notes.** Subagent retry compounds with the harness's per-call model
 retry (each attempt may retry model calls first), so keep one of the two low.
-`SubAgentTool` attempts after the first get run ids `{first}-a{n}` (no extra
+Driver attempts after the first get run ids `{first}-a{n}` (no extra
 child ordinals are consumed, so sibling ids do not depend on retry) and the job's
 `subagent_run_id` follows the attempt that is running. The retry predicate
 (`RetryPolicy::retry_on`) sees the real error on the tool path; the driver only
