@@ -2572,7 +2572,7 @@ fn inline_blocking_alias(
 }
 
 #[tokio::test(start_paused = true)]
-async fn concurrent_inline_driver_alias_coalesces_and_awaits_shared_result() {
+async fn concurrent_async_driver_aliases_coalesce_without_waiting_for_completion() {
     let jobs = SubAgentJobRegistry::new();
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Semaphore::new(0));
@@ -2592,34 +2592,26 @@ async fn concurrent_inline_driver_alias_coalesces_and_awaits_shared_result() {
             &parent,
         )
     };
-    let mut leader = Box::pin(dispatch("inline-leader"));
-    tokio::select! {
-        biased;
-        result = &mut leader => panic!("leader completed before being released: {result:?}"),
-        _ = started.notified() => {},
-    }
-    let mut follower = Box::pin(dispatch("inline-follower"));
-    tokio::select! {
-        biased;
-        result = &mut follower => panic!("coalesced inline call returned before the shared result: {result:?}"),
-        _ = tokio::task::yield_now() => {},
-    }
+    let leader = dispatch("async-leader").await.unwrap();
+    let leader_value: Value = serde_json::from_str(&leader.output()).unwrap();
+    assert_eq!(leader_value["status"], "running");
+    started.notified().await;
+    let follower = dispatch("async-follower").await.unwrap();
+    let follower_value: Value = serde_json::from_str(&follower.output()).unwrap();
+    assert_eq!(follower_value["status"], "running");
+    assert_eq!(follower_value["task_id"], leader_value["task_id"]);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     release.add_permits(1);
-    let leader = leader.await.unwrap();
-    let follower = follower.await.unwrap();
-    for result in [leader, follower] {
-        assert!(!result.is_error);
-        assert_eq!(
-            serde_json::from_str::<Value>(&result.output()).unwrap()["status"],
-            "completed"
-        );
-    }
+    let settled = jobs
+        .wait_owned(leader_value["task_id"].as_str().unwrap(), &parent.instance_id().to_string())
+        .await
+        .unwrap();
+    assert_eq!(settled.status, SubAgentJobStatus::Completed);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
-async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_completion() {
+async fn immediate_async_replay_returns_job_snapshot_and_emits_one_completion() {
     let jobs = SubAgentJobRegistry::new();
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Semaphore::new(0));
@@ -2632,7 +2624,7 @@ async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_compl
         "required":["prompt"],
         "properties":{"prompt":{"type":"string"}}
     });
-    let make_tool = |background: bool| {
+    let make_tool = || {
         let request = |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("mixed-child"), ())
@@ -2647,16 +2639,8 @@ async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_compl
             )
             .map(|request| request.with_target("worker"))
         };
-        let name = if background {
-            "spawn_async_subagent"
-        } else {
-            "spawn_subagent"
-        };
-        let delivery = if background {
-            Some("parent-thread".to_owned())
-        } else {
-            None
-        };
+        let name = "spawn_subagent";
+        let delivery = Some("parent-thread".to_owned());
         let tool = DriverSubAgentTool::new(
             name,
             "worker description",
@@ -2666,27 +2650,22 @@ async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_compl
         )
         .with_parameters(schema.clone())
         .with_job_registry(jobs.clone());
-        if background {
-            let completions = completions.clone();
-            let completion_notified = completion_notified.clone();
-            tool.with_completion_handler(move |_, result| {
-                assert!(result.is_ok());
-                completions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                completion_notified.notify_one();
-            })
-        } else {
-            tool
-        }
+        let completions = completions.clone();
+        let completion_notified = completion_notified.clone();
+        tool.with_completion_handler(move |_, result| {
+            assert!(result.is_ok());
+            completions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            completion_notified.notify_one();
+        })
     };
-    let background = make_tool(true);
-    let inline = make_tool(false);
+    let tool = make_tool();
     let parent = RunContext::new(RunConfig::new("mixed-parent"), ());
 
     let spawned = ToolDispatch::<(), ()>::execute(
-        &background,
+        &tool,
         &(),
         CallId::new("background-first"),
-        json!({"prompt":"same request","mode":"background"}),
+        json!({"prompt":"same request"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2697,28 +2676,20 @@ async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_compl
         .unwrap()
         .to_owned();
 
-    let inline_result = ToolDispatch::<(), ()>::execute(
-        &inline,
+    started.notified().await;
+    let replay = ToolDispatch::<(), ()>::execute(
+        &tool,
         &(),
-        CallId::new("inline-immediately-after-background"),
-        json!({"prompt":"same request","mode":"inline"}),
+        CallId::new("async-replay"),
+        json!({"prompt":"same request"}),
         tinytools::ToolCallOptions::default(),
         &parent,
-    );
-    tokio::pin!(inline_result);
-    tokio::select! {
-        biased;
-        result = &mut inline_result => panic!("inline alias returned before background winner finished: {result:?}"),
-        _ = started.notified() => {},
-    }
+    ).await.unwrap();
+    let replay_value: Value = serde_json::from_str(&replay.output()).unwrap();
+    assert_eq!(replay_value["status"], "running");
+    assert_eq!(replay_value["task_id"], task_id);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     release.add_permits(1);
-    let inline_result = inline_result.await.unwrap();
-    assert!(!inline_result.is_error);
-    assert_eq!(
-        serde_json::from_str::<Value>(&inline_result.output()).unwrap()["status"],
-        "completed"
-    );
     completion_notified.notified().await;
     assert_eq!(completions.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(
@@ -2728,7 +2699,7 @@ async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_compl
 }
 
 #[tokio::test(start_paused = true)]
-async fn dropping_inline_driver_alias_marks_its_registered_job_cancelled() {
+async fn dropping_caller_does_not_cancel_async_job_but_owner_can_cancel_it() {
     let jobs = SubAgentJobRegistry::new();
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Semaphore::new(0));
@@ -2738,30 +2709,21 @@ async fn dropping_inline_driver_alias_marks_its_registered_job_cancelled() {
         blocking_driver(started.clone(), release, calls),
     );
     let parent = RunContext::new(RunConfig::new("drop-parent"), ());
-    let mut execution = Box::pin(ToolDispatch::<(), ()>::execute(
+    let result = ToolDispatch::<(), ()>::execute(
         &tool,
         &(),
-        CallId::new("drop-inline"),
-        json!({"prompt":"inline"}),
+        CallId::new("spawn-before-caller-drop"),
+        json!({"prompt":"async"}),
         tinytools::ToolCallOptions::default(),
         &parent,
-    ));
-    tokio::select! {
-        biased;
-        result = &mut execution => panic!("child completed before drop: {result:?}"),
-        _ = started.notified() => {},
-    }
-    drop(execution);
-    let job = jobs
-        .list()
-        .into_iter()
-        .next()
-        .expect("registered job remains visible");
+    ).await.unwrap();
+    let value: Value = serde_json::from_str(&result.output()).unwrap();
+    started.notified().await;
+    let job_id = value["task_id"].as_str().unwrap();
+    assert_eq!(jobs.get(job_id).unwrap().status, SubAgentJobStatus::Running);
+    jobs.cancel_owned(job_id, parent.instance_id().to_string()).unwrap();
+    let job = jobs.wait_owned(job_id, parent.instance_id().to_string()).await.unwrap();
     assert_eq!(job.status, SubAgentJobStatus::Cancelled);
-    assert_eq!(
-        jobs.get(job.id.as_str()).unwrap().status,
-        SubAgentJobStatus::Cancelled
-    );
 }
 
 #[tokio::test]
