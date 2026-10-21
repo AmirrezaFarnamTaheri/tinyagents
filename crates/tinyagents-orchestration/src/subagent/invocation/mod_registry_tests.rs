@@ -285,37 +285,28 @@ async fn root_settlement_keeps_one_deadline_across_lifecycle_wakes() {
     jobs.set_attempt_run_id(&child, "deadline-child-attempt");
     jobs.mark_running(&child);
     let cancellation = CancellationToken::new();
-    let settle = {
-        let jobs = jobs.clone();
-        let cancellation = cancellation.clone();
-        tokio::spawn(async move {
-            jobs.settle_root_run_descendants(
-                &RunId::new("root"),
-                "owner",
-                tokio::time::Instant::now() + std::time::Duration::from_secs(5),
-                &cancellation,
-            )
-            .await
-        })
-    };
-    loop {
-        if jobs.controls()[&child]
-            .waiters
-            .load(std::sync::atomic::Ordering::Acquire)
-            > 0
-        {
-            break;
-        }
-        tokio::task::yield_now().await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let settling =
+        jobs.settle_root_run_descendants(&RunId::new("root"), "owner", deadline, &cancellation);
+    tokio::pin!(settling);
+    tokio::select! {
+        biased;
+        result = &mut settling => panic!("live descendant settled unexpectedly: {result:?}"),
+        _ = tokio::task::yield_now() => {},
     }
     tokio::time::advance(std::time::Duration::from_secs(4)).await;
     jobs.set_attempt_run_id(&child, "deadline-child-another-observed-attempt");
-    tokio::task::yield_now().await;
+    tokio::select! {
+        biased;
+        result = &mut settling => panic!("live descendant settled unexpectedly after wake: {result:?}"),
+        _ = tokio::task::yield_now() => {},
+    }
     tokio::time::advance(std::time::Duration::from_secs(1)).await;
-    assert_eq!(
-        settle.await.unwrap(),
-        Err(SubAgentJobError::SettlementTimedOut)
-    );
+    tokio::select! {
+        biased;
+        result = &mut settling => assert_eq!(result, Err(SubAgentJobError::SettlementTimedOut)),
+        _ = tokio::task::yield_now() => panic!("settlement extended the caller's absolute deadline"),
+    }
 }
 
 #[tokio::test]
@@ -347,34 +338,20 @@ async fn root_settlement_cancellation_while_blocked_releases_waiter_pins() {
     jobs.set_attempt_run_id(&child, "cancel-child-attempt");
     jobs.mark_running(&child);
     let cancellation = CancellationToken::new();
-    let settle = {
-        let jobs = jobs.clone();
-        let cancellation = cancellation.clone();
-        tokio::spawn(async move {
-            jobs.settle_root_run_descendants(
-                &RunId::new("root"),
-                "owner",
-                tokio::time::Instant::now() + std::time::Duration::from_secs(30),
-                &cancellation,
-            )
-            .await
-        })
-    };
-    loop {
-        if jobs.controls()[&child]
-            .waiters
-            .load(std::sync::atomic::Ordering::Acquire)
-            > 0
-        {
-            break;
-        }
-        tokio::task::yield_now().await;
+    let settling = jobs.settle_root_run_descendants(
+        &RunId::new("root"),
+        "owner",
+        tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+        &cancellation,
+    );
+    tokio::pin!(settling);
+    tokio::select! {
+        biased;
+        result = &mut settling => panic!("live descendant settled unexpectedly: {result:?}"),
+        _ = tokio::task::yield_now() => {},
     }
     cancellation.cancel();
-    assert_eq!(
-        settle.await.unwrap(),
-        Err(SubAgentJobError::SettlementCancelled)
-    );
+    assert_eq!(settling.await, Err(SubAgentJobError::SettlementCancelled));
     assert_eq!(
         jobs.controls()[&child]
             .waiters
@@ -432,29 +409,18 @@ async fn root_settlement_pins_terminal_ancestors_while_descendants_remain_live()
         )),
     );
 
-    let settling = {
-        let jobs = jobs.clone();
-        tokio::spawn(async move {
-            jobs.settle_root_run_descendants(
-                &RunId::new("settlement-root"),
-                "owner",
-                tokio::time::Instant::now() + std::time::Duration::from_secs(30),
-                &CancellationToken::new(),
-            )
-            .await
-        })
-    };
-    loop {
-        let controls = jobs.controls();
-        if controls[&parent]
-            .waiters
-            .load(std::sync::atomic::Ordering::Acquire)
-            > 0
-        {
-            break;
-        }
-        drop(controls);
-        tokio::task::yield_now().await;
+    let cancellation = CancellationToken::new();
+    let settling = jobs.settle_root_run_descendants(
+        &RunId::new("settlement-root"),
+        "owner",
+        tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+        &cancellation,
+    );
+    tokio::pin!(settling);
+    tokio::select! {
+        biased;
+        result = &mut settling => panic!("live child settled unexpectedly: {result:?}"),
+        _ = tokio::task::yield_now() => {},
     }
 
     for index in 0..=super::types::SUBAGENT_JOB_SOFT_CAP {
@@ -483,7 +449,7 @@ async fn root_settlement_pins_terminal_ancestors_while_descendants_remain_live()
         &child,
         Ok(SubagentOutcome::completed(child.as_str(), "child finished")),
     );
-    let settled = settling.await.unwrap().unwrap();
+    let settled = settling.await.unwrap();
     assert_eq!(settled.len(), 2);
     assert!(settled.iter().any(|job| job.id == parent));
     assert!(settled.iter().any(|job| job.id == child));

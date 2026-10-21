@@ -1,7 +1,7 @@
 //! Bounded settlement for native driver-job descendants.
 
-use super::*;
 use super::jobs::JobWaitGuard;
+use super::*;
 
 impl SubAgentJobRegistry {
     /// Waits for every registered driver job descended from `root_run_id` to
