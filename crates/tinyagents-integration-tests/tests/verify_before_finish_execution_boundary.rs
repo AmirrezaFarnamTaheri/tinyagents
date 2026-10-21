@@ -6,6 +6,7 @@ use tinyagents_harness::host::{
     StaticContextComposer, ToolCallRequest,
 };
 use tinyagents_harness::runtime::{AgentInvocation, AgentTurnRequest};
+use tinyagents_harness::Result;
 use tinyagents_definition::{AgentDefinition, InMemoryDefinitionRegistry};
 
 struct DenyToolCalls;

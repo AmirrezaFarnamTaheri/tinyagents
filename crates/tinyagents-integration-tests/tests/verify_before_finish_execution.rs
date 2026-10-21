@@ -16,6 +16,7 @@ use tinyagents_harness::middleware::{
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::ScriptedModel;
 use tinyagents_harness::tool::ToolRulePolicy;
+use tinyagents_harness::Result;
 use tinyagents_harness_tools::skills::{
     PackCatalog, PackRegistryHandle, ToolPack, USE_SKILL, UseSkillTool,
 };
