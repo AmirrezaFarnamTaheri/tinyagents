@@ -45,6 +45,10 @@ impl ChatModel<()> for CloseCorrectionModel {
 
 struct Planner;
 
+struct RecordingRequestPlanner {
+    requests: Arc<std::sync::Mutex<Vec<(SubagentTaskKey, String)>>>,
+}
+
 struct ReplacingPlanner;
 
 struct ReplacingRetryPlanner;
@@ -143,6 +147,27 @@ impl SubagentPlanner<(), ()> for Planner {
         request: SubagentRequest<(), ()>,
     ) -> std::result::Result<PreparedSubagent<()>, SubagentError> {
         let parts = request.into_parts();
+        Ok(PreparedSubagent::new(
+            parts.task_key.task_id,
+            "worker",
+            vec![Message::user(parts.input)],
+            ToolSnapshot::new(vec![]).unwrap(),
+            parts.run_context,
+        ))
+    }
+}
+
+#[async_trait]
+impl SubagentPlanner<(), ()> for RecordingRequestPlanner {
+    async fn prepare(
+        &self,
+        request: SubagentRequest<(), ()>,
+    ) -> std::result::Result<PreparedSubagent<()>, SubagentError> {
+        let parts = request.into_parts();
+        self.requests
+            .lock()
+            .unwrap()
+            .push((parts.task_key.clone(), parts.input.clone()));
         Ok(PreparedSubagent::new(
             parts.task_key.task_id,
             "worker",
@@ -1446,10 +1471,21 @@ fn driver_subagent_tool_preserves_host_name_description_and_schema() {
 #[tokio::test]
 async fn driver_subagent_tool_routes_execution_through_the_driver() {
     let jobs = SubAgentJobRegistry::new();
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let driver = Arc::new(
+        SubagentDriver::new(SubagentCapabilities {
+            planner: Some(Arc::new(RecordingRequestPlanner {
+                requests: requests.clone(),
+            })),
+            executor: Some(Arc::new(Executor)),
+            persistence: Some(Arc::new(Persistence)),
+        })
+        .unwrap(),
+    );
     let tool = DriverSubAgentTool::new(
         "subagent",
         "worker description",
-        driver(),
+        driver,
         |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("worker-child"), ())
@@ -1477,10 +1513,29 @@ async fn driver_subagent_tool_routes_execution_through_the_driver() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(&result.output()).unwrap()["output"],
-        "driver result"
-    );
+    assert!(!result.is_error);
+    let response: Value = serde_json::from_str(&result.output()).unwrap();
+    assert_eq!(response["status"], "running");
+    let task_id = response["task_id"].as_str().expect("spawned job id");
+    assert!(!task_id.is_empty());
+    assert!(response.get("output").is_none());
+
+    let job = jobs
+        .wait_owned(task_id, parent.instance_id().to_string())
+        .await
+        .unwrap();
+    assert_eq!(job.status, SubAgentJobStatus::Completed);
+    assert_eq!(job.agent, "worker");
+    assert_eq!(job.output.as_deref(), Some("driver result"));
+
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let (request_key, request_input) = &requests[0];
+    assert_eq!(request_key.task_id, "driver-task");
+    assert_eq!(request_key.parent_run_id, parent.run_id().as_str());
+    assert_eq!(request_input, "do work");
+    drop(requests);
+
     let settled = jobs
         .settle_root_run_descendants(
             parent.run_id(),
