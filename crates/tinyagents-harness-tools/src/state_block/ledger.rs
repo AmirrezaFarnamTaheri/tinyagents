@@ -67,7 +67,13 @@ pub(super) fn record_result(
     }
     if is_error {
         for name in missing_executables(output) {
-            if !ledger.missing.iter().any(|(known, _)| known == &name) {
+            if let Some((_, seen)) = ledger
+                .missing
+                .iter_mut()
+                .find(|(known, _)| known == &name)
+            {
+                *seen = round;
+            } else {
                 ledger.missing.push((name, round));
                 while ledger.missing.len() > MAX_MISSING {
                     ledger.missing.remove(0);
@@ -155,11 +161,11 @@ fn patch_paths(arguments: &Value) -> Vec<String> {
                 "*** Update File:",
                 "*** Add File:",
                 "*** Delete File:",
-                "+++ b/",
+                "+++ ",
             ]
             .iter()
             .find_map(|prefix| line.strip_prefix(prefix))
-            .map(str::trim)
+            .map(|path| path.strip_prefix("b/").unwrap_or(path).trim())
             .filter(|path| !path.is_empty() && *path != "/dev/null");
             if let Some(path) = path {
                 let path = one_line(path, MAX_SUMMARY_CHARS);

@@ -115,15 +115,16 @@ fn plan_section(items: &[TodoItem], ledger: &RunLedger) -> Option<String> {
         },
     };
     let mut lines = vec![header];
-    let active = items
+    let next_open = items
         .iter()
-        .position(|item| item.status == TodoStatus::InProgress);
+        .position(|item| item.status == TodoStatus::InProgress)
+        .or_else(|| items.iter().position(|item| item.status.is_open()));
     let mut displayed: Vec<usize> = (0..items.len().min(MAX_STEPS_SHOWN)).collect();
-    if let Some(active) = active
-        && active >= MAX_STEPS_SHOWN
+    if let Some(next_open) = next_open
+        && next_open >= MAX_STEPS_SHOWN
     {
         displayed.pop();
-        displayed.push(active);
+        displayed.push(next_open);
     }
     for index in displayed.iter().copied() {
         let item = &items[index];
