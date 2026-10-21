@@ -602,6 +602,7 @@ impl SubAgentJobRegistry {
                         job.status = SubAgentJobStatus::Cancelled;
                         job.error = Some(TinyAgentsError::Cancelled.to_string());
                     });
+                    self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
                     self.stamp_terminal_sequence(control);
                     self.steering.deregister(&task_id);
                     drop(controls);
@@ -837,6 +838,7 @@ impl SubAgentJobRegistry {
                     job.status = SubAgentJobStatus::Cancelled;
                     job.error = Some(TinyAgentsError::Cancelled.to_string());
                 });
+                self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
                 self.stamp_terminal_sequence(control);
                 self.steering.deregister(&task_id);
                 let snapshot = control.status.borrow().clone();
@@ -869,6 +871,7 @@ impl SubAgentJobRegistry {
                 job.status = SubAgentJobStatus::Cancelled;
                 job.error = Some(TinyAgentsError::Cancelled.to_string());
             });
+            self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
             self.stamp_terminal_sequence(control);
             self.steering.deregister(&task_id);
             let snapshot = control.status.borrow().clone();
