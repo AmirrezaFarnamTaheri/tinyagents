@@ -514,8 +514,9 @@ async fn inspection_invocation_clamps_requested_output_cap_to_five_tokens() {
     let request_path = dir.path().join("request.txt");
     let staging = dir.path().join("claude-inspection.staging");
     let source = format!(
-        "#!/bin/sh\nprintf '%s' \"${{CLAUDE_CODE_MAX_OUTPUT_TOKENS-}}\" > '{}'\nprintf '%s\\n' '{{\"type\":\"result\",\"result\":\"OK\",\"is_error\":false}}'\n",
-        cap_path.display()
+        "#!/bin/sh\ncat > '{}'\nprintf '%s' \"${{CLAUDE_CODE_MAX_OUTPUT_TOKENS-}}\" > '{}'\nprintf '%s\\n' '{{\"type\":\"result\",\"result\":\"OK\",\"is_error\":false}}'\n",
+        request_path.display(),
+        cap_path.display(),
     );
     std::fs::write(&staging, source).expect("write fake claude");
     std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
