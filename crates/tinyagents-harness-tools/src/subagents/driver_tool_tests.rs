@@ -73,7 +73,10 @@ impl SubagentPlanner<(), ()> for ReplacingRetryPlanner {
         request: SubagentRequest<(), ()>,
     ) -> std::result::Result<PreparedSubagent<()>, SubagentError> {
         let parts = request.into_parts();
-        let retry_parent = parts.run_context.clone();
+        let retry_parent = parts
+            .run_context
+            .child(RunConfig::new("retry-template"), ())
+            .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
         let retry_policy = SubAgentPolicy::default().with_retry(
             tinyagents_harness::retry::RetryPolicy::default()
                 .with_max_attempts(2)
