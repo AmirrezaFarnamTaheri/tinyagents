@@ -8,7 +8,9 @@
 //!   was written. Entries keep no wall clock, so a marker's `ts` is `None` and
 //!   intermediate tool-call rows carry no per-step timestamp.
 //! - **Thread listing.** [`TranscriptLocator::thread_transcripts`] reads the
-//!   index: the thread's written roots, ordered like the file view (by
+//!   index (first re-indexing any written transcript whose index document is
+//!   missing, see [`DriverTranscriptLocator::repair_unindexed`]): the thread's
+//!   written roots, ordered like the file view (by
 //!   `_meta.created`, session chains oldest first, pre-identity roots dropped
 //!   once a session root exists), and the sub-agent transcripts that descend
 //!   from a root stem or (unscoped) name the thread.
@@ -21,7 +23,7 @@ use tinystoragedrivers_core::{DocumentStoreExt, Filter, Query, Sort, StorageErro
 
 use super::{
     DriverTranscriptHistory, DriverTranscriptLocator, ENTRIES, Entry, HistoryInner, INDEX,
-    discovered_seed, normalized, run_on,
+    discovered_seed, normalized, oldest_first, run_on,
 };
 use crate::transcript::{
     CompactionMarker, DisplayRecord, DisplaySessionTranscript, SessionRef, ThreadTranscript,
@@ -132,8 +134,7 @@ impl DriverTranscriptLocator {
     pub(super) fn indexed(&self, filter: Filter, what: &'static str) -> Vec<Indexed> {
         let found = self.run(|docs, declared| async move {
             declared.ensure(&docs).await?;
-            let query = Query::filter(filter.and(Filter::eq("written", true)))
-                .sort(Sort::asc("created_at"));
+            let query = oldest_first(Query::filter(filter.and(Filter::eq("written", true))));
             docs.query_all(INDEX, &query).await
         });
         match found {
@@ -150,6 +151,72 @@ impl DriverTranscriptLocator {
                     "[session-store] transcript listing failed"
                 );
                 Vec::new()
+            }
+        }
+    }
+
+    /// Re-indexes every written transcript that has no index document.
+    ///
+    /// A write whose index refresh failed (see `HistoryInner::index`) leaves a
+    /// durable entry log with no lookup document, and nothing repairs that
+    /// until the transcript is next read or written; until then the thread
+    /// listing, which reads the index alone, would not see it. Detecting this
+    /// is two counts (written index documents against stems whose first entry
+    /// is written); only a mismatch pays for finding the missing stems, and
+    /// reading each one through its own handle runs the ordinary read-time
+    /// index repair.
+    fn repair_unindexed(&self) {
+        let missing = self.run(|docs, declared| async move {
+            declared.ensure(&docs).await?;
+            let first_entries = Filter::eq("seq", 0).and(Filter::eq("written", true));
+            let indexed = docs.count(INDEX, &Filter::eq("written", true)).await?;
+            let logs = docs.count(ENTRIES, &first_entries).await?;
+            if logs <= indexed {
+                return Ok(Vec::new());
+            }
+            let indexed_stems: HashSet<String> = docs
+                .query_all(INDEX, &Query::filter(Filter::eq("written", true)))
+                .await?
+                .iter()
+                .filter_map(|item| Indexed::of(&item.doc))
+                .map(|indexed| indexed.stem)
+                .collect();
+            Ok(docs
+                .query_all(ENTRIES, &Query::filter(first_entries))
+                .await?
+                .iter()
+                .filter_map(|item| item.doc.get("stem").and_then(Value::as_str))
+                .filter(|stem| !indexed_stems.contains(*stem))
+                .map(str::to_string)
+                .collect::<Vec<_>>())
+        });
+        let missing = match missing {
+            Ok(missing) => missing,
+            Err(error) => {
+                tracing::warn!(
+                    target: "tinyagents_session::port::drivers",
+                    locator = %self.label,
+                    %error,
+                    "[session-store] unindexed transcript scan failed"
+                );
+                return;
+            }
+        };
+        for stem in missing {
+            tracing::debug!(
+                target: "tinyagents_session::port::drivers",
+                locator = %self.label,
+                %stem,
+                "[session-store] re-indexing a transcript whose index document is missing"
+            );
+            if let Err(error) = self.handle(&stem, discovered_seed(&stem)).read_session() {
+                tracing::warn!(
+                    target: "tinyagents_session::port::drivers",
+                    locator = %self.label,
+                    %stem,
+                    %error,
+                    "[session-store] re-indexing an unindexed transcript failed"
+                );
             }
         }
     }
@@ -258,6 +325,7 @@ impl DriverTranscriptLocator {
         if thread_id.is_empty() {
             return None;
         }
+        self.repair_unindexed();
         let mut filter = Filter::eq("thread_id", thread_id).and(Filter::eq("subagent", false));
         if let Some(agent_id) = agent_id {
             filter = filter.and(Filter::eq("agent_id", agent_id));

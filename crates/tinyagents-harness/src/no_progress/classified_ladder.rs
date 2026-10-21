@@ -36,11 +36,41 @@ pub const RECOVERY_CLASSES: &[&str] = &[
 pub const UNCERTAIN_SIDE_EFFECT_HALT_SUFFIX: &str =
     " The action may already have happened; reconcile its external state before any retry.";
 
+/// Typed root cause accompanying a classified-failure halt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClassifiedStopCause {
+    /// Stable classifier-owned failure class.
+    pub class: String,
+    /// Stable operation identifier.
+    pub operation: String,
+    /// Human-readable summary retained for compatibility.
+    pub summary: String,
+}
+
+impl std::ops::Deref for ClassifiedStopCause {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.summary
+    }
+}
+
 /// What one classified failure asks of the driver.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClassifiedStep {
     /// The budget is spent: halt the run with this root-cause summary.
     Halt(String),
+    /// Within budget; steer the next model request with this instruction.
+    Nudge(String),
+    /// Within budget and the class has no instruction of its own.
+    Within,
+}
+
+/// Classified step with typed failure metadata on halt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ClassifiedStepWithCause {
+    /// The budget is spent: halt with the classified root cause.
+    Halt(ClassifiedStopCause),
     /// Within budget; steer the next model request with this instruction.
     Nudge(String),
     /// Within budget and the class has no instruction of its own.
@@ -105,20 +135,43 @@ pub fn classified_step(
     budget: usize,
     failure_text: &str,
 ) -> ClassifiedStep {
+    match classified_step_with_cause(tracker, class, tool, scope, budget, failure_text) {
+        ClassifiedStepWithCause::Halt(cause) => ClassifiedStep::Halt(cause.summary),
+        ClassifiedStepWithCause::Nudge(instruction) => ClassifiedStep::Nudge(instruction),
+        ClassifiedStepWithCause::Within => ClassifiedStep::Within,
+    }
+}
+
+/// Record one classified failure and retain its stable typed cause on halt.
+///
+/// This additive API preserves the legacy [`classified_step`] summary shape
+/// while allowing harness drivers to carry classification independent of prose.
+pub fn classified_step_with_cause(
+    tracker: &ClassifiedFailureTracker,
+    class: &str,
+    tool: &str,
+    scope: &str,
+    budget: usize,
+    failure_text: &str,
+) -> ClassifiedStepWithCause {
     let key = ClassifiedFailure::new(class, tool, scope);
     if let NoProgress::Halt(mut summary) = tracker.record(&key, budget) {
         if class == "uncertain_side_effect" {
             summary.push_str(UNCERTAIN_SIDE_EFFECT_HALT_SUFFIX);
         }
-        return ClassifiedStep::Halt(summary);
+        return ClassifiedStepWithCause::Halt(ClassifiedStopCause {
+            class: key.class,
+            operation: key.operation,
+            summary,
+        });
     }
     if class_has_nudge(class) {
         let line = first_error_line(failure_text);
         if let Some(instruction) = recovery_nudge(class, tool, &line) {
-            return ClassifiedStep::Nudge(instruction);
+            return ClassifiedStepWithCause::Nudge(instruction);
         }
     }
-    ClassifiedStep::Within
+    ClassifiedStepWithCause::Within
 }
 
 /// Clear every class's blocker for `(tool, scope)`: only a success against that

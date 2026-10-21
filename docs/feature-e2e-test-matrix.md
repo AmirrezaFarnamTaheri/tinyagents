@@ -25,7 +25,7 @@ tests remain valuable but do not close an E2E gap.
 | Feature | Evidence of gap | Test to add |
 | --- | --- | --- |
 | Hosted harness invocation | `feature_harness_hosted_invocation.rs` | Covers composed/screened input, host observer attribution, and public streamed failure sanitization. |
-| Session transcript persistence | `feature_session_transcript.rs` | Covers append, compaction, interrupted partials, replay/display projections, Markdown, thread summaries, and `FileTranscriptHistory` reopen. |
+| Session transcript persistence | `feature_session_transcript.rs` | Covers append, compaction, interrupted partials, replay/display projections, thread spend, and driver-backed history reopen. |
 | Registry runtime router | `ModelRouter`/`WorkloadRoute` only have crate-local tests | `feature_registry_router.rs`: route default and capability-gated workloads into harness model selection and verify primary failure falls back to the configured alternate. |
 | Definition-host boundary | `tinyagents-definition` has one inline unit test | `feature_definition_runtime.rs`: validate/serialize definitions and use them in a hosted delegated harness run, proving declared children succeed and undeclared children fail. |
 

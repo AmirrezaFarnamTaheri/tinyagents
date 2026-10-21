@@ -2,7 +2,8 @@
 //!
 //! Status and event receipts commit together. Stream projection is separate:
 //! no post-commit projection failure is represented as a rolled-back status CAS.
-use super::storage::{AGENTS, CAS_ATTEMPTS, EVENT_HEADS, EVENTS, encode, key};
+use super::dto::{StreamEvent, stored_as_is};
+use super::storage::{AGENTS, CAS_ATTEMPTS, EVENT_HEADS, EVENTS, event_stream, key, put_op};
 use super::*;
 use serde::{Deserialize, Serialize};
 use tinystoragedrivers_core::{ErrorKind, Precondition, Versioned, WriteOp};
@@ -11,6 +12,14 @@ use tinystoragedrivers_core::{ErrorKind, Precondition, Versioned, WriteOp};
 pub(super) struct EventHead {
     /// Null marks exhaustion without an unsigned BSON-overflow sentinel.
     pub(super) next: Option<u64>,
+}
+
+stored_as_is!(EventHead);
+
+/// The head after `highest` is the last sequence a run used: the next ordinal,
+/// or `None` once `i64::MAX` has been handed out.
+pub(super) fn head_after(highest: u64) -> Option<u64> {
+    (highest < i64::MAX as u64).then_some(highest + 1)
 }
 
 struct EventCommit {
@@ -22,7 +31,13 @@ impl DriverRunLedger {
     async fn event_commit(&self, input: &RunEventAppend) -> Result<EventCommit> {
         let head = self.read::<EventHead>(EVENT_HEADS, &input.run_id).await?;
         let sequence = match &head {
-            None => 1,
+            // A run migrated from v1 has events but no head (the v1 head's id
+            // was a digest of the run id); its next sequence follows its last event.
+            None => match self.highest_sequence(&input.run_id).await? {
+                None => 1,
+                Some(highest) => head_after(highest)
+                    .ok_or_else(|| StorageError::serialization("event sequence exhausted"))?,
+            },
             Some(head) => head
                 .doc
                 .next
@@ -40,25 +55,45 @@ impl DriverRunLedger {
             sequence,
             event_type: input.event_type.clone(),
             payload: input.payload.clone(),
-            timestamp: Utc::now(),
+            timestamp: now(),
         };
         Ok(EventCommit {
             writes: vec![
-                WriteOp::Put {
-                    collection: EVENT_HEADS.into(),
-                    id: key(&[&input.run_id]),
-                    doc: encode(&EventHead { next })?,
-                    precondition: condition(&head),
-                },
-                WriteOp::Put {
-                    collection: EVENTS.into(),
-                    id: key(&[&input.run_id, &sequence.to_string()]),
-                    doc: encode(&event)?,
-                    precondition: Precondition::Absent,
-                },
+                put_op(
+                    EVENT_HEADS,
+                    key(&[&input.run_id])?,
+                    &EventHead { next },
+                    condition(&head),
+                )?,
+                put_op(
+                    EVENTS,
+                    key(&[&input.run_id, &sequence.to_string()])?,
+                    &event,
+                    Precondition::Absent,
+                )?,
             ],
             event,
         })
+    }
+
+    /// The highest sequence a run has committed, read from its receipts.
+    async fn highest_sequence(&self, run_id: &str) -> Result<Option<u64>> {
+        self.declare().await?;
+        let page = self
+            .scoped
+            .documents()
+            .query(
+                EVENTS,
+                &Query::filter(Filter::eq("run_id", run_id.to_owned()))
+                    .sort(Sort::desc("sequence"))
+                    .limit(1),
+            )
+            .await?;
+        page.items
+            .into_iter()
+            .next()
+            .map(|row| Ok(super::storage::decode::<RunEvent>(row.doc)?.sequence))
+            .transpose()
     }
 
     pub(super) async fn commit_event(&self, input: RunEventAppend) -> Result<RunEvent> {
@@ -97,7 +132,7 @@ impl DriverRunLedger {
                     check,
                     tinystoragedrivers_core::ReadCheck {
                         collection: AGENTS.into(),
-                        id: key(&[id]),
+                        id: key(&[id])?,
                         expected: tinystoragedrivers_core::ExpectedDocument::Version(
                             previous.version,
                         ),
@@ -122,15 +157,10 @@ impl DriverRunLedger {
             let mut row = previous.doc;
             row.status = status;
             row.error = error.map(str::to_owned);
-            row.completed_at = completed_at;
-            row.updated_at = Utc::now();
+            row.completed_at = completed_at.map(trunc);
+            row.updated_at = now();
             row.telemetry = None;
-            let mut writes = vec![WriteOp::Put {
-                collection: AGENTS.into(),
-                id: key(&[id]),
-                doc: encode(&row)?,
-                precondition: condition,
-            }];
+            let mut writes = vec![put_op(AGENTS, key(&[id])?, &row, condition)?];
             if let Some(input) = &event {
                 writes.extend(self.event_commit(input).await?.writes);
             }
@@ -157,12 +187,12 @@ impl DriverRunLedger {
     ) -> Result<RunEventListResponse> {
         let limit = request.limit.unwrap_or(100).min(1000) as usize;
         let after = request.after_sequence.unwrap_or(0);
-        let filter = Filter::eq("record.runId", request.run_id.clone())
-            .and(Filter::gt("record.sequence", after));
+        let filter =
+            Filter::eq("run_id", request.run_id.clone()).and(Filter::gt("sequence", after));
         self.declare().await?;
         let mut events = Vec::with_capacity(limit);
         let mut query = Query::filter(filter)
-            .sort(Sort::asc("record.sequence"))
+            .sort(Sort::asc("sequence"))
             .limit(limit.max(1));
         loop {
             // Even an empty result request obtains native read admission.
@@ -220,8 +250,9 @@ impl DriverRunLedger {
                         StorageError::serialization("event projection offset has a gap").into(),
                     );
                 }
-                let event: RunEvent =
-                    serde_json::from_value(entry.value).map_err(StorageError::from)?;
+                let event = serde_json::from_value::<StreamEvent>(entry.value)
+                    .map_err(StorageError::from)?
+                    .into_event(run_id)?;
                 if event != expected {
                     return Err(StorageError::serialization(
                         "event projection differs from ordered committed receipt",
@@ -246,7 +277,7 @@ impl DriverRunLedger {
     /// a conflicting or truncated projection is refused rather than overwritten.
     pub async fn reconcile_run_events(&self, run_id: &str) -> Result<u64> {
         self.declare().await?;
-        let stream = format!("run_events:{}", key(&[run_id]));
+        let stream = event_stream(run_id)?;
         let mut next = self.scoped.streams().len(&stream).await?;
         let mut after = self.validate_projection(run_id, &stream, next).await?;
         let mut conflicts = 0;
@@ -266,7 +297,7 @@ impl DriverRunLedger {
             let count = records.len() as u64;
             let values = records
                 .into_iter()
-                .map(serde_json::to_value)
+                .map(|event| serde_json::to_value(StreamEvent::of(&event)))
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(StorageError::from)?;
             match self

@@ -42,11 +42,46 @@ fn lookup_strips_context_and_tag_decorations() {
 }
 
 #[test]
-fn lookup_longest_substring_wins_for_suffixed_ids() {
-    // A dated/suffixed id should resolve to the most specific row.
+fn lookup_resolves_dated_ids_to_the_most_specific_row() {
+    // `gpt-5.4` is also a prefix here, but `-mini-2026-05-01` is not a
+    // decoration, so only the `gpt-5.4-mini` row qualifies.
     assert_eq!(
         lookup("gpt-5.4-mini-2026-05-01").unwrap().model_id,
         "gpt-5.4-mini"
+    );
+    assert_eq!(
+        lookup("claude-sonnet-4-5-20250929").unwrap().model_id,
+        "claude-sonnet-4-5"
+    );
+    assert_eq!(
+        lookup("gemini-2.5-pro-preview-06-05").unwrap().model_id,
+        "gemini-2.5-pro"
+    );
+    assert_eq!(
+        lookup("gemini-2.5-flash-latest").unwrap().model_id,
+        "gemini-2.5-flash"
+    );
+    assert_eq!(
+        lookup("openai/gpt-5.4-2026-03-01").unwrap().model_id,
+        "gpt-5.4"
+    );
+}
+
+#[test]
+fn unknown_variants_do_not_inherit_a_neighbours_rates() {
+    // Each of these extends a catalogued id with something that is not a
+    // snapshot decoration: a different model, which has its own prices.
+    for id in ["gpt-4.1-nano", "o3-pro", "o3-mini", "gpt-5.4-mini-high"] {
+        assert!(
+            lookup(id).is_none(),
+            "{id} resolved to {:?}",
+            lookup(id).map(|p| p.model_id)
+        );
+    }
+    // The estimator therefore reports "no estimate" rather than gpt-4.1's rates.
+    assert_eq!(
+        estimate_cost_usd("gpt-4.1-nano", 1_000_000, 1_000_000, 0),
+        0.0
     );
 }
 
@@ -158,6 +193,34 @@ fn flat_metadata_projection_is_distinct_from_tier_aware_call_estimates() {
 #[test]
 fn image_support_resolves_decorated_minimax_ids() {
     assert!(model_accepts_image_input("minimax/minimax-m3-2026-07-01"));
+}
+
+#[test]
+fn free_model_pricing_is_zero_and_does_not_change_reported_charges() {
+    let pricing = lookup_pricing("vendor/model:FREE").expect("explicit free model");
+    assert_eq!(pricing.input_per_token, Some(0.0));
+    assert_eq!(pricing.output_per_token, Some(0.0));
+    assert_eq!(pricing.cache_read_input_per_token, Some(0.0));
+
+    let usage = tinyinference_llm::usage::Usage {
+        input_tokens: 100,
+        output_tokens: 20,
+        ..Default::default()
+    };
+    assert_eq!(
+        tinyagents_harness::cost::call_cost(
+            Some(&pricing),
+            &tinyagents_harness::cost::CallUsage {
+                usage,
+                charged_amount_usd: 0.004,
+                cost_is_estimate: false,
+                charge_reported: true,
+            },
+        )
+        .usd(),
+        Some(0.004),
+        "provider-reported billing remains authoritative for free-labeled models"
+    );
 }
 
 #[test]

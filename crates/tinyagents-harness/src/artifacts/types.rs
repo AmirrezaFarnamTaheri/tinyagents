@@ -6,11 +6,11 @@
 /// Deliverables directory under the artifact root. Artifacts here are meant to
 /// outlive the step that produced them and to be handed to a parent agent or a
 /// later step **by path**, not by value.
-pub const OUTPUTS_DIR: &str = "outputs";
+pub const OUTPUTS_DIR: &str = "harness/outputs";
 
 /// Scratch directory under the artifact root. Intermediate files a worker needs
 /// while it works but does not intend to hand back.
-pub const SCRATCH_DIR: &str = "workspace";
+pub const SCRATCH_DIR: &str = "harness/workspace";
 
 /// Byte threshold above which a worker's final result is written to
 /// [`OUTPUTS_DIR`] and replaced by a pointer + abstract.
@@ -126,4 +126,8 @@ pub enum OffloadError {
     /// The blob store refused or failed the write.
     #[error("artifact storage failed: {0}")]
     Storage(#[from] tinystoragedrivers_core::StorageError),
+
+    /// The filesystem copy could not be materialized safely.
+    #[error("artifact materialization failed: {0}")]
+    Materialization(String),
 }

@@ -39,12 +39,18 @@ middleware, the agent loop, and graph nodes code against.
 - [`ContextStatistics`], [`context_statistics`], [`estimate_context_tokens`]
   (`stats.rs`) — host-free, tokenizer-free transcript statistics and an
   optional caller-supplied-tokenizer token estimate.
+- `AgentsMdContent`, `load_agents_md`, and `load_agents_md_layers`
+  (`agents_md.rs`) — bounded, no-follow loading of workspace and action
+  directory `AGENTS.md` files. The caller supplies a path-validation callback
+  so the host retains filesystem policy; the existing enable gate is passed
+  explicitly, and duplicate directories are loaded once.
 
 ## Files
 
 | File       | Role                                                                |
 | ---------- | ---------------------------------------------------------------------- |
 | `types.rs` | All type definitions: `RunConfig`, `RunLineage`, `RunContext`, `MiddlewareControl`. |
+| `agents_md.rs` | Bounded two-layer instruction loading with no-follow file opens and a host-supplied path validator. |
 | `mod.rs`   | `RunConfig`/`RunContext` method implementations, custom `RunConfig` `Deserialize` (with legacy wire-field migration), instance-id minting, metadata merge helper. |
 | `stats.rs` | `ContextStatistics` and the two statistics-computing free functions.  |
 | `mod_tests.rs`  | Unit tests for defaults, builders, child derivation, control precedence, deadline/limit tracking. |

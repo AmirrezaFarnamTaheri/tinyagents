@@ -37,11 +37,11 @@ pub use tool_effects::{
 pub use types::{
     AgentRun, AgentRunKind, AgentRunListRequest, AgentRunListResponse, AgentRunStatus,
     AgentRunUpsert, AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember,
-    AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask,
-    AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome, CompletionOutcome,
-    RunEvent, RunEventAppend, RunEventListRequest, RunEventListResponse, RunTelemetry,
-    RunTelemetryUpsert, RunTransition, WorkflowLeaseClaim, WorkflowRun, WorkflowRunListRequest,
-    WorkflowRunListResponse, WorkflowRunStatus, WorkflowRunUpsert,
+    AgentTeamMemberRunAdmission, AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus,
+    AgentTeamTask, AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome,
+    CompletionOutcome, RunEvent, RunEventAppend, RunEventListRequest, RunEventListResponse,
+    RunTelemetry, RunTelemetryUpsert, RunTransition, WorkflowLeaseClaim, WorkflowRun,
+    WorkflowRunListRequest, WorkflowRunListResponse, WorkflowRunStatus, WorkflowRunUpsert,
 };
 
 #[cfg(test)]

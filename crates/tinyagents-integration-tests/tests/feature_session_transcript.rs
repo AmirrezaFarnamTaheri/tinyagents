@@ -1,13 +1,17 @@
-//! End-to-end contract coverage for append-only session transcripts.
+//! End-to-end contract coverage for append-only session transcripts, through
+//! the storage-driver store (SQLite) a host installs.
 
-use chrono::Local;
+mod common;
+
+use common::storage;
 use serde_json::json;
+use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
+use tinyagents_session::thread_spend_in;
 use tinyagents_session::transcript::{
-    DisplayRecord, FileTranscriptHistory, MessageUsage, TranscriptHistory, TranscriptMessage,
-    TranscriptMeta, TranscriptRead, TranscriptToolCall, TurnUsage, append_interrupted_partial,
-    append_transcript_turn, find_root_transcript_for_thread, read_thread_usage_summary,
-    read_transcript, read_transcript_display,
+    DisplayRecord, MessageUsage, TranscriptMessage, TranscriptMeta, TranscriptPartial,
+    TranscriptToolCall, TranscriptTurn, TurnUsage,
 };
+use tinystoragedrivers_sqlite::SqliteStorage;
 
 fn meta(turn_count: usize, input_tokens: u64, output_tokens: u64) -> TranscriptMeta {
     TranscriptMeta {
@@ -58,13 +62,21 @@ fn usage(iteration: u32, input: u64, output: u64) -> TurnUsage {
 
 #[test]
 fn append_only_transcript_reopens_with_compacted_context_and_full_display_history() {
-    let workspace = tempfile::tempdir().unwrap();
+    let database = tempfile::tempdir().unwrap();
+    let open = || {
+        DriverSessionStores::new(
+            std::sync::Arc::new(
+                SqliteStorage::open(database.path().join("sessions.sqlite")).unwrap(),
+            ),
+            tinystoragedrivers_core::Scope::local(),
+        )
+        .unwrap()
+        .for_agent("researcher")
+        .transcripts
+    };
+    let locator = open();
     let stem = "1700000000_researcher";
-    let path = workspace
-        .path()
-        .join("session_raw")
-        .join(format!("{stem}.jsonl"));
-    let companion_date = Local::now().format("%Y_%m_%d").to_string();
+    let history = locator.open_stem(stem, meta(0, 0, 0)).unwrap();
 
     let initial = vec![
         TranscriptMessage {
@@ -86,15 +98,29 @@ fn append_only_transcript_reopens_with_compacted_context_and_full_display_histor
         TranscriptMessage::new("user", "Find the durable transcript contract."),
         TranscriptMessage::assistant("I will search the contract."),
     ];
-    append_transcript_turn(
-        &path,
+    let turn = |prev: &[TranscriptMessage],
+                next: &[TranscriptMessage],
+                meta: &TranscriptMeta,
+                usage: &TurnUsage,
+                request_id: &str| {
+        history
+            .append_turn(TranscriptTurn {
+                prev,
+                next,
+                meta,
+                turn_usage: Some(usage),
+                request_id: Some(request_id),
+                tools: None,
+            })
+            .unwrap();
+    };
+    turn(
         &[],
         &initial,
         &meta(1, 8, 3),
-        Some(&usage(1, 8, 3)),
-        Some("request-initial"),
-    )
-    .unwrap();
+        &usage(1, 8, 3),
+        "request-initial",
+    );
 
     let extended = [
         initial.clone(),
@@ -104,40 +130,49 @@ fn append_only_transcript_reopens_with_compacted_context_and_full_display_histor
         ],
     ]
     .concat();
-    append_transcript_turn(
-        &path,
+    turn(
         &initial,
         &extended,
         &meta(2, 15, 7),
-        Some(&usage(2, 7, 4)),
-        Some("request-extension"),
-    )
-    .unwrap();
+        &usage(2, 7, 4),
+        "request-extension",
+    );
 
     let compacted = vec![
         TranscriptMessage::new("system", "Preserve source provenance."),
         TranscriptMessage::assistant("Summary: transcript persistence is append-only."),
         TranscriptMessage::new("user", "Continue from the compacted context."),
     ];
-    append_transcript_turn(
-        &path,
+    turn(
         &extended,
         &compacted,
         &meta(3, 21, 9),
-        Some(&usage(3, 6, 2)),
-        Some("request-compaction"),
-    )
-    .unwrap();
-    append_interrupted_partial(
-        &path,
-        "This partial must not reach a resumed model.",
-        Some("request-interrupted"),
-        Some(4),
-        Some("stream was cancelled"),
-    )
-    .unwrap();
+        &usage(3, 6, 2),
+        "request-compaction",
+    );
+    assert!(
+        locator
+            .append_interrupted_partial(
+                "thread-transcript-e2e",
+                None,
+                &TranscriptPartial {
+                    content: "This partial must not reach a resumed model.".into(),
+                    reasoning_content: Some("stream was cancelled".into()),
+                    iteration: Some(4),
+                },
+                Some("request-interrupted"),
+            )
+            .unwrap()
+    );
 
-    let replayed = read_transcript(&path).unwrap();
+    // A fresh handle over the same database, as after a restart.
+    drop(history);
+    drop(locator);
+    let locator = open();
+    let reopened = locator
+        .root_for_thread("thread-transcript-e2e")
+        .expect("the thread's root is found by lookup");
+    let replayed = reopened.read_session().unwrap().unwrap();
     assert_eq!(replayed.meta.turn_count, 3);
     assert_eq!(replayed.meta.input_tokens, 21);
     assert_eq!(replayed.meta.output_tokens, 9);
@@ -159,7 +194,7 @@ fn append_only_transcript_reopens_with_compacted_context_and_full_display_histor
             .all(|message| !message.content.contains("partial must not"))
     );
 
-    let display = read_transcript_display(&path).unwrap();
+    let display = reopened.read_display().unwrap().unwrap();
     assert_eq!(display.records.len(), 7);
     assert!(matches!(
         &display.records[0],
@@ -191,39 +226,13 @@ fn append_only_transcript_reopens_with_compacted_context_and_full_display_histor
                 && message.reasoning_content.as_deref() == Some("stream was cancelled")
     ));
 
-    let markdown = workspace.path().join("sessions").join(companion_date);
-    let markdown = markdown.join(format!("{stem}.md"));
-    assert!(
-        markdown.is_file(),
-        "missing companion: {}",
-        markdown.display()
-    );
-    assert!(
-        std::fs::read_to_string(&markdown)
-            .unwrap()
-            .contains("Summary: transcript persistence is append-only.")
-    );
-
-    assert_eq!(
-        find_root_transcript_for_thread(workspace.path(), "thread-transcript-e2e"),
-        Some(path.clone())
-    );
-    let summary = read_thread_usage_summary(workspace.path(), "thread-transcript-e2e").unwrap();
-    assert_eq!(summary.input_tokens, 21);
-    assert_eq!(summary.output_tokens, 9);
-    assert_eq!(summary.cached_input_tokens, 3);
-    assert_eq!(summary.turn_count, 3);
-    assert_eq!(summary.last_turn_input_tokens, 6);
-    assert_eq!(summary.last_turn_output_tokens, 2);
-    assert_eq!(summary.model.as_deref(), Some("fixture-model"));
-    assert!(summary.subagents.is_empty());
-
-    let reopened = FileTranscriptHistory::new(workspace.path(), stem, meta(0, 0, 0)).unwrap();
-    assert_eq!(reopened.path(), path);
-    let reopened_session = TranscriptRead::read_session(&reopened).unwrap().unwrap();
-    assert_eq!(reopened_session.messages, replayed.messages);
-    assert_eq!(
-        TranscriptHistory::messages(&reopened).unwrap(),
-        replayed.messages
-    );
+    let spend = thread_spend_in(locator.as_ref(), "thread-transcript-e2e");
+    assert!(spend.found_transcript);
+    assert_eq!(spend.root.input_tokens, 8 + 7 + 6);
+    assert_eq!(spend.root.output_tokens, 3 + 4 + 2);
+    assert_eq!(spend.root.turns, 3);
+    assert_eq!(spend.root.last_input_tokens, 6);
+    assert_eq!(spend.root.last_output_tokens, 2);
+    assert_eq!(spend.root.model.as_deref(), Some("fixture-model"));
+    assert!(spend.subagents.is_empty());
 }

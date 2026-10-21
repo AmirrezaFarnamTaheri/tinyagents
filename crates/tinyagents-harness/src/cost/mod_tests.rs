@@ -9,6 +9,93 @@ use super::*;
 use crate::cost::ModelPricing;
 use tinyinference_llm::usage::Usage;
 
+fn contribution(
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_input_tokens: u64,
+    known_usd: f64,
+    source: CostSource,
+) -> UsageContribution {
+    UsageContribution {
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        cost: CostTally { known_usd, source },
+    }
+}
+
+#[test]
+fn inclusive_subagent_rollup_preserves_root_when_there_are_no_children() {
+    let root = contribution(10, 20, 4, 0.75, CostSource::Estimated);
+
+    assert_eq!(roll_up_inclusive_subagent_usage(root, []), root);
+}
+
+#[test]
+fn inclusive_subagent_rollup_adds_root_and_each_inclusive_child_once() {
+    let root = contribution(10, 20, 4, 0.75, CostSource::Charged);
+    // These entries already include their own nested usage; the flat API
+    // consumes only these totals and has no child tree to traverse.
+    let inclusive_child = contribution(7, 5, 3, 0.5, CostSource::Charged);
+    let second_child = contribution(11, 2, 8, 0.25, CostSource::Estimated);
+    let result = roll_up_inclusive_subagent_usage(root, [inclusive_child, second_child]);
+
+    assert_eq!(result.input_tokens, 28);
+    assert_eq!(result.output_tokens, 27);
+    assert_eq!(result.cached_input_tokens, 15);
+    assert_eq!(result.cost.known_usd, 1.5);
+    assert_eq!(result.cost.source, CostSource::Estimated);
+    assert_eq!(result.cost.usd(), Some(1.5));
+}
+
+#[test]
+fn inclusive_subagent_rollup_counts_equal_children_without_identity_deduplication() {
+    let child = contribution(7, 5, 3, 0.5, CostSource::Charged);
+    let result = roll_up_inclusive_subagent_usage(
+        contribution(1, 2, 0, 0.25, CostSource::Charged),
+        [child, child],
+    );
+
+    assert_eq!(result.input_tokens, 15);
+    assert_eq!(result.output_tokens, 12);
+    assert_eq!(result.cached_input_tokens, 6);
+    assert_eq!(result.cost.known_usd, 1.25);
+}
+
+#[test]
+fn inclusive_subagent_rollup_saturates_token_totals_and_keeps_cached_as_subset() {
+    let result = roll_up_inclusive_subagent_usage(
+        contribution(
+            u64::MAX - 2,
+            u64::MAX - 1,
+            u64::MAX - 3,
+            1.0,
+            CostSource::Charged,
+        ),
+        [contribution(5, 4, 6, 2.0, CostSource::Charged)],
+    );
+
+    assert_eq!(result.input_tokens, u64::MAX);
+    assert_eq!(result.output_tokens, u64::MAX);
+    assert_eq!(result.cached_input_tokens, u64::MAX);
+    assert_eq!(result.cost.known_usd, 3.0);
+}
+
+#[test]
+fn inclusive_subagent_rollup_retains_known_cost_when_any_source_is_unknown() {
+    let result = roll_up_inclusive_subagent_usage(
+        contribution(1, 2, 0, 0.75, CostSource::Charged),
+        [
+            contribution(3, 4, 1, 0.5, CostSource::Estimated),
+            contribution(5, 6, 2, 0.0, CostSource::Unknown),
+        ],
+    );
+
+    assert_eq!(result.cost.known_usd, 1.25);
+    assert_eq!(result.cost.source, CostSource::Unknown);
+    assert_eq!(result.cost.usd(), None);
+}
+
 fn pricing() -> ModelPricing {
     ModelPricing {
         input_per_token: Some(0.001),
@@ -18,6 +105,103 @@ fn pricing() -> ModelPricing {
         output_reasoning_per_token: Some(0.003),
         ..ModelPricing::default()
     }
+}
+
+#[test]
+fn subagent_usage_rollup_deduplicates_replayed_runs_but_keeps_distinct_runs() {
+    let usage = |run_id: &str, task_id: &str, input_tokens, cost| SubagentUsage {
+        run_id: run_id.into(),
+        task_id: task_id.into(),
+        input_tokens,
+        output_tokens: 7,
+        cached_input_tokens: 5,
+        cost: CostTally {
+            known_usd: cost,
+            source: CostSource::Estimated,
+        },
+        children: Vec::new(),
+    };
+    let first_run = usage("run-1", "task", 12, 0.25);
+    let second_run = usage("run-2", "task", 8, 0.5);
+    let rollup = roll_up_subagent_usage(
+        100,
+        20,
+        40,
+        CostTally {
+            known_usd: 1.0,
+            source: CostSource::Charged,
+        },
+        [first_run.clone(), first_run, second_run],
+    );
+    assert_eq!(rollup.input_tokens, 120);
+    assert_eq!(rollup.output_tokens, 34);
+    assert_eq!(rollup.cached_input_tokens, 50);
+    assert_eq!(rollup.cost.known_usd, 1.75);
+    assert_eq!(rollup.cost.source, CostSource::Estimated);
+    assert_eq!(rollup.subagents.len(), 2);
+}
+
+#[test]
+fn model_budget_clones_share_the_same_ledger() {
+    use tinyinference_llm::model::budget::{Budget, SpendLimits};
+
+    let budget = ModelBudget::new(
+        Budget::new(SpendLimits {
+            tokens: Some(50),
+            cost_micros: Some(100),
+        }),
+        tinyinference_llm::model::budget::CallBudget {
+            input_tokens: 1_000,
+            output_tokens: 10,
+            cost_micros: 20,
+        },
+    );
+    let child = budget.clone();
+    assert_eq!(child.ledger.snapshot(), budget.ledger.snapshot());
+    assert_eq!(child.ledger.snapshot().spent.tokens, 0);
+}
+
+#[test]
+fn nested_usage_rollup_counts_root_child_and_grandchild_once() {
+    let grandchild = SubagentUsage {
+        run_id: "grandchild-run".into(),
+        task_id: "grandchild".into(),
+        input_tokens: 3,
+        output_tokens: 2,
+        cached_input_tokens: 1,
+        cost: CostTally {
+            known_usd: 0.3,
+            source: CostSource::Charged,
+        },
+        children: Vec::new(),
+    };
+    let child = SubagentUsage {
+        run_id: "child-run".into(),
+        task_id: "child".into(),
+        input_tokens: 5,
+        output_tokens: 4,
+        cached_input_tokens: 2,
+        cost: CostTally {
+            known_usd: 0.5,
+            source: CostSource::Charged,
+        },
+        children: vec![grandchild.clone()],
+    };
+    let rollup = roll_up_subagent_usage(
+        10,
+        8,
+        4,
+        CostTally {
+            known_usd: 1.0,
+            source: CostSource::Charged,
+        },
+        [child, grandchild],
+    );
+    assert_eq!(rollup.input_tokens, 18);
+    assert_eq!(rollup.output_tokens, 14);
+    assert_eq!(rollup.cached_input_tokens, 7);
+    assert_eq!(rollup.cost.known_usd, 1.8);
+    assert_eq!(rollup.subagents.len(), 2);
 }
 
 #[test]

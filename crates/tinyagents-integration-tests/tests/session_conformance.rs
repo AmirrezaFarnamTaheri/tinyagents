@@ -4,7 +4,7 @@
 //! the same contract suite is run against every backend the crate owns, so a
 //! defect in one cannot hide behind another. The run ledger is certified on the
 //! memory and sqlite drivers. `TranscriptHistory` genuinely has two
-//! implementations — the production file-backed one and the in-memory test
+//! implementations — the production driver-backed one and the in-memory test
 //! double — and both are certified here.
 
 mod common;
@@ -17,7 +17,7 @@ use tinyagents_session::testkit::InMemoryTranscriptHistory;
 use tinyagents_session::testkit::conformance::{
     run_ledger_conformance, transcript_history_conformance,
 };
-use tinyagents_session::transcript::{FileTranscriptHistory, TranscriptMeta};
+use tinyagents_session::transcript::TranscriptMeta;
 
 #[tokio::test]
 async fn run_ledger_satisfies_the_conformance_suite_on_memory() {
@@ -55,10 +55,19 @@ fn contract_meta() -> TranscriptMeta {
 }
 
 #[test]
-fn file_transcript_history_satisfies_the_conformance_suite() {
-    let dir = tempfile::tempdir().unwrap();
-    let history = FileTranscriptHistory::new(dir.path(), "session", contract_meta()).unwrap();
-    transcript_history_conformance(&history);
+fn driver_transcript_history_satisfies_the_conformance_suite() {
+    use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
+    let stores = DriverSessionStores::new(
+        Arc::new(tinystoragedrivers_core::MemoryStorage::new()),
+        tinystoragedrivers_core::Scope::local(),
+    )
+    .unwrap();
+    let history = stores
+        .for_agent("contract")
+        .transcripts
+        .open_stem("session", contract_meta())
+        .unwrap();
+    transcript_history_conformance(history.as_ref());
 }
 
 #[test]

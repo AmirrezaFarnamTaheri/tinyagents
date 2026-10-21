@@ -761,7 +761,7 @@ pub struct DisplayMessage {
     /// `failure: true`).
     pub failure_detail: Option<String>,
     /// Who delivered this line out of band, when it was written by
-    /// [`append_background_message`](super::append_background_message)
+    /// [`append_background_message`](super::append_background_message_in)
     /// rather than by a live turn. `None` for every turn-written line.
     pub background: Option<BackgroundOrigin>,
 }
@@ -790,53 +790,12 @@ pub struct DisplaySessionTranscript {
     pub records: Vec<DisplayRecord>,
 }
 
-/// Aggregated token/cost usage for a chat thread, summed across **all** of the
-/// thread's root session transcripts (a thread reopened across days/restarts
-/// produces several files). `last_turn_*`, `model`, and `updated` come from the
-/// newest transcript so the UI can render a context-window gauge for the most
-/// recent turn. Returns `None` when no transcript exists yet (a brand-new
-/// thread with no completed turns).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ThreadUsageSummary {
-    /// Orchestrator (parent) token totals — the root transcript(s) only. Root
-    /// transcripts never include sub-agent calls (those go to a separate
-    /// observer + their own `__` transcript files); see [`Self::subagents`].
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cached_input_tokens: u64,
-    pub cost_usd: f64,
-    pub turn_count: usize,
-    /// Input/output tokens of the most recent assistant turn (context gauge).
-    pub last_turn_input_tokens: u64,
-    pub last_turn_output_tokens: u64,
-    /// Model that served the most recent turn, if recorded.
-    pub model: Option<String>,
-    /// RFC-3339 `updated` of the newest transcript.
-    pub updated: String,
-    /// Per-archetype sub-agent spend, reconstructed from the thread's `__`
-    /// sub-agent transcripts (grouped by `agent_name`).
-    pub subagents: Vec<SubagentArchetypeUsage>,
-}
-
-/// One sub-agent archetype's summed spend within a thread (e.g. all `coder`
-/// runs). `model` is the model that served one of its runs, used to price it.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct SubagentArchetypeUsage {
-    pub agent_id: String,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cached_input_tokens: u64,
-    /// How many sub-agent runs of this archetype contributed.
-    pub runs: usize,
-    pub model: Option<String>,
-}
-
 // ── Background appends ───────────────────────────────────────────────
 
 /// Where an out-of-band transcript line came from, recorded on the line as an
 /// additive top-level `background` field.
 ///
-/// Written by [`append_background_message`](super::append_background_message).
+/// Written by [`append_background_message`](super::append_background_message_in).
 /// A reader that predates the field keeps the line as an ordinary message (the
 /// field lands in the line's unknown-field catch-all), so old binaries resume
 /// the delivered message exactly like a new one does.
@@ -851,7 +810,7 @@ pub struct BackgroundOrigin {
     pub provenance: serde_json::Value,
 }
 
-/// Options for [`append_background_message`](super::append_background_message).
+/// Options for [`append_background_message`](super::append_background_message_in).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackgroundAppend {
     /// Idempotency key; must be non-empty. See [`BackgroundOrigin::idempotency_key`].
@@ -881,7 +840,7 @@ impl BackgroundAppend {
     }
 }
 
-/// What [`append_background_message`](super::append_background_message) did.
+/// What [`append_background_message`](super::append_background_message_in) did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackgroundAppendOutcome {
     /// The message was appended to head generation `generation`.

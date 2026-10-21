@@ -31,7 +31,11 @@ fn meta() -> TranscriptMeta {
 }
 
 fn provider() -> DriverSessionStores {
-    DriverSessionStores::new(Arc::new(MemoryStorage::new()) as Arc<dyn StorageBackend>).unwrap()
+    DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()) as Arc<dyn StorageBackend>,
+        tinystoragedrivers_core::Scope::local(),
+    )
+    .unwrap()
 }
 
 fn write(workspace: &Path, stem: &str, text: &str) -> std::path::PathBuf {
@@ -110,4 +114,72 @@ fn markers_are_per_agent_scope() {
     import_transcripts_once(&provider, "a", dir.path()).unwrap();
     let other = import_transcripts_once(&provider, "b", dir.path()).unwrap();
     assert!(matches!(other, OnceOutcome::Imported { marked: true, .. }));
+}
+
+#[test]
+fn the_marker_is_a_migrations_record() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "s", "x");
+    let provider = provider();
+    import_transcripts_once(&provider, "a", dir.path()).unwrap();
+    let (scoped, _) = provider.scoped_for("a").unwrap();
+    let done = provider
+        .bridge()
+        .run(async move {
+            tinystoragedrivers_core::Migrations::new(&scoped)
+                .done(MIGRATION_OWNER, TRANSCRIPT_IMPORT_STEP)
+                .await
+        })
+        .unwrap()
+        .unwrap();
+    assert!(done);
+}
+
+#[test]
+fn a_v1_marker_is_carried_over_instead_of_rescanning() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "s", "x");
+    let provider = provider();
+    let (scoped, _) = provider.scoped_for("a").unwrap();
+    let seeded = scoped.clone();
+    provider
+        .bridge()
+        .run(async move {
+            let docs = seeded.documents();
+            docs.ensure_collection(&tinystoragedrivers_core::CollectionSpec::new(
+                "session_import_markers",
+            ))
+            .await
+            .unwrap();
+            docs.put(
+                "session_import_markers",
+                "session_raw_jsonl_v1",
+                serde_json::json!({"imported_at": "2026-01-01T00:00:00Z", "read": 1}),
+                tinystoragedrivers_core::Precondition::Absent,
+            )
+            .await
+            .unwrap();
+        })
+        .unwrap();
+
+    let outcome = import_transcripts_once(&provider, "a", dir.path()).unwrap();
+    assert_eq!(outcome, OnceOutcome::AlreadyImported, "no rescan");
+    let check = scoped.clone();
+    let (migrated, left) = provider
+        .bridge()
+        .run(async move {
+            let migrated = tinystoragedrivers_core::Migrations::new(&check)
+                .done(MIGRATION_OWNER, TRANSCRIPT_IMPORT_STEP)
+                .await
+                .unwrap();
+            let left = check
+                .documents()
+                .get("session_import_markers", "session_raw_jsonl_v1")
+                .await
+                .unwrap();
+            (migrated, left)
+        })
+        .unwrap();
+    assert!(migrated);
+    assert!(left.is_none(), "the v1 marker is removed");
 }

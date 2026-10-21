@@ -3,10 +3,12 @@
 //! chunking and the pure parts of journal export.
 //!
 //! Nothing here performs I/O. Hosts own credentials, URL resolution, transport
-//! and the progress-event collector that produces the spans; they pass an
-//! [`ExportBrand`] so product identity strings stay out of this crate.
+//! choices and product identity; the event collector folds native harness
+//! observations into spans under host-supplied trace context and content policy.
 
+pub mod collector;
 pub mod ingestion_batch;
+pub mod ingestion_otlp;
 #[cfg(feature = "langfuse")]
 pub mod journal_export;
 pub mod otlp;

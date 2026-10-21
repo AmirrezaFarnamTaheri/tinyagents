@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use tinyagents_harness::CancellationToken;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::retry::RetryPolicy;
-use tinyagents_runtime::ToolSnapshot;
+use tinyagents_harness::tool::ToolSnapshot;
 use tinyinference_llm::message::Message;
 
 use super::*;
@@ -490,4 +490,130 @@ async fn an_over_budget_run_still_gets_the_result_policy() {
         SubagentOutcomeKind::Incomplete(ref inc) if inc.kind == IncompleteKind::BudgetExceeded
     ));
     assert!(result.outcome.output.chars().count() <= 80);
+}
+
+#[tokio::test]
+async fn cloned_in_flight_registry_coalesces_runs_across_driver_instances() {
+    struct GatedExecutor {
+        started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        release: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+        attempts: AtomicU32,
+    }
+
+    #[async_trait]
+    impl SubagentExecutor<String> for GatedExecutor {
+        async fn execute(
+            &self,
+            execution: SubagentExecution<String>,
+        ) -> Result<SubagentOutcome, SubagentError> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            if let Some(started) = self.started.lock().unwrap().take() {
+                let _ = started.send(());
+            }
+            if let Some(release) = self.release.lock().await.take() {
+                let _ = release.await;
+            }
+            Ok(completed(&execution.prepared.task_id, "leader result"))
+        }
+    }
+
+    let in_flight = SubagentInFlight::new();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let leader_executor = Arc::new(GatedExecutor {
+        started: Mutex::new(Some(started_tx)),
+        release: tokio::sync::Mutex::new(Some(release_rx)),
+        attempts: AtomicU32::new(0),
+    });
+    let follower_executor = Executor::new(ok_with("follower must not execute"));
+    let leader = SubagentDriver::new(SubagentCapabilities {
+        planner: Some(Arc::new(Planner(plain()))),
+        executor: Some(leader_executor.clone()),
+        persistence: Some(Arc::new(Memory::default())),
+    })
+    .unwrap()
+    .with_shared_in_flight(in_flight.clone());
+    let follower =
+        driver(plain(), follower_executor.clone()).with_shared_in_flight(in_flight.clone());
+    let leader_request = request("shared-task");
+    let key = leader_request.task_key().clone();
+    let leader_token = CancellationToken::new();
+    let leader_token_for_task = leader_token.clone();
+    let leader_task =
+        tokio::spawn(async move { leader.run(leader_request, leader_token_for_task).await });
+
+    started_rx.await.unwrap();
+    let entry = in_flight.get(&key).expect("leader reserved the task key");
+    let follower_task = tokio::spawn(async move {
+        follower
+            .run(request("shared-task"), CancellationToken::new())
+            .await
+    });
+    for _ in 0..10_000 {
+        if entry.waiter_count() == 1 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(entry.waiter_count(), 1, "second driver joined the leader");
+
+    let _ = release_tx.send(());
+    let leader_result = leader_task.await.unwrap().unwrap();
+    let follower_result = follower_task.await.unwrap().unwrap();
+    assert_eq!(leader_result.outcome.output, "leader result");
+    assert_eq!(follower_result.outcome.output, "leader result");
+    assert_eq!(follower_executor.attempts.load(Ordering::SeqCst), 0);
+    assert_eq!(leader_executor.attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        follower_result.disposition,
+        SubagentPersistenceDisposition::TerminalExisting
+    );
+}
+
+#[tokio::test]
+async fn aborting_shared_flight_leader_wakes_other_drivers() {
+    let in_flight = SubagentInFlight::new();
+    let leader_executor = Executor::hanging();
+    let follower_executor = Executor::new(ok_with("follower must not execute"));
+    let leader = driver(plain(), leader_executor.clone()).with_shared_in_flight(in_flight.clone());
+    let follower =
+        driver(plain(), follower_executor.clone()).with_shared_in_flight(in_flight.clone());
+    let leader_request = request("aborted-shared-task");
+    let key = leader_request.task_key().clone();
+    let leader_task =
+        tokio::spawn(async move { leader.run(leader_request, CancellationToken::new()).await });
+    for _ in 0..10_000 {
+        if leader_executor.attempts.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(leader_executor.attempts.load(Ordering::SeqCst), 1);
+    let entry = in_flight.get(&key).expect("leader reserved the task key");
+    let follower_task = tokio::spawn(async move {
+        follower
+            .run(request("aborted-shared-task"), CancellationToken::new())
+            .await
+    });
+    for _ in 0..10_000 {
+        if entry.waiter_count() == 1 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(entry.waiter_count(), 1, "second driver joined the leader");
+
+    leader_task.abort();
+    let leader_join = tokio::time::timeout(std::time::Duration::from_secs(10), leader_task)
+        .await
+        .expect("aborting the leader must complete its task handle")
+        .expect_err("leader task must report cancellation");
+    assert!(leader_join.is_cancelled());
+    assert!(entry.is_complete(), "leader drop must publish a result");
+    let follower_result = tokio::time::timeout(std::time::Duration::from_secs(10), follower_task)
+        .await
+        .expect("leader drop must wake the follower")
+        .unwrap();
+    assert_eq!(follower_result, Err(SubagentError::Cancelled));
+    assert_eq!(follower_executor.attempts.load(Ordering::SeqCst), 0);
 }

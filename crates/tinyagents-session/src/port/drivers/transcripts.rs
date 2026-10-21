@@ -20,11 +20,13 @@
 //! database) are serialized: the loser re-reads, sees the winner's entry, and
 //! decides again — which is also how a write that races a seal is refused.
 //!
-//! [`INDEX`] holds one small document per stem with the lookup fields
-//! (`thread_id`, `agent_id`, `agent_name`, `subagent`, `created_at`), so
+//! [`INDEX`] holds one small document per stem (id `Key::of([stem])`) with the
+//! lookup fields (`thread_id`, `agent_id`, `agent_name`, `subagent`), so
 //! "newest root transcript of this thread" is one indexed query instead of a
-//! scan of every log. It is refreshed after each write that changes them. A
-//! successor generation is reserved there before its predecessor is sealed.
+//! scan of every log. Its creation time is the document's `_created_ms`
+//! metadata, which the driver keeps. It is refreshed after each write that
+//! changes the fields. A successor generation is reserved as a `tsd.leases`
+//! record (see `transcripts_reservation.rs`) before its predecessor is sealed.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -33,9 +35,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tinyagents_harness::store::SchemaAdmission;
+use tinystoragedrivers_core::primitives::{Leases, Repo};
 use tinystoragedrivers_core::{
-    Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, IndexSpec,
-    Precondition, Query, Sort, StorageError, Version,
+    Blocking, CREATED_FIELD, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter,
+    ID_FIELD, IndexSpec, Key, Query, Sort, StorageError, WriteOptions,
 };
 use tokio::sync::{Mutex, OnceCell};
 
@@ -45,11 +48,16 @@ use crate::transcript::{
     TranscriptMeta, TranscriptPartial, TranscriptRead, TranscriptTurn, TurnUsage,
     same_transcript_messages, session_stem, stamped_rows,
 };
+use reservation::Reservation;
+pub(super) use reservation::leases_spec;
 
 /// One document per transcript stem: the lookup fields.
-pub(super) const INDEX: &str = "session_transcripts";
+pub(super) const INDEX: &str = "session.transcripts";
 /// One document per write to a transcript: its append-only log.
-pub(super) const ENTRIES: &str = "session_transcript_entries";
+pub(super) const ENTRIES: &str = "session.transcript_entries";
+
+/// The body version both collections are written at.
+pub(crate) const SCHEMA_VERSION: u32 = 2;
 
 /// Index refresh attempts after a durable write before leaving the repair
 /// to the next write or read.
@@ -58,34 +66,14 @@ const INDEX_ATTEMPTS: usize = 3;
 /// Insert attempts before a contended write gives up.
 const CAS_ATTEMPTS: usize = 64;
 
-/// How old an unwritten generation reservation must be before another
-/// compaction may take it over. A reservation that old was left by a process
-/// that stopped between reserving and writing; without a takeover its
-/// sealed predecessor would refuse every later write.
-const STALE_RESERVATION_MS: i64 = 30_000;
-
-/// Longest id before it is hashed, leaving room under the driver's limit for
-/// an entry's `#<seq>` suffix.
-const MAX_KEY_LEN: usize = 400;
-
-/// A document id for `parts`: length-prefixed so no two tuples collide, and
-/// replaced by its SHA-256 when it would exceed [`MAX_KEY_LEN`].
-pub(super) fn doc_key(parts: &[&str]) -> String {
-    let joined: String = parts
-        .iter()
-        .map(|part| format!("{}:{part}", part.len()))
-        .collect::<Vec<_>>()
-        .join("/");
-    if joined.len() <= MAX_KEY_LEN {
-        joined
-    } else {
-        use sha2::{Digest, Sha256};
-        format!("h:{}", hex::encode(Sha256::digest(joined.as_bytes())))
-    }
+/// The id of `stem`'s index document.
+fn index_id(stem: &str) -> Result<String, StorageError> {
+    Key::of([stem]).map(|key| key.as_str().to_owned())
 }
 
-fn entry_id(stem: &str, seq: u64) -> String {
-    format!("{}#{seq:010}", doc_key(&[stem]))
+/// The id of entry `seq` of `stem`: zero-padded, so ids list in log order.
+fn entry_id(stem: &str, seq: u64) -> Result<String, StorageError> {
+    Key::of([stem, format!("{seq:010}").as_str()]).map(|key| key.as_str().to_owned())
 }
 
 /// Whether `stem` names a sub-agent transcript: `__` separates a parent stem
@@ -93,10 +81,6 @@ fn entry_id(stem: &str, seq: u64) -> String {
 fn is_subagent(stem: &str) -> bool {
     stem.split_once("__")
         .is_some_and(|(parent, child)| !parent.is_empty() && !child.is_empty())
-}
-
-fn now_rfc3339() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
 }
 
 fn serialization(error: &serde_json::Error) -> StorageError {
@@ -170,10 +154,9 @@ struct Replay {
     sealed: bool,
     /// The lookup fields last written to [`INDEX`] by this handle.
     indexed: Option<Value>,
-    /// The version of the generation reservation this handle was opened
-    /// with, until its first write claims it (see
-    /// [`HistoryInner::claim_reservation`]).
-    reservation: Option<Version>,
+    /// The generation reservation this handle was opened with, until its
+    /// first write claims it (see [`HistoryInner::claim_reservation`]).
+    reservation: Option<Reservation>,
 }
 
 impl Replay {
@@ -216,16 +199,32 @@ pub(super) fn collection_specs() -> [CollectionSpec; 2] {
             .index(IndexSpec::new("by_stem", ["stem", "seq"]))
             .index(IndexSpec::new("by_stem_written", ["stem", "written"])),
         CollectionSpec::new(INDEX)
-            .index(IndexSpec::new("by_thread", ["thread_id", "created_at"]))
+            .index(IndexSpec::new("by_thread", ["thread_id", CREATED_FIELD]))
             .index(IndexSpec::new(
                 "by_agent_name",
-                ["agent_name", "created_at"],
+                ["agent_name", CREATED_FIELD],
             ))
-            .index(IndexSpec::new("by_agent_id", ["agent_id", "created_at"])),
+            .index(IndexSpec::new("by_agent_id", ["agent_id", CREATED_FIELD])),
     ]
 }
 
-/// Admits both collections, once per locator.
+/// `query` ordered newest first by the index document's creation time, ties
+/// broken by id so the order is stable.
+fn newest_first(query: Query) -> Query {
+    query
+        .sort(Sort::desc(CREATED_FIELD))
+        .sort(Sort::desc(ID_FIELD))
+}
+
+/// `query` ordered oldest first, with the same stable tie-break.
+pub(super) fn oldest_first(query: Query) -> Query {
+    query
+        .sort(Sort::asc(CREATED_FIELD))
+        .sort(Sort::asc(ID_FIELD))
+}
+
+/// Admits the collections (and the lease collection reservations use), once
+/// per locator.
 #[derive(Debug, Default)]
 struct Declared {
     admitted: OnceCell<()>,
@@ -239,6 +238,9 @@ impl Declared {
                 for spec in collection_specs() {
                     self.schema_admission.admit(docs.as_ref(), &spec).await?;
                 }
+                self.schema_admission
+                    .admit(docs.as_ref(), &leases_spec())
+                    .await?;
                 Ok(())
             })
             .await
@@ -258,6 +260,31 @@ where
 
 // ── History ──────────────────────────────────────────────────────────
 
+/// The typed handles a locator and its histories write through.
+struct Tables {
+    /// Writes of [`ENTRIES`] at [`SCHEMA_VERSION`].
+    entries: Repo<Value>,
+    /// Writes of [`INDEX`] at [`SCHEMA_VERSION`].
+    index: Repo<Value>,
+    /// Generation reservations.
+    leases: Leases,
+}
+
+impl Tables {
+    fn new(docs: &Arc<dyn DocumentStore>) -> Self {
+        let options = WriteOptions::new().schema(SCHEMA_VERSION);
+        Self {
+            entries: Repo::new(docs, ENTRIES)
+                .expect("the entries collection name is valid")
+                .with_options(options),
+            index: Repo::new(docs, INDEX)
+                .expect("the index collection name is valid")
+                .with_options(options),
+            leases: Leases::new(docs),
+        }
+    }
+}
+
 /// A [`TranscriptHistory`] bound to one stem of a driver-backed locator.
 ///
 /// Handles are cheap and independent: two handles on one stem (or two
@@ -271,6 +298,7 @@ pub struct DriverTranscriptHistory {
 
 struct HistoryInner {
     docs: Arc<dyn DocumentStore>,
+    tables: Arc<Tables>,
     declared: Arc<Declared>,
     stem: String,
     seed: TranscriptMeta,
@@ -412,13 +440,9 @@ impl HistoryInner {
                 fields.insert("seq".into(), json!(seq));
             }
             match self
-                .docs
-                .put(
-                    ENTRIES,
-                    &entry_id(&self.stem, seq),
-                    doc,
-                    Precondition::Absent,
-                )
+                .tables
+                .entries
+                .insert(&entry_id(&self.stem, seq)?, &doc)
                 .await
             {
                 Ok(_) => {
@@ -459,60 +483,27 @@ impl HistoryInner {
     }
 
     /// Claims the generation reservation this handle was opened with, once,
-    /// before its first write: a compare-and-swap from the reserved version.
-    /// If another process took the reservation over in the meantime (this
-    /// one stalled past [`STALE_RESERVATION_MS`]), the generation is theirs
-    /// and this handle's writes are refused instead of overwriting it.
+    /// before its first write: a renewal of the lease it reserved. If another
+    /// process took the reservation over in the meantime (this one stalled
+    /// past the reservation's lifetime), the generation is theirs and this
+    /// handle's writes are refused instead of overwriting it.
     async fn claim_reservation(&self, replay: &mut Replay) -> anyhow::Result<()> {
-        let Some(reserved) = replay.reservation else {
+        let Some(held) = replay.reservation.as_ref() else {
             return Ok(());
         };
-        let claim = json!({
-            "stem": self.stem,
-            "subagent": is_subagent(&self.stem),
-            "written": false,
-            "created_at": now_rfc3339(),
-            "reserved_at": chrono::Utc::now().timestamp_millis(),
-        });
-        match self
-            .docs
-            .put(
-                INDEX,
-                &doc_key(&[&self.stem]),
-                claim,
-                Precondition::Version(reserved),
-            )
-            .await
-        {
-            Ok(_) => {
-                replay.reservation = None;
-                Ok(())
-            }
-            Err(error) if error.kind() == ErrorKind::Conflict => anyhow::bail!(
-                "session generation {} was taken over by another writer; reload the session",
-                self.stem
-            ),
-            Err(error) => Err(error.into()),
-        }
+        reservation::claim(&self.tables.leases, &self.stem, held).await?;
+        replay.reservation = None;
+        Ok(())
     }
 
     /// Releases the reservation of a generation this handle never wrote.
     async fn release_reservation(&self, replay: &mut Replay) -> Result<(), StorageError> {
-        let Some(reserved) = replay.reservation.take() else {
+        let Some(held) = replay.reservation.take() else {
             return Ok(());
         };
-        match self
-            .docs
-            .delete(
-                INDEX,
-                &doc_key(&[&self.stem]),
-                Precondition::Version(reserved),
-            )
+        reservation::release(&self.tables.leases, &self.stem, &held)
             .await
-        {
-            Err(error) if error.kind() != ErrorKind::Conflict => Err(error),
-            _ => Ok(()),
-        }
+            .map(drop)
     }
 
     /// Brings the index up to this replay on a read, best effort. A write
@@ -536,7 +527,7 @@ impl HistoryInner {
     /// Fenced by log position: the document records the entry it was built
     /// from (`indexed_seq`), and a handle whose replay is older than that
     /// leaves it alone, so a delayed writer never puts back stale lookup
-    /// fields. The write itself is a compare-and-swap on the version read.
+    /// fields. The write itself is one [`Repo::update`] compare-and-swap.
     async fn index(&self, replay: &mut Replay) -> Result<(), StorageError> {
         if !replay.written {
             return Ok(());
@@ -554,46 +545,28 @@ impl HistoryInner {
             return Ok(());
         }
         let seq = replay.next_seq.saturating_sub(1);
-        let id = doc_key(&[&self.stem]);
-        for _ in 0..CAS_ATTEMPTS {
-            let existing = self.docs.get(INDEX, &id).await?;
-            let newer = existing.as_ref().is_some_and(|found| {
-                found.doc.get("written") == Some(&json!(true))
-                    && found
-                        .doc
-                        .get("indexed_seq")
-                        .and_then(Value::as_u64)
-                        .is_some_and(|indexed| indexed >= seq)
-            });
-            if newer {
-                // Someone indexed this entry or a later one: the document is
-                // at least as fresh as this replay.
-                replay.indexed = Some(fields);
-                return Ok(());
-            }
-            let created_at = existing
-                .as_ref()
-                .and_then(|found| found.doc.get("created_at").cloned())
-                .unwrap_or_else(|| json!(now_rfc3339()));
-            let precondition = existing
-                .as_ref()
-                .map_or(Precondition::Absent, |found| found.unchanged());
-            let mut doc = fields.clone();
-            doc["created_at"] = created_at;
-            doc["indexed_seq"] = json!(seq);
-            match self.docs.put(INDEX, &id, doc, precondition).await {
-                Ok(_) => {
-                    replay.indexed = Some(fields);
-                    return Ok(());
+        self.tables
+            .index
+            .update(&index_id(&self.stem)?, |existing| {
+                let newer = existing.as_ref().is_some_and(|found| {
+                    found.get("written") == Some(&json!(true))
+                        && found
+                            .get("indexed_seq")
+                            .and_then(Value::as_u64)
+                            .is_some_and(|indexed| indexed >= seq)
+                });
+                if newer {
+                    // Someone indexed this entry or a later one: the document
+                    // is at least as fresh as this replay.
+                    return Ok(None);
                 }
-                Err(error) if error.kind() == ErrorKind::Conflict => {}
-                Err(error) => return Err(error),
-            }
-        }
-        Err(StorageError::conflict(format!(
-            "transcript index for {} kept changing under {CAS_ATTEMPTS} attempts",
-            self.stem
-        )))
+                let mut doc = fields.clone();
+                doc["indexed_seq"] = json!(seq);
+                Ok(Some(doc))
+            })
+            .await?;
+        replay.indexed = Some(fields);
+        Ok(())
     }
 }
 
@@ -783,6 +756,7 @@ impl TranscriptHistory for DriverTranscriptHistory {
 #[derive(Clone)]
 pub struct DriverTranscriptLocator {
     docs: Arc<dyn DocumentStore>,
+    tables: Arc<Tables>,
     bridge: Blocking,
     label: String,
     declared: Arc<Declared>,
@@ -815,6 +789,7 @@ impl DriverTranscriptLocator {
         schema_admission: SchemaAdmission,
     ) -> Self {
         Self {
+            tables: Arc::new(Tables::new(&docs)),
             docs,
             bridge,
             label: label.into(),
@@ -835,11 +810,12 @@ impl DriverTranscriptLocator {
         &self,
         stem: &str,
         seed: TranscriptMeta,
-        reservation: Option<Version>,
+        reservation: Option<Reservation>,
     ) -> DriverTranscriptHistory {
         DriverTranscriptHistory {
             inner: Arc::new(HistoryInner {
                 docs: Arc::clone(&self.docs),
+                tables: Arc::clone(&self.tables),
                 declared: Arc::clone(&self.declared),
                 stem: stem.to_string(),
                 seed,
@@ -869,12 +845,11 @@ impl DriverTranscriptLocator {
     fn newest_root_stem(&self, filter: Filter, what: &str) -> Option<String> {
         let found = self.run(|docs, declared| async move {
             declared.ensure(&docs).await?;
-            let query = Query::filter(
+            let query = newest_first(Query::filter(
                 filter
                     .and(Filter::eq("subagent", false))
                     .and(Filter::eq("written", true)),
-            )
-            .sort(Sort::desc("created_at"))
+            ))
             .limit(1);
             Ok(docs
                 .query(INDEX, &query)
@@ -908,47 +883,6 @@ impl DriverTranscriptLocator {
             let seed = discovered_seed(&stem);
             Arc::new(self.handle(&stem, seed)) as Arc<dyn TranscriptRead>
         })
-    }
-
-    /// Reserves `stem` as a new generation: succeeds when nothing is written
-    /// there and no live reservation holds it.
-    async fn reserve(docs: &Arc<dyn DocumentStore>, stem: &str) -> anyhow::Result<Version> {
-        let written = docs
-            .count(
-                ENTRIES,
-                &Filter::eq("stem", stem).and(Filter::eq("written", true)),
-            )
-            .await?;
-        anyhow::ensure!(written == 0, "session generation already exists");
-        let id = doc_key(&[stem]);
-        let now = chrono::Utc::now().timestamp_millis();
-        let reservation = json!({
-            "stem": stem,
-            "subagent": is_subagent(stem),
-            "written": false,
-            "created_at": now_rfc3339(),
-            "reserved_at": now,
-        });
-        let precondition = match docs.get(INDEX, &id).await? {
-            None => Precondition::Absent,
-            Some(found) => {
-                let stale = found.doc.get("written") == Some(&json!(false))
-                    && found
-                        .doc
-                        .get("reserved_at")
-                        .and_then(Value::as_i64)
-                        .is_some_and(|at| now - at >= STALE_RESERVATION_MS);
-                anyhow::ensure!(stale, "session generation already exists or is reserved");
-                found.unchanged()
-            }
-        };
-        match docs.put(INDEX, &id, reservation, precondition).await {
-            Ok(version) => Ok(version),
-            Err(error) if error.kind() == ErrorKind::Conflict => {
-                anyhow::bail!("session generation already exists or is reserved")
-            }
-            Err(error) => Err(error.into()),
-        }
     }
 }
 
@@ -1132,15 +1066,16 @@ impl DriverTranscriptLocator {
         let reservation = {
             let stem = stem.clone();
             let docs = Arc::clone(&self.docs);
+            let tables = Arc::clone(&self.tables);
             let declared = Arc::clone(&self.declared);
             run_on(&self.bridge, async move {
                 declared.ensure(&docs).await?;
-                Ok(Self::reserve(&docs, &stem).await)
+                Ok(reservation::reserve(&docs, &tables.leases, &stem).await)
             })??
         };
         let predecessor_stem = session_stem(session);
         if let Err(error) = self.handle(&predecessor_stem, seed.clone()).seal(baseline) {
-            self.release(&stem, reservation);
+            self.release(&stem, &reservation);
             return Err(error);
         }
         let mut meta = seed;
@@ -1150,20 +1085,14 @@ impl DriverTranscriptLocator {
         Ok((successor, Arc::new(handle)))
     }
 
-    /// Drops the reservation of `stem` this call made, at the version it
-    /// wrote: if another process has since taken it over or written the
-    /// successor, the document is theirs and stays.
-    fn release(&self, stem: &str, reservation: Version) {
-        let docs = Arc::clone(&self.docs);
-        let id = doc_key(&[stem]);
+    /// Drops the reservation of `stem` this call made, at the epoch it
+    /// took: if another process has since taken it over, the reservation is
+    /// theirs and stays.
+    fn release(&self, stem: &str, held: &Reservation) {
+        let tables = Arc::clone(&self.tables);
+        let (stem_owned, held_owned) = (stem.to_owned(), held.clone());
         let released = run_on(&self.bridge, async move {
-            match docs
-                .delete(INDEX, &id, Precondition::Version(reservation))
-                .await
-            {
-                Err(error) if error.kind() == ErrorKind::Conflict => Ok(false),
-                other => other,
-            }
+            reservation::release(&tables.leases, &stem_owned, &held_owned).await
         });
         if let Err(error) = released {
             tracing::warn!(
@@ -1180,6 +1109,8 @@ impl DriverTranscriptLocator {
 mod adoption;
 #[path = "transcripts_display.rs"]
 mod display;
+#[path = "transcripts_reservation.rs"]
+mod reservation;
 
 #[cfg(test)]
 #[path = "transcripts_tests.rs"]

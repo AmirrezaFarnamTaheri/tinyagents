@@ -71,6 +71,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if matches!(exit, LoopExit::Paused(_))
             && let Some(summary) = ctx.halted_by_guard.take()
         {
+            run.failure_cause = ctx.take_halted_by_guard_cause();
             terminal =
                 TerminalOutcome::halted(summary).with_provider_started(ctx.provider_started());
         }
@@ -644,6 +645,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 && let Some(mapped) = profile.thinking_level_map.get(effort.as_str())
             {
                 request.reasoning = Some(mapped.clone());
+            }
+            // The call after a dead one (`RunPolicy::truncated_empty_reasoning_off`)
+            // goes out without reasoning, after the default and the profile
+            // mapping so neither puts it back. One call only, unless dead calls
+            // kept coming and reasoning-off is now sticky for the run.
+            if std::mem::take(&mut turn_recovery.reasoning_off_next)
+                || turn_recovery.reasoning_off_sticky
+            {
+                tracing::info!(
+                    target: "tinyagents::agent_loop",
+                    run_id = %ctx.run_id(),
+                    "[agent_loop] call after a dead one goes out with reasoning off"
+                );
+                request.reasoning = Some(tinyinference_llm::model::ReasoningConfig::effort(
+                    tinyinference_llm::model::ReasoningEffort::None,
+                ));
             }
 
             // Resolve the structured-output plan against the resolved model (see
@@ -1562,6 +1579,10 @@ pub(super) fn truncated_call_positions(calls: &[ToolCall]) -> std::collections::
 #[cfg(test)]
 #[path = "run_loop_recovery_tests.rs"]
 mod recovery_tests;
+
+#[cfg(test)]
+#[path = "run_loop_dead_call_tests.rs"]
+mod dead_call_tests;
 
 #[cfg(test)]
 #[path = "run_loop_withheld_tests.rs"]

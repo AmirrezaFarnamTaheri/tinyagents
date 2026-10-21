@@ -2,7 +2,7 @@
 
 Driver-backed history for agent sessions (`DriverRunLedger` over any
 `tinystoragedrivers` backend), a restart-survivable ledger for background
-agent/workflow execution, a JSONL-backed transcript store for KV-cache-stable resume, and a driver-backed chat
+agent/workflow execution, a store-port transcript seam for KV-cache-stable resume, and a driver-backed chat
 thread/message store for the product-facing chat log.
 
 ## Why this is a top-level module
@@ -20,7 +20,7 @@ would imply a dependency that exists in neither direction.
 | `harness::store` | "what is this run working with right now?" | during a run |
 | `graph::checkpoint` | "how do I resume this interrupted run?" | until resumed |
 | **`session` (driver ledger)** | "what happened, what did it cost, how did runs nest?" | indefinitely |
-| **`session::transcript` (JSONL)** | "what exact messages did the model see?" | indefinitely, resumed verbatim |
+| **`session::transcript` (store port)** | "what exact messages did the model see?" | indefinitely, resumed verbatim |
 | **`session::threads` (driver)** | "which chats does the user have, and what is in them?" | indefinitely |
 
 The driver-backed history (`run_ledger`) is queryable history that
@@ -32,14 +32,11 @@ stream a provider (and its prompt cache) already saw; see its own
 
 ## Layout
 
-The ledger lives wherever the host's storage backend puts it; the transcript
-and thread files are still derived from the workspace root:
+Everything lives wherever the host's storage backend puts it:
 
 ```text
-{host storage backend}                          ← sessions, run ledger (collections)
-{workspace_dir}/session_raw/{stem}.jsonl        ← JSONL: transcripts (source of truth)
-{workspace_dir}/sessions/YYYY_MM_DD/{stem}.md   ← human-readable transcript view
-(chat threads + messages live in the storage driver, not on disk)
+{host storage backend}                          ← sessions, run ledger, transcripts, chat threads (collections)
+{workspace_dir}/session_raw/{stem}.jsonl        ← classic transcripts: read once by legacy::import_transcripts_once; rewritten in place only by legacy::rewrite_legacy_transcripts
 ```
 
 ## Public surface
@@ -58,20 +55,20 @@ reachable under `session::`, `session::run_ledger::`, and
 - **Run ledger** — agent runs, workflow runs, teams, members, tasks, run events,
   and telemetry, with the claim/completion coordination primitives — see its
   own [README](./run_ledger/README.md)
-- **Transcripts** — full-rewrite and append-only writers, model-context and
-  display readers, thread lookups and usage summaries — see its own
-  [README](./transcript/README.md)
+- **Transcripts** — the `TranscriptLocator`/`TranscriptHistory` store seam,
+  background appends, the per-session turn lock, thread spend and the display
+  view — see its own [README](./transcript/README.md)
 - **Chat threads** — `DriverConversationStore` and its wire types (re-exported at
   the root) under `session::threads` — see its own [README](./threads/README.md)
 - **Store port** — `SessionStoreProvider`, `AgentStores`, `TurnStates`,
-  `InMemorySessionStores`, and `DriverSessionStores` over a `tinystoragedrivers` backend — see
+  `InMemorySessionStores`, `DriverSessionStores`, and `RebindableSessionStores` over a `tinystoragedrivers` backend — see
   [`docs/modules/session/store-port.md`](../../../docs/modules/session/store-port.md)
 - **Legacy import** — `legacy::import_workspace` and
   `DriverRunLedger::import_legacy_database` (feature `legacy-import`)
 - **Testkit** — `testkit::conformance::run_ledger_conformance` and
   `transcript_history_conformance`: contract suites certifying that a run
   ledger workspace or a `TranscriptHistory` implementation behaves like the
-  bundled ones. Run against the memory and SQLite run ledgers and both `FileTranscriptHistory` and the in-memory
+  bundled ones. Run against the memory and SQLite run ledgers and both the driver-backed and the in-memory
   `testkit::InMemoryTranscriptHistory` double in
   `crates/tinyagents-integration-tests/tests/session_conformance.rs`.
 
@@ -81,11 +78,11 @@ reachable under `session::`, `session::run_ledger::`, and
 
 | Collection | Holds |
 | --- | --- |
-| `session_history_sessions` | one document per session; lineage via `parentSessionId` |
-| `session_history_messages` | per-message content, optional reasoning, model, tokens, cost |
-| `session_history_tool_calls` | tool name, input, bounded output, status, duration |
-| `session_history_fts` | search rows over session name, message content, tool name |
-| `session_history_counters` | dense message and tool-call id counters |
+| `history.sessions` | one document per session; lineage via `parent_session_id`, times in `started_ms` / `ended_ms` |
+| `history.messages` | per-message content, optional reasoning, model, tokens, cost |
+| `history.tool_calls` | tool name, input, bounded output, status, duration |
+| `history.search` | search rows over session name, message content, tool name |
+| `tsd.counters` (`history`, `messages` / `tool_calls`) | dense message and tool-call id counters; a failed commit leaves a gap |
 | run-ledger collections | agent and workflow runs, run events and telemetry, teams, members, tasks |
 
 A classic `sessions.db`, `session_raw/` transcripts and turn-state JSON import

@@ -30,7 +30,7 @@ use tinyagents_harness::middleware::{
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::steering::SteeringHandle;
 use tinyagents_harness::tool::EarlyExitHook;
-use tinyagents_harness::turn_run_finalize::{TurnEndInputs, detect_hit_cap};
+use tinyagents_harness::turn_run_finalize::{TurnEndInputs, detect_hit_cap_with_cause};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::ChatModel;
 
@@ -61,7 +61,7 @@ pub struct TurnPlan<State, C> {
     /// Fired once when the turn completes (see [`TurnControls::defer_turn_completed`](super::TurnControls::defer_turn_completed)).
     pub completion: Option<Arc<dyn TurnCompletionSink>>,
     /// Refuse to run when the harness's declared tools differ from the
-    /// session's frozen [`crate::ToolSnapshot`]. On by default.
+    /// session's frozen [`tinyagents_harness::tool::ToolSnapshot`]. On by default.
     pub enforce_tool_snapshot: bool,
 }
 
@@ -193,7 +193,7 @@ impl TurnTail {
         drop(self.guard);
         let early_exit = self.hook.and_then(|hook| hook.take());
         let hit_cap = run.is_some_and(|run| {
-            detect_hit_cap(
+            detect_hit_cap_with_cause(
                 run,
                 &TurnEndInputs {
                     max_iterations: self.max_iterations,
@@ -202,6 +202,7 @@ impl TurnTail {
                     breaker_halt: None,
                     wrap_up_injected: false,
                 },
+                run.failure_cause.as_ref(),
             )
         });
         let report = TurnReport {

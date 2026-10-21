@@ -23,9 +23,12 @@ rich vocabulary.
 
 `diagnostics()` reports missing required fields, empty entries, and duplicate
 tool/subagent names; `is_valid()` checks that no diagnostics remain.
-`load_file()` requires a custom prompt, rejects parse and semantic failures,
-and stamps file provenance only on success. `load_dir()` appends valid
-lowercase `.toml` files non-recursively and skips invalid entries with warnings.
+`parse_str()` parses TOML without filesystem access or semantic validation and
+stamps caller-supplied provenance, for embedded definitions whose host owns
+runtime-specific setup. `load_file()` requires a custom prompt, rejects parse
+and semantic failures, and stamps file provenance only on success.
+`load_dir()` appends valid lowercase `.toml` files non-recursively and skips
+invalid entries with warnings.
 
 `DefinitionRegistry` provides asynchronous lookup, listing, and delegate
 resolution. `InMemoryDefinitionRegistry` keeps first-write-wins identities

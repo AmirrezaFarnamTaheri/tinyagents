@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use tinyagents_harness::CancellationToken;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::run_queue::{QueueLane, RunQueue, RunQueueHandle};
-use tinyagents_runtime::ToolSnapshot;
+use tinyagents_harness::tool::ToolSnapshot;
 use tinyagents_tasks::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
 use tinyinference_llm::message::Message;
 
@@ -54,6 +54,22 @@ impl SubagentExecutor<String> for Executor {
         execution: SubagentExecution<String>,
     ) -> Result<SubagentOutcome, SubagentError> {
         (self.0)(&execution.prepared.task_id)
+    }
+}
+
+struct KeyRecordingExecutor(Arc<Mutex<Vec<SubagentTaskKey>>>);
+
+#[async_trait]
+impl SubagentExecutor<String> for KeyRecordingExecutor {
+    async fn execute(
+        &self,
+        execution: SubagentExecution<String>,
+    ) -> Result<SubagentOutcome, SubagentError> {
+        self.0.lock().unwrap().push(execution.task_key.clone());
+        Ok(SubagentOutcome::completed(
+            execution.prepared.task_id,
+            "done",
+        ))
     }
 }
 
@@ -117,6 +133,58 @@ fn request(task_id: &str) -> SubagentRequest<String> {
         .child(RunConfig::new(format!("run-{task_id}")), "d".to_owned())
         .unwrap();
     SubagentRequest::fresh_from_parent(&parent, child, task_id, (), "go", None).unwrap()
+}
+
+fn request_in_scope(parent_id: &str, root_id: &str, thread_id: &str) -> SubagentRequest<String> {
+    let mut config = RunConfig::new(parent_id);
+    config.lineage.root_run_id = tinyagents_harness::ids::RunId::new(root_id);
+    config.thread_id = Some(tinyagents_harness::ids::ThreadId::new(thread_id));
+    let parent = RunContext::new(config, "d".to_owned());
+    let child = parent
+        .child(RunConfig::new("child-run"), "d".to_owned())
+        .unwrap();
+    SubagentRequest::fresh_from_parent(&parent, child, "same-task", (), "go", None).unwrap()
+}
+
+#[tokio::test]
+async fn executor_receives_full_scope_when_raw_task_ids_are_reused() {
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let driver = SubagentDriver::new(SubagentCapabilities {
+        planner: Some(Arc::new(Planner {
+            mode: None,
+            parent: None,
+        })),
+        executor: Some(Arc::new(KeyRecordingExecutor(observed.clone()))),
+        persistence: Some(Arc::new(Memory::default())),
+    })
+    .unwrap();
+
+    driver
+        .run(
+            request_in_scope("parent-a", "root-a", "thread-a"),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    driver
+        .run(
+            request_in_scope("parent-b", "root-b", "thread-b"),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+    let observed = observed.lock().unwrap();
+    assert_eq!(observed.len(), 2);
+    assert_eq!(observed[0].task_id, "same-task");
+    assert_eq!(observed[1].task_id, "same-task");
+    assert_ne!(observed[0], observed[1]);
+    assert_eq!(observed[0].parent_run_id, "parent-a");
+    assert_eq!(observed[0].root_run_id, "root-a");
+    assert_eq!(observed[0].thread_id.as_deref(), Some("thread-a"));
+    assert_eq!(observed[1].parent_run_id, "parent-b");
+    assert_eq!(observed[1].root_run_id, "root-b");
+    assert_eq!(observed[1].thread_id.as_deref(), Some("thread-b"));
 }
 
 fn driver(

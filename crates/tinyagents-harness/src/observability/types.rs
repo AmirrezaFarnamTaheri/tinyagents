@@ -192,6 +192,25 @@ pub trait HarnessEventJournal: Send + Sync {
         Ok((offset..).zip(window).collect())
     }
 
+    /// Closes `run_id`'s journal once the run is finished and nothing will be
+    /// appended to it again.
+    ///
+    /// Sealing never changes what a reader observes: every offset, event id
+    /// and page reads back exactly as before. A durable journal stores a
+    /// sealed run compactly and then applies its retention period. The host
+    /// calls this when a run ends normally; [`reap_orphaned_runs_and_seal`]
+    /// does it for runs a restart left behind. Sealing is idempotent, a run
+    /// that wrote nothing is a no-op, and an observation appended to a sealed
+    /// run is refused by a journal that seals.
+    ///
+    /// The default does nothing, for a journal that has no sealed form.
+    ///
+    /// [`reap_orphaned_runs_and_seal`]: crate::observability::reap_orphaned_runs_and_seal
+    async fn seal_run(&self, run_id: &str) -> Result<()> {
+        let _ = run_id;
+        Ok(())
+    }
+
     /// Returns observations for `run_id` from `offset` whose
     /// [`AgentEvent::kind`][crate::events::AgentEvent::kind] is in
     /// `kinds`. An empty `kinds` slice matches everything. This is the

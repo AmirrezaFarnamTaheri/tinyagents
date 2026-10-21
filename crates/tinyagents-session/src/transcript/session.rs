@@ -6,7 +6,7 @@
 //!
 //! 1. Every cold boot produced a new stem, so one conversation accumulated
 //!    several transcript files. Resume picked the newest by `_meta.created`
-//!    ([`super::find_root_transcript_for_thread`]), so any file that persisted
+//!    (`root_for_thread`, [`super::TranscriptLocator`]), so any file that persisted
 //!    less than it was seeded with silently shortened the conversation for
 //!    every session after it.
 //! 2. Two processes over one workspace each minted their own stem and neither
@@ -42,8 +42,8 @@ pub(crate) const SUBAGENT_SEPARATOR: &str = "__";
 /// passes its `thread_id`. `agent_id` scopes it, because one caller-supplied
 /// key can legitimately be handed to several independently configured agents
 /// and each needs its own transcript (see
-/// [`super::find_root_transcript_for_thread_scoped`] for the bug that taught us
-/// this). `generation` distinguishes the segments a compaction creates.
+/// [`TranscriptLocator::root_for_thread_scoped`](super::TranscriptLocator::root_for_thread_scoped)
+/// for the bug that taught us this). `generation` distinguishes the segments a compaction creates.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SessionRef {
     /// The host's stable name for the conversation.

@@ -138,6 +138,9 @@ pub struct HostedError {
     /// Which bound fired, set exactly when `kind` is
     /// [`HostedErrorKind::Timeout`] and `None` otherwise.
     pub timeout_bound: Option<TimeoutBound>,
+    /// Host dispatch refusal details when the failure was a physical
+    /// admission refusal. The value is a closed, content-free classification.
+    pub dispatch_refusal: Option<crate::cost::DispatchRefusal>,
     /// The accumulated transcript, usage, and executed-tool summary as far as
     /// the run got before failing, when available.
     pub run: Option<Box<AgentRun>>,
@@ -159,9 +162,9 @@ fn classify_hosted_error(error: &TinyAgentsError) -> HostedErrorKind {
         TinyAgentsError::StreamIdleTimeout(_) => HostedErrorKind::StreamIdleTimeout,
         TinyAgentsError::RateLimited(_) => HostedErrorKind::RateLimited,
         TinyAgentsError::Timeout(_) | TinyAgentsError::CallTimeout(_) => HostedErrorKind::Timeout,
-        TinyAgentsError::LimitExceeded(_) | TinyAgentsError::SubAgentDepth(_) => {
-            HostedErrorKind::LimitExceeded
-        }
+        TinyAgentsError::LimitExceeded(_)
+        | TinyAgentsError::SubAgentDepth(_)
+        | TinyAgentsError::PhysicalDispatchAdmission(_) => HostedErrorKind::LimitExceeded,
         TinyAgentsError::Validation(_) | TinyAgentsError::Steering(_) => HostedErrorKind::Policy,
         TinyAgentsError::Provider(_) | TinyAgentsError::Model(_) => HostedErrorKind::Provider,
         _ => HostedErrorKind::Internal,
@@ -205,6 +208,10 @@ fn hosted_error(error: &TinyAgentsError, mut run: AgentRun) -> HostedError {
         kind,
         message: hosted_error_message(kind).to_string(),
         timeout_bound: classify_timeout_bound(error),
+        dispatch_refusal: match error {
+            TinyAgentsError::PhysicalDispatchAdmission(refusal) => Some(*refusal),
+            _ => None,
+        },
         run: Some(Box::new(run)),
     }
 }
@@ -221,6 +228,9 @@ fn hosted_error(error: &TinyAgentsError, mut run: AgentRun) -> HostedError {
 /// `HostedError` existed.
 impl From<HostedError> for TinyAgentsError {
     fn from(error: HostedError) -> Self {
+        if let Some(refusal) = error.dispatch_refusal {
+            return Self::PhysicalDispatchAdmission(refusal);
+        }
         match error.kind {
             HostedErrorKind::Cancelled => TinyAgentsError::Cancelled,
             HostedErrorKind::Timeout => match error.timeout_bound {
@@ -239,6 +249,10 @@ impl From<HostedError> for TinyAgentsError {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "agent_dispatch_refusal_tests.rs"]
+mod dispatch_refusal_tests;
 
 /// A host-owned turn request.
 ///
@@ -1134,16 +1148,17 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
     {
         let observer = std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(
             move |run, succeeded, error: Option<String>| {
-                spawn_host_finalizer(
-                    prepared,
-                    run,
-                    succeeded,
-                    error.map(|error| {
-                        let _ = error;
-                        tracing::warn!("[host] agent run failed");
-                        "agent run failed".to_string()
-                    }),
-                );
+                let error = error.map(|error| {
+                    let error = terminal_error_message(&error);
+                    tracing::warn!(
+                        run_id = %prepared.run_id,
+                        agent_id = %prepared.binding.agent_id,
+                        %error,
+                        "[host] agent run failed"
+                    );
+                    error
+                });
+                spawn_host_finalizer(prepared, run, succeeded, error);
             },
         )
             as crate::context::TerminalObserver)));
@@ -1243,6 +1258,20 @@ fn sanitize_hosted_preparation_error(error: TinyAgentsError) -> TinyAgentsError 
     }
 }
 
+/// Longest failure text a terminal log line or [`ProgressEvent::Error`] carries.
+const TERMINAL_ERROR_MAX_CHARS: usize = 500;
+
+/// The failed run's error, credential-scrubbed and bounded, for the warn log
+/// and the progress event. Without it a failed hosted run logged no reason
+/// anywhere (openhuman#7830); scrubbing keeps provider/tool text that echoes
+/// a secret out of both.
+fn terminal_error_message(error: &str) -> String {
+    crate::close::truncate_chars(
+        &tinyinference_core::sanitize::scrub_credentials(error),
+        TERMINAL_ERROR_MAX_CHARS,
+    )
+}
+
 /// Runs [`finish_host_turn`] on a Tokio task, tolerating the case where the
 /// terminal observer fires from a context with no ambient runtime (for
 /// example, a `Drop` impl running during unwind).
@@ -1308,6 +1337,9 @@ async fn finish_host_turn<State: Send + Sync, Ctx: Send + Sync + 'static>(
         .with_usage(run.usage.usage);
     for tool in &run.executed_tools {
         summary.record_tool(tool);
+    }
+    for outcome in &run.tool_outcomes {
+        summary.record_tool_outcome(outcome.clone());
     }
     if let Some(memory) = &prepared.binding.host.memory {
         let item = crate::host::NewMemory::new(&output)
@@ -1461,3 +1493,7 @@ async fn screen_stored<State: Send + Sync>(
 #[cfg(test)]
 #[path = "agent_progress_dispatcher_tests.rs"]
 mod progress_dispatcher_tests;
+
+#[cfg(test)]
+#[path = "agent_terminal_error_tests.rs"]
+mod terminal_error_tests;

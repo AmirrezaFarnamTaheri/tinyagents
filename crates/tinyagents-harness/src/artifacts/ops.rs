@@ -12,6 +12,7 @@
 //! side: parsing pointers back out of a handoff payload and logging both ends
 //! of the exchange. See [`super`] for the convention this module implements.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tinystoragedrivers_core::{BlobStore, MemoryStorage, Scope, StorageBackend};
@@ -312,6 +313,129 @@ impl ArtifactOffload {
         Ok((artifact, stored.text))
     }
 
+    /// Check that the filesystem copy of a relative artifact key is allowed.
+    ///
+    /// This must run before [`write`](Self::write) when the caller requires
+    /// the blob store and filesystem copy to have the same path boundary.
+    pub async fn validate_materialization_target(
+        &self,
+        root: &Path,
+        key: &str,
+    ) -> Result<PathBuf, OffloadError> {
+        let (kind, relative) = split_key(key).ok_or_else(|| OffloadError::PathEscape {
+            root: format!("{OUTPUTS_DIR}|{SCRATCH_DIR}"),
+            path: key.to_string(),
+        })?;
+        let key = self.resolve(kind, relative)?;
+        let canonical_root = tokio::fs::canonicalize(root)
+            .await
+            .map_err(|error| OffloadError::Materialization(error.to_string()))?;
+        let target = canonical_root.join(&key);
+        let parent = target
+            .parent()
+            .ok_or_else(|| OffloadError::Materialization("artifact target has no parent".into()))?;
+
+        // Resolve the deepest existing ancestor so an existing symlink cannot
+        // redirect the eventual write outside the chosen artifact root.
+        let (canonical_parent, unresolved_parent) = canonicalize_existing_ancestor(parent).await?;
+        if !canonical_parent.starts_with(&canonical_root) {
+            return Err(OffloadError::PathEscape {
+                root: canonical_root.display().to_string(),
+                path: canonical_parent.display().to_string(),
+            });
+        }
+        let resolved_parent = canonical_parent.join(unresolved_parent);
+        let resolved_target = resolved_parent.join(target.file_name().unwrap_or_default());
+        self.check_materialization_policy(&resolved_target)?;
+        Ok(target)
+    }
+
+    fn check_materialization_policy(&self, target: &Path) -> Result<(), OffloadError> {
+        if let Some(policy) = self.policy.as_deref() {
+            if policy.is_internal_state(target) {
+                return Err(OffloadError::InternalState {
+                    path: target.display().to_string(),
+                });
+            }
+            if policy
+                .internal_root()
+                .is_some_and(|root| target.starts_with(root))
+            {
+                return Err(OffloadError::InternalRoot {
+                    path: target.display().to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Materialize a previously stored artifact under `root` using an atomic
+    /// same-directory temporary file. Existing destination symlinks are
+    /// replaced by rename rather than opened or followed.
+    pub async fn materialize_to_fs(&self, root: &Path, key: &str) -> Result<PathBuf, OffloadError> {
+        let target = self.validate_materialization_target(root, key).await?;
+        let body = self.read(key).await?.ok_or_else(|| {
+            OffloadError::Materialization("artifact is missing from blob store".into())
+        })?;
+        let parent = target
+            .parent()
+            .ok_or_else(|| OffloadError::Materialization("artifact target has no parent".into()))?;
+        let checked = self.validate_materialization_target(root, key).await?;
+        if checked != target {
+            return Err(OffloadError::Materialization(
+                "artifact target changed during validation".into(),
+            ));
+        }
+
+        #[cfg(unix)]
+        {
+            let root = tokio::fs::canonicalize(root)
+                .await
+                .map_err(|error| OffloadError::Materialization(error.to_string()))?;
+            let relative_parent = parent
+                .strip_prefix(&root)
+                .map_err(|error| OffloadError::Materialization(error.to_string()))?
+                .to_path_buf();
+            let file_name = target
+                .file_name()
+                .ok_or_else(|| {
+                    OffloadError::Materialization("artifact target has no file name".into())
+                })?
+                .to_os_string();
+            let bytes = body.into_bytes();
+            tokio::task::spawn_blocking(move || {
+                atomic_write_under_dir(&root, &relative_parent, &file_name, &bytes)
+            })
+            .await
+            .map_err(|error| OffloadError::Materialization(error.to_string()))?
+            .map_err(|error| OffloadError::Materialization(error.to_string()))?;
+        }
+        #[cfg(not(unix))]
+        {
+            let canonical_root = tokio::fs::canonicalize(root)
+                .await
+                .map_err(|error| OffloadError::Materialization(error.to_string()))?;
+            let relative_parent = parent
+                .strip_prefix(&canonical_root)
+                .map_err(|error| OffloadError::Materialization(error.to_string()))?
+                .to_path_buf();
+            let file_name = target
+                .file_name()
+                .ok_or_else(|| {
+                    OffloadError::Materialization("artifact target has no file name".into())
+                })?
+                .to_os_string();
+            let bytes = body.into_bytes();
+            tokio::task::spawn_blocking(move || {
+                atomic_write_with_capability(&canonical_root, &relative_parent, &file_name, &bytes)
+            })
+            .await
+            .map_err(|error| OffloadError::Materialization(error.to_string()))?
+            .map_err(|error| OffloadError::Materialization(error.to_string()))?;
+        }
+        Ok(target)
+    }
+
     /// Read an artifact back by the key a pointer carried
     /// ([`OffloadedArtifact::relative_path`]).
     ///
@@ -335,13 +459,189 @@ impl ArtifactOffload {
     }
 }
 
-/// Split `outputs/x` / `workspace/x` into its kind and the name below it.
+#[cfg(any(not(unix), test))]
+pub(super) fn atomic_write_with_capability(
+    root: &Path,
+    relative_parent: &Path,
+    target_name: &std::ffi::OsStr,
+    body: &[u8],
+) -> std::io::Result<()> {
+    use cap_std::ambient_authority;
+    use cap_std::fs::{Dir, OpenOptions};
+    use std::{
+        io::Write,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    let root = Dir::open_ambient_dir(root, ambient_authority())?;
+    root.create_dir_all(relative_parent)?;
+    let parent = root.open_dir(relative_parent)?;
+    let mut temp = None;
+    for _ in 0..32 {
+        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let name = format!(".artifact-{}-{id}.tmp", std::process::id());
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        match parent.open_with(&name, &options) {
+            Ok(mut file) => {
+                if let Err(error) = file.write_all(body) {
+                    let _ = parent.remove_file(&name);
+                    return Err(error);
+                }
+                file.sync_all()?;
+                temp = Some(name);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    let temp =
+        temp.ok_or_else(|| std::io::Error::other("could not allocate temporary artifact file"))?;
+    if let Err(error) = parent.rename(&temp, &parent, target_name) {
+        let _ = parent.remove_file(&temp);
+        return Err(error);
+    }
+    Ok(())
+}
+
+async fn canonicalize_existing_ancestor(path: &Path) -> Result<(PathBuf, PathBuf), OffloadError> {
+    let mut cursor = path.to_path_buf();
+    let mut suffix = Vec::new();
+    loop {
+        match tokio::fs::canonicalize(&cursor).await {
+            Ok(canonical) => {
+                let mut unresolved = PathBuf::new();
+                for component in suffix.iter().rev() {
+                    unresolved.push(component);
+                }
+                return Ok((canonical, unresolved));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = cursor.file_name().ok_or_else(|| {
+                    OffloadError::Materialization(format!(
+                        "no existing parent for artifact target {}",
+                        path.display()
+                    ))
+                })?;
+                suffix.push(name.to_os_string());
+                if !cursor.pop() {
+                    return Err(OffloadError::Materialization(error.to_string()));
+                }
+            }
+            Err(error) => return Err(OffloadError::Materialization(error.to_string())),
+        }
+    }
+}
+
+#[cfg(unix)]
+pub(super) fn atomic_write_under_dir(
+    root: &Path,
+    relative_parent: &Path,
+    target_name: &std::ffi::OsStr,
+    body: &[u8],
+) -> std::io::Result<()> {
+    use rustix::fs::{AtFlags, Mode, OFlags, mkdirat, open, openat, renameat, unlinkat};
+    use std::{
+        io::Write,
+        os::fd::OwnedFd,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    let mut directory: OwnedFd = open(
+        root,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )?;
+    for component in relative_parent.components() {
+        let std::path::Component::Normal(name) = component else {
+            continue;
+        };
+        // Each segment is opened relative to the already pinned parent and
+        // with NOFOLLOW. A replaced symlink therefore fails closed.
+        let opened = openat(
+            &directory,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        );
+        directory = match opened {
+            Ok(directory) => directory,
+            Err(error) if error == rustix::io::Errno::NOENT => {
+                match mkdirat(&directory, name, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+                    Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                    Err(error) => return Err(error.into()),
+                }
+                openat(
+                    &directory,
+                    name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                    Mode::empty(),
+                )?
+            }
+            Err(error) => return Err(error.into()),
+        };
+    }
+
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    let mut temp_name = None;
+    let mut file = None;
+    for _ in 0..32 {
+        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let name = format!(".artifact-{}-{id}.tmp", std::process::id());
+        match openat(
+            &directory,
+            name.as_str(),
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::RUSR | Mode::WUSR,
+        ) {
+            Ok(fd) => {
+                temp_name = Some(name);
+                file = Some(std::fs::File::from(fd));
+                break;
+            }
+            Err(error) if error == rustix::io::Errno::EXIST => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let temp_name = temp_name.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not allocate temporary artifact file",
+        )
+    })?;
+    let mut file = file.expect("temporary name and file are set together");
+    if let Err(error) = file.write_all(body).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = unlinkat(&directory, temp_name.as_str(), AtFlags::empty());
+        return Err(error);
+    }
+    drop(file);
+    if let Err(error) = renameat(&directory, temp_name.as_str(), &directory, target_name) {
+        let _ = unlinkat(&directory, temp_name.as_str(), AtFlags::empty());
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+/// The pre-v2 directory names, so a path a transcript quoted before the keys
+/// moved under `harness/` still resolves to its (migrated) artifact.
+const LEGACY_DIRS: [(ArtifactKind, &str); 2] = [
+    (ArtifactKind::Output, "outputs"),
+    (ArtifactKind::Scratch, "workspace"),
+];
+
+/// Split `harness/outputs/x` / `harness/workspace/x` (or the legacy `outputs/x` /
+/// `workspace/x`) into its kind and the name below it.
 fn split_key(key: &str) -> Option<(ArtifactKind, &str)> {
     let key = key.trim();
     [ArtifactKind::Output, ArtifactKind::Scratch]
         .into_iter()
-        .find_map(|kind| {
-            key.strip_prefix(kind.subdir())
+        .map(|kind| (kind, kind.subdir()))
+        .chain(LEGACY_DIRS)
+        .find_map(|(kind, dir)| {
+            key.strip_prefix(dir)
                 .and_then(|rest| rest.strip_prefix('/'))
                 .map(|rest| (kind, rest))
         })
@@ -395,4 +695,59 @@ pub async fn offload_oversized_result(
             (output, None)
         }
     }
+}
+
+/// Offload an oversized result only when its eventual filesystem target passes
+/// the host's path policy, then materialize the stored (redacted) artifact.
+///
+/// The materialization target is checked before the first blob-store write.
+/// Any refusal or I/O failure keeps the original inline result.
+pub async fn offload_oversized_result_to_fs(
+    output: String,
+    offload: &ArtifactOffload,
+    threshold_bytes: usize,
+    read_tool: &str,
+    materialize_root: &Path,
+) -> (String, Option<OffloadedArtifact>) {
+    if !should_offload(output.len(), threshold_bytes) {
+        return (output, None);
+    }
+    let name = offload.default_result_name();
+    let key = match offload.resolve(ArtifactKind::Output, &name) {
+        Ok(key) => key,
+        Err(error) => {
+            tracing::warn!(error = %error, "[artifact] refusing unsafe filesystem target");
+            return (output, None);
+        }
+    };
+    if let Err(error) = offload
+        .validate_materialization_target(materialize_root, &key)
+        .await
+    {
+        tracing::warn!(error = %error, path = %key, "[artifact] refusing unsafe filesystem target before storage");
+        return (output, None);
+    }
+    let (artifact, stored) = match offload
+        .write_returning_stored(ArtifactKind::Output, &name, &output)
+        .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(error = %error, "[artifact] offload refused; keeping inline result");
+            return (output, None);
+        }
+    };
+    if let Err(error) = offload
+        .materialize_to_fs(materialize_root, &artifact.relative_path)
+        .await
+    {
+        tracing::warn!(error = %error, path = %artifact.relative_path, "[artifact] materialization failed; keeping inline result");
+        return (output, None);
+    }
+    let pointer = render_artifact_pointer(
+        &artifact,
+        &build_abstract(&stored, ABSTRACT_BUDGET_CHARS),
+        read_tool,
+    );
+    (pointer, Some(artifact))
 }

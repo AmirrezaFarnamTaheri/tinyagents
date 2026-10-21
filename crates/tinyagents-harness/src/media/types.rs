@@ -8,7 +8,7 @@ use tinyinference_image::MediaReference;
 use tinystoragedrivers_core::{BlobStore, MemoryStorage, Scope, StorageBackend};
 
 /// Sub-directory of the output root that generated media is written into.
-pub const DEFAULT_MEDIA_SUBDIR: &str = "generated-media";
+pub const DEFAULT_MEDIA_SUBDIR: &str = "harness/generated_media";
 
 /// Decides whether a local reference path may be read and sent to a provider,
 /// returning the path to read. Relative paths arrive already joined to the

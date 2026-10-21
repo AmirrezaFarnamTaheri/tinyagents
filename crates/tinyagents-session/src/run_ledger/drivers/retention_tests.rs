@@ -17,7 +17,7 @@ async fn seed(ledger: &DriverRunLedger, id: &str, at: DateTime<Utc>) {
         .documents()
         .put(
             TELEMETRY,
-            &storage::key(&[id]),
+            &storage::key(&[id]).unwrap(),
             storage::encode(&row).unwrap(),
             Precondition::None,
         )
@@ -48,7 +48,7 @@ async fn prunes_only_old_telemetry(backend: &dyn StorageBackend) {
         .documents()
         .put(
             TELEMETRY,
-            &storage::key(&["undated"]),
+            &storage::key(&["undated"]).unwrap(),
             storage::encode(&undated).unwrap(),
             Precondition::None,
         )
@@ -183,7 +183,7 @@ impl DocumentStore for RetentionBoundary {
             self.inner
                 .put(
                     TELEMETRY,
-                    &storage::key(&["old"]),
+                    &storage::key(&["old"]).unwrap(),
                     value.clone(),
                     Precondition::None,
                 )
@@ -224,7 +224,7 @@ async fn concurrent_telemetry_refresh_survives_retention_retry() {
     let backend = MemoryStorage::new();
     let native = backend.for_scope(&Scope::new("a").unwrap()).unwrap();
     let peer = DriverRunLedger::new(native.clone());
-    let cutoff = Utc::now();
+    let cutoff = now();
     seed(&peer, "old", cutoff - Duration::days(1)).await;
     seed(&peer, "other", cutoff - Duration::days(1)).await;
     let mut refreshed = peer
@@ -259,7 +259,7 @@ async fn native_retention_refusal_preserves_all_candidates_and_source() {
     let backend = MemoryStorage::new();
     let native = backend.for_scope(&Scope::new("a").unwrap()).unwrap();
     let peer = DriverRunLedger::new(native.clone());
-    let cutoff = Utc::now();
+    let cutoff = now();
     for id in ["old", "other"] {
         seed(&peer, id, cutoff - Duration::days(1)).await;
     }
@@ -287,10 +287,7 @@ async fn empty_retention_still_requires_native_admission() {
     let backend = MemoryStorage::new();
     let native = backend.for_scope(&Scope::new("a").unwrap()).unwrap();
     let (ledger, boundary) = wrap(&native, None, true);
-    let error = ledger
-        .prune_run_telemetry_before(Utc::now())
-        .await
-        .unwrap_err();
+    let error = ledger.prune_run_telemetry_before(now()).await.unwrap_err();
     assert!(
         matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
     );
@@ -304,7 +301,7 @@ async fn retired_generation_cannot_prune_fresh_telemetry() {
     let scope = Scope::new("a").unwrap();
     let native = backend.for_scope(&scope).unwrap();
     let retained = DriverRunLedger::new(native.clone());
-    let cutoff = Utc::now();
+    let cutoff = now();
     seed(&retained, "old", cutoff - Duration::days(1)).await;
     let receipt = native
         .purge(&PurgeRequest {

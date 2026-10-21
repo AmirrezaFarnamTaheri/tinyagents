@@ -1,21 +1,22 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use tinyagents_harness::tool::{ToolSnapshot, ToolSnapshotError};
+
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
+use crate::test_store::{Destination, fingerprint, memory, read, read_display, seed, try_read};
 use async_trait::async_trait;
 use tinyagents_harness::{
     context::{RunConfig, RunContext},
     runtime::AgentHarness,
 };
 use tinyagents_session::transcript::{
-    DisplayRecord, FileTranscriptLocator, SessionRef, SessionTranscript, TranscriptHistory,
-    TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn,
-    TurnUsage, read_transcript, read_transcript_display, resolve_keyed_transcript_path,
-    session_stem, write_transcript,
+    DisplayRecord, SessionRef, SessionTranscript, TranscriptHistory, TranscriptLocator,
+    TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn, TurnUsage, session_stem,
 };
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::MockModel;
@@ -24,8 +25,8 @@ use tinytools::{Tool, ToolResult, ToolSpec};
 use crate::{
     CommitReceipt, DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, PrefixSnapshot,
     ResumeMode, ResumePreparation, RuntimeError, SessionBuilder, SessionDriver, SessionHooks,
-    SessionStateView, SessionTerminal, SessionTurnOutcome, SessionTurnRequest, ToolSnapshot,
-    TranscriptCodec, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
+    SessionStateView, SessionTerminal, SessionTurnOutcome, SessionTurnRequest, TranscriptCodec,
+    TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 
 struct Driver {
@@ -601,7 +602,7 @@ async fn trailing_input_is_deduplicated_and_tool_collisions_fail_closed() {
                 parameters: serde_json::json!({})
             },
         ]),
-        Err(RuntimeError::ToolNameCollision(_))
+        Err(ToolSnapshotError::NameCollision(_))
     ));
 }
 
@@ -791,9 +792,8 @@ async fn harness_driver_rejects_a_snapshot_not_registered_by_the_harness() {
 }
 
 #[tokio::test]
-async fn file_history_commits_partial_model_history_and_display_only_partial_together() {
-    let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+async fn history_commits_partial_model_history_and_display_only_partial_together() {
+    let locator = memory();
     let codec = Arc::new(Codec {
         turn_usage: Mutex::new(Some(turn_usage())),
         ..Default::default()
@@ -811,7 +811,7 @@ async fn file_history_commits_partial_model_history_and_display_only_partial_tog
         partial: Some(partial),
     })])))
     .codec(codec)
-    .transcript(locator, "agent", meta())
+    .transcript(locator.clone(), "agent", meta())
     .build()
     .unwrap();
     assert!(
@@ -823,19 +823,17 @@ async fn file_history_commits_partial_model_history_and_display_only_partial_tog
             .await
             .is_err()
     );
-    let path = directory.path().join("session_raw/agent.jsonl");
-    let persisted = read_transcript(&path).unwrap();
+    let persisted = read(locator.as_ref(), "agent");
     assert_eq!(persisted.messages[0].content, "recoverable");
     assert_eq!(persisted.messages[0].turn_usage, Some(turn_usage()));
-    assert!(read_transcript_display(&path).unwrap().records.iter().any(|record| matches!(record,
+    assert!(read_display(locator.as_ref(), "agent").records.iter().any(|record| matches!(record,
         DisplayRecord::Message(message) if message.interrupted && message.message.content == "display partial"
     )));
 }
 
 #[tokio::test]
 async fn codec_turn_usage_is_written_with_the_successful_turn_append() {
-    let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     let codec = Arc::new(Codec {
         turn_usage: Mutex::new(Some(turn_usage())),
         ..Default::default()
@@ -844,7 +842,7 @@ async fn codec_turn_usage_is_written_with_the_successful_turn_append() {
         Message::assistant("final"),
     ]))])))
     .codec(codec)
-    .transcript(locator, "agent", meta())
+    .transcript(locator.clone(), "agent", meta())
     .build()
     .unwrap();
 
@@ -856,7 +854,7 @@ async fn codec_turn_usage_is_written_with_the_successful_turn_append() {
         .await
         .unwrap();
 
-    let transcript = read_transcript(&directory.path().join("session_raw/agent.jsonl")).unwrap();
+    let transcript = read(locator.as_ref(), "agent");
     assert_eq!(transcript.messages.len(), 1);
     assert_eq!(transcript.messages[0].content, "final");
     assert_eq!(transcript.messages[0].turn_usage, Some(turn_usage()));
@@ -975,8 +973,7 @@ async fn cancellation_persists_the_rounds_a_cancel_aware_driver_returns() {
         (true, &["stop me", "completed round"][..]),
         (false, &[][..]),
     ] {
-        let directory = tempfile::tempdir().unwrap();
-        let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+        let locator = memory();
         let options = TurnOptions::default();
         let cancellation = options.cancellation.clone();
         let started = Arc::new(tokio::sync::Notify::new());
@@ -985,7 +982,7 @@ async fn cancellation_persists_the_rounds_a_cancel_aware_driver_returns() {
         let mut session = SessionBuilder::new(Arc::new(driver))
             .codec(Arc::new(Codec::default()))
             .hooks(hook)
-            .transcript(locator, "agent", meta())
+            .transcript(locator.clone(), "agent", meta())
             .build()
             .unwrap();
         let turn = tokio::spawn(async move {
@@ -1004,8 +1001,7 @@ async fn cancellation_persists_the_rounds_a_cancel_aware_driver_returns() {
             [SessionTerminal::Cancelled]
         ));
         assert!(events.receipts.lock().unwrap().is_empty());
-        let path = directory.path().join("session_raw/agent.jsonl");
-        let persisted: Vec<String> = read_transcript(&path)
+        let persisted: Vec<String> = try_read(locator.as_ref(), "agent")
             .map(|transcript| transcript.messages.into_iter().map(|m| m.content).collect())
             .unwrap_or_default();
         assert_eq!(persisted, expected, "returns_partial={returns_partial}");
@@ -2055,6 +2051,8 @@ async fn after_commit_receipt_observes_durable_append_and_terminal_follows_it() 
         transcript.delta,
         crate::TranscriptDelta::Append { .. }
     ));
+    assert_eq!(transcript.rows.len(), 1);
+    assert_eq!(transcript.rows[0].content, "ok");
     assert!(matches!(
         events.terminal.lock().unwrap().as_slice(),
         [SessionTerminal::Completed(_)]
@@ -2101,6 +2099,10 @@ async fn receipt_reports_a_compaction_as_replacement_not_an_append_range() {
         receipts[1].transcript.as_ref().unwrap().delta,
         crate::TranscriptDelta::Replace { .. }
     ));
+    assert_eq!(
+        receipts[1].transcript.as_ref().unwrap().rows[0].content,
+        "compacted"
+    );
 }
 
 #[tokio::test]
@@ -2534,7 +2536,7 @@ fn session_outcome(history: Vec<Message>, output: &str) -> DriverOutcome {
 /// reads and appends to the file the first one wrote.
 #[tokio::test]
 async fn a_restarted_session_continues_the_same_transcript() {
-    let directory = tempfile::tempdir().unwrap();
+    let locator = memory();
     let session_ref = SessionRef::scoped("thread-9fa08", "agent-id");
 
     let mut first = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
@@ -2545,11 +2547,7 @@ async fn a_restarted_session_continues_the_same_transcript() {
         "when?",
     ))])))
     .codec(Arc::new(Codec::default()))
-    .session(
-        Arc::new(FileTranscriptLocator::new(directory.path())),
-        session_ref.clone(),
-        meta(),
-    )
+    .session(locator.clone(), session_ref.clone(), meta())
     .build()
     .unwrap();
     first
@@ -2571,11 +2569,7 @@ async fn a_restarted_session_continues_the_same_transcript() {
         "about kashmir",
     ))])))
     .codec(Arc::new(Codec::default()))
-    .session(
-        Arc::new(FileTranscriptLocator::new(directory.path())),
-        session_ref.clone(),
-        meta(),
-    )
+    .session(locator.clone(), session_ref.clone(), meta())
     .build()
     .unwrap();
     let resumed = second
@@ -2598,18 +2592,18 @@ async fn a_restarted_session_continues_the_same_transcript() {
         .await
         .unwrap();
 
-    let roots: Vec<_> = std::fs::read_dir(directory.path().join("session_raw"))
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .collect();
+    let roots = locator
+        .thread_transcripts("thread-9fa08", None)
+        .expect("the thread has transcripts")
+        .roots;
     assert_eq!(
         roots.len(),
         1,
-        "one conversation, one transcript: {roots:?}"
+        "one conversation, one transcript: {:?}",
+        roots.iter().map(|root| &root.stem).collect::<Vec<_>>()
     );
 
-    let persisted = read_transcript(&directory.path().join("session_raw").join(&roots[0])).unwrap();
+    let persisted = roots[0].transcript.read_session().unwrap().unwrap();
     let contents: Vec<&str> = persisted
         .messages
         .iter()
@@ -2634,9 +2628,8 @@ async fn a_restarted_session_continues_the_same_transcript() {
 /// conversation's own history.
 #[tokio::test]
 async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact() {
-    let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
 
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![
         Ok(session_outcome(
@@ -2666,11 +2659,10 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
         )
         .await
         .unwrap();
-    let sealed = directory
-        .path()
-        .join("session_raw")
-        .join(format!("{}.jsonl", session_stem(&session_ref)));
-    let sealed_bytes = std::fs::read(&sealed).unwrap();
+    let sealed = locator
+        .read_session_transcript(&session_ref)
+        .expect("the first generation exists");
+    let sealed_bytes = fingerprint(sealed.as_ref());
 
     session
         .turn(
@@ -2681,15 +2673,14 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
         .unwrap();
 
     assert_eq!(
-        std::fs::read(&sealed).unwrap(),
+        fingerprint(sealed.as_ref()),
         sealed_bytes,
-        "the sealed generation must be byte-identical after a compaction"
+        "the sealed generation must be unchanged after a compaction"
     );
-    let successor = directory.path().join("session_raw").join(format!(
-        "{}.jsonl",
-        session_stem(&session_ref.next_generation())
-    ));
-    let carried = read_transcript(&successor).unwrap();
+    let carried = read(
+        locator.as_ref(),
+        &session_stem(&session_ref.next_generation()),
+    );
     assert_eq!(
         carried
             .messages
@@ -2709,9 +2700,8 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
 /// replaying the sealed one.
 #[tokio::test]
 async fn a_restart_after_a_compaction_resumes_the_head_generation() {
-    let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     locator
         .open_session(&session_ref, meta())
         .unwrap()
@@ -2781,9 +2771,8 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
         }
     }
 
-    let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-prefix", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     let mut thread_meta = meta();
     thread_meta.thread_id = Some("thread-prefix".into());
     let root = locator
@@ -2885,9 +2874,8 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
         ["replacement", "changing history summary", "later"]
     );
 
-    let altered_dir = tempfile::tempdir().unwrap();
     let altered_ref = SessionRef::scoped("altered-prefix", "agent-id");
-    let altered_locator = Arc::new(FileTranscriptLocator::new(altered_dir.path()));
+    let altered_locator = memory();
     let sealed = altered_locator.open_session(&altered_ref, meta()).unwrap();
     for (role, content) in [
         ("system", "old stable"),
@@ -2937,9 +2925,8 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     // A successor that committed a replacement prefix records its own exact
     // boundary. A later cold resume must use that generation's count rather
     // than compare its rows with generation zero's different prompt.
-    let recorded_dir = tempfile::tempdir().unwrap();
     let recorded_ref = SessionRef::scoped("recorded-prefix", "agent-id");
-    let recorded_locator = Arc::new(FileTranscriptLocator::new(recorded_dir.path()));
+    let recorded_locator = memory();
     let sealed = recorded_locator
         .open_session(&recorded_ref, meta())
         .unwrap();
@@ -2982,9 +2969,8 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     assert_eq!(recorded.prefix_snapshot().messages().len(), 1);
     assert_eq!(resumed.history[1].text(), "changing history summary");
 
-    let few_shot_dir = tempfile::tempdir().unwrap();
     let few_shot_ref = SessionRef::scoped("few-shot-prefix", "agent-id");
-    let few_shot_locator = Arc::new(FileTranscriptLocator::new(few_shot_dir.path()));
+    let few_shot_locator = memory();
     let mut few_shot_meta = meta();
     few_shot_meta.prefix_message_count = Some(2);
     let few_shot_history = few_shot_locator
@@ -3021,9 +3007,8 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     // A Thread scan can read a different file from the session-bound write
     // destination. Rebinding to that destination must replace the cached
     // stored-boundary count as well as its raw rows.
-    let rebound_dir = tempfile::tempdir().unwrap();
     let destination_ref = SessionRef::scoped("destination-prefix", "agent-id");
-    let rebound_locator = Arc::new(FileTranscriptLocator::new(rebound_dir.path()));
+    let rebound_locator = memory();
     let mut destination_meta = meta();
     destination_meta.thread_id = Some("shared-prefix-thread".into());
     destination_meta.created = "2026-01-01T00:00:00Z".into();
@@ -3040,21 +3025,22 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
             .append(TranscriptMessage::new(role, content))
             .unwrap();
     }
-    let scanned_path = resolve_keyed_transcript_path(rebound_dir.path(), "2000_other").unwrap();
+    // The scanned root must be the newer one: creation time is whole
+    // milliseconds, so do not create both inside one.
+    std::thread::sleep(std::time::Duration::from_millis(3));
     let mut scanned_meta = meta();
     scanned_meta.thread_id = Some("shared-prefix-thread".into());
     scanned_meta.created = "2026-02-01T00:00:00Z".into();
     scanned_meta.prefix_message_count = Some(1);
-    write_transcript(
-        &scanned_path,
+    seed(
+        rebound_locator.as_ref(),
+        "2000_other",
         &[
             TranscriptMessage::new("system", "scanned stable"),
             TranscriptMessage::new("user", "scanned turn"),
         ],
         &scanned_meta,
-        None,
-    )
-    .unwrap();
+    );
     let mut rebound = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
         .codec(Arc::new(RoleCodec))
         .session(rebound_locator, destination_ref, meta())
@@ -3247,9 +3233,8 @@ async fn session_driver_receives_the_frozen_system_boundary() {
 /// corrupt the destination.
 #[tokio::test]
 async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destination() {
-    let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
 
     // The session's own destination already carries one real message from an
     // earlier session-mode turn.
@@ -3268,16 +3253,15 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
     let mut legacy = meta();
     legacy.thread_id = Some("thread-1".into());
     legacy.created = "zzz-later".into();
-    tinyagents_session::transcript::write_transcript(
-        &directory.path().join("session_raw/legacy_other.jsonl"),
+    seed(
+        locator.as_ref(),
+        "legacy_other",
         &[
             TranscriptMessage::new("user", "legacy one"),
             TranscriptMessage::new("user", "legacy two"),
         ],
         &legacy,
-        None,
-    )
-    .unwrap();
+    );
 
     // The driver extends whatever it was handed by exactly one message.
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
@@ -3311,11 +3295,7 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
     // message: this assertion catches exactly that class of bug rather than
     // merely checking "some content survived", which an append-only writer
     // satisfies by construction even when it drops the wrong number of rows.
-    let destination_path = directory
-        .path()
-        .join("session_raw")
-        .join(format!("{}.jsonl", session_stem(&session_ref)));
-    let on_disk = read_transcript(&destination_path).unwrap();
+    let on_disk = read(locator.as_ref(), &session_stem(&session_ref));
     assert_eq!(
         on_disk.messages.len(),
         3,
@@ -3345,9 +3325,8 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
 /// has its own, different metadata.
 #[tokio::test]
 async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_metadata() {
-    let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
 
     // The destination's own metadata: a distinct `created` from whatever the
     // scan below will find. `agent_id` has to match the builder's seed
@@ -3370,16 +3349,15 @@ async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_me
     let mut legacy = meta();
     legacy.thread_id = Some("thread-1".into());
     legacy.created = "zzz-scanned-created".into();
-    tinyagents_session::transcript::write_transcript(
-        &directory.path().join("session_raw/legacy_other.jsonl"),
+    seed(
+        locator.as_ref(),
+        "legacy_other",
         &[TranscriptMessage::new(
             "user",
             "from a different file entirely",
         )],
         &legacy,
-        None,
-    )
-    .unwrap();
+    );
 
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
         vec![
@@ -3401,11 +3379,7 @@ async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_me
         .await
         .unwrap();
 
-    let destination_path = directory
-        .path()
-        .join("session_raw")
-        .join(format!("{}.jsonl", session_stem(&session_ref)));
-    let on_disk = read_transcript(&destination_path).unwrap();
+    let on_disk = read(locator.as_ref(), &session_stem(&session_ref));
     assert_eq!(
         on_disk.meta.created, "destination-created",
         "the destination's own created timestamp must survive, not the scanned file's"
@@ -3416,9 +3390,8 @@ async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_me
 /// byte-for-byte unchanged — instead of the actual head.
 #[tokio::test]
 async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_generation() {
-    let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     // `ResumeMode::Thread` matches on `_meta.thread_id`, so the seed for both
     // generations needs it set — otherwise `root_for_thread_scoped` finds
     // neither file and `resume` returns early before ever reaching the bind
@@ -3439,11 +3412,10 @@ async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_ge
     head_handle
         .append(TranscriptMessage::new("user", "head generation 1"))
         .unwrap();
-    let sealed_path = directory
-        .path()
-        .join("session_raw")
-        .join(format!("{}.jsonl", session_stem(&session_ref)));
-    let sealed_bytes_before = std::fs::read(&sealed_path).unwrap();
+    let sealed = locator
+        .read_session_transcript(&session_ref)
+        .expect("generation 0 exists");
+    let sealed_bytes_before = fingerprint(sealed.as_ref());
 
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
         vec![
@@ -3466,20 +3438,18 @@ async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_ge
         .unwrap();
 
     assert_eq!(
-        std::fs::read(&sealed_path).unwrap(),
+        fingerprint(sealed.as_ref()),
         sealed_bytes_before,
-        "generation 0 must stay sealed and byte-identical"
+        "generation 0 must stay sealed and unchanged"
     );
-    let head_path = directory.path().join("session_raw").join(format!(
-        "{}.jsonl",
-        session_stem(&session_ref.next_generation())
-    ));
-    let head_contents: Vec<String> = read_transcript(&head_path)
-        .unwrap()
-        .messages
-        .into_iter()
-        .map(|message| message.content)
-        .collect();
+    let head_contents: Vec<String> = read(
+        locator.as_ref(),
+        &session_stem(&session_ref.next_generation()),
+    )
+    .messages
+    .into_iter()
+    .map(|message| message.content)
+    .collect();
     assert!(
         head_contents.contains(&"new turn".to_string()),
         "the new turn must land in the head generation, not the sealed one: {head_contents:?}"
@@ -3491,26 +3461,21 @@ async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_ge
 /// regains the turns newest-wins lookup had stranded.
 #[tokio::test]
 async fn a_first_session_resume_adopts_a_pre_identity_conversation() {
-    let directory = tempfile::tempdir().unwrap();
+    let store = crate::test_store::driver();
     let mut legacy = meta();
     legacy.thread_id = Some("thread-9fa08".into());
     legacy.created = "2026-09-22T07:30:47Z".into();
-    tinyagents_session::transcript::write_transcript(
-        &tinyagents_session::transcript::resolve_keyed_transcript_path(
-            directory.path(),
-            "1790062247_orchestrator",
-        )
-        .unwrap(),
+    seed(
+        store.as_ref(),
+        "1790062247_orchestrator",
         &[TranscriptMessage::new("user", "plan a trip to kashmir")],
         &legacy,
-        None,
-    )
-    .unwrap();
+    );
 
     let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
         .codec(Arc::new(Codec::default()))
         .session(
-            Arc::new(FileTranscriptLocator::new(directory.path())),
+            store,
             SessionRef::scoped("thread-9fa08", "agent-id"),
             meta(),
         )
@@ -3534,11 +3499,10 @@ async fn a_first_session_resume_adopts_a_pre_identity_conversation() {
 
 #[tokio::test]
 async fn a_session_resume_with_no_history_anywhere_loads_nothing() {
-    let directory = tempfile::tempdir().unwrap();
     let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
         .codec(Arc::new(Codec::default()))
         .session(
-            Arc::new(FileTranscriptLocator::new(directory.path())),
+            memory(),
             SessionRef::scoped("thread-fresh", "agent-id"),
             meta(),
         )
@@ -3574,7 +3538,7 @@ fn two_tools() -> ToolSnapshot {
 /// requests can be inspected. `turn` numbers the call so each outcome
 /// extends the stored history instead of reading as a compaction.
 async fn one_file_turn(
-    locator: Arc<FileTranscriptLocator>,
+    locator: Arc<dyn TranscriptLocator>,
     sent: ToolSnapshot,
     retain: bool,
     turn: usize,
@@ -3605,60 +3569,54 @@ fn recorded_tools_session() -> SessionRef {
     SessionRef::scoped("thread-tools", "agent-id")
 }
 
-fn recorded_tools_path(directory: &std::path::Path) -> std::path::PathBuf {
-    let dir = directory.join("session_raw");
-    let mut files: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
-        .collect();
-    assert_eq!(files.len(), 1, "one transcript for one session: {files:?}");
-    files.remove(0)
-}
-
-fn tools_records(path: &std::path::Path) -> usize {
-    std::fs::read_to_string(path)
-        .unwrap()
-        .lines()
-        .filter(|line| line.contains(r#""kind":"tools""#))
-        .count()
+/// The one transcript a one-session test wrote: its stem.
+fn recorded_tools_stem(locator: &dyn TranscriptLocator) -> String {
+    let roots = locator
+        .thread_transcripts("thread-tools", None)
+        .expect("the thread has a transcript")
+        .roots;
+    assert_eq!(roots.len(), 1, "one transcript for one session");
+    roots[0].stem.clone()
 }
 
 #[tokio::test]
 async fn each_turn_records_the_tools_it_was_sent_with() {
-    let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
-    let (_, recorded) = one_file_turn(locator, two_tools(), false, 0).await;
+    let locator = memory();
+    let (_, recorded) = one_file_turn(locator.clone(), two_tools(), false, 0).await;
 
-    let path = recorded_tools_path(directory.path());
-    let transcript = read_transcript(&path).unwrap();
+    let stem = recorded_tools_stem(locator.as_ref());
+    let transcript = read(locator.as_ref(), &stem);
     assert_eq!(transcript.meta.prefix_message_count, Some(0));
     let stored = ToolSnapshot::from_json(transcript.tools.as_ref().unwrap()).unwrap();
     assert_eq!(tool_names(&stored), vec!["alpha", "beta"]);
     assert_eq!(tool_names(&recorded.unwrap()), vec!["alpha", "beta"]);
     // A request-state record, never a displayed message.
     assert_eq!(
-        read_transcript_display(&path).unwrap().records.len(),
+        read_display(locator.as_ref(), &stem).records.len(),
         transcript.messages.len()
     );
 }
 
 #[tokio::test]
 async fn a_resumed_session_keeps_tools_the_new_process_did_not_rebuild() {
-    let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     one_file_turn(locator.clone(), two_tools(), true, 0).await;
 
     // A "restarted" process that has only rebuilt `alpha` so far.
-    let (driver, recorded) = one_file_turn(locator, tools("alpha"), true, 1).await;
+    let (driver, recorded) = one_file_turn(locator.clone(), tools("alpha"), true, 1).await;
 
     let sent = &driver.requests.lock().unwrap()[0].tools;
     assert_eq!(tool_names(sent), vec!["alpha", "beta"]);
     assert_eq!(tool_names(&recorded.unwrap()), vec!["alpha", "beta"]);
-    // Every ordinary turn records its sent snapshot so concurrent session
-    // handles cannot leave an earlier turn's declarations in force.
-    let path = recorded_tools_path(directory.path());
-    assert_eq!(tools_records(&path), 2);
+    // The turn records its merged snapshot, so the stored declarations are
+    // the retained pair rather than the `alpha` this process rebuilt.
+    let stored = read(locator.as_ref(), &recorded_tools_stem(locator.as_ref()))
+        .tools
+        .unwrap();
+    assert_eq!(
+        tool_names(&ToolSnapshot::from_json(&stored).unwrap()),
+        vec!["alpha", "beta"]
+    );
 }
 
 #[tokio::test]
@@ -3707,32 +3665,32 @@ async fn in_memory_sessions_retain_tools_sent_on_earlier_turns() {
 
 #[tokio::test]
 async fn thread_resume_restores_tools_from_its_write_destination() {
-    let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-tools", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
-    let destination = directory
-        .path()
-        .join("session_raw")
-        .join(format!("{}.jsonl", session_stem(&session_ref)));
+    let locator = memory();
 
+    let destination_rows = [TranscriptMessage::new("user", "destination")];
     locator
         .open_session(&session_ref, meta())
         .unwrap()
-        .append(TranscriptMessage::new("user", "destination"))
-        .unwrap();
-    tinyagents_session::transcript::append_tools_record(&destination, &two_tools().to_json())
+        .append_turn(TranscriptTurn {
+            prev: &[],
+            next: &destination_rows,
+            meta: &meta(),
+            turn_usage: None,
+            request_id: None,
+            tools: Some(&two_tools().to_json()),
+        })
         .unwrap();
 
     let mut scanned_meta = meta();
     scanned_meta.thread_id = Some("thread-tools".into());
     scanned_meta.created = "zzz-scanned-created".into();
-    tinyagents_session::transcript::write_transcript(
-        &directory.path().join("session_raw/scanned.jsonl"),
+    seed(
+        locator.as_ref(),
+        "scanned",
         &[TranscriptMessage::new("user", "scanned")],
         &scanned_meta,
-        None,
-    )
-    .unwrap();
+    );
 
     let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
         Message::user("scanned"),
@@ -3743,7 +3701,7 @@ async fn thread_resume_restores_tools_from_its_write_destination() {
         .codec(Arc::new(Codec::default()))
         .hooks(hook)
         .retain_recorded_tools(true)
-        .session(locator, session_ref, meta())
+        .session(locator.clone(), session_ref, meta())
         .build()
         .unwrap();
 
@@ -3764,18 +3722,17 @@ async fn thread_resume_restores_tools_from_its_write_destination() {
 
 #[tokio::test]
 async fn without_retention_a_changed_tool_set_is_sent_and_recorded_as_is() {
-    let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     one_file_turn(locator.clone(), two_tools(), false, 0).await;
-    let (driver, _) = one_file_turn(locator, tools("alpha"), false, 1).await;
+    let (driver, _) = one_file_turn(locator.clone(), tools("alpha"), false, 1).await;
 
     assert_eq!(
         tool_names(&driver.requests.lock().unwrap()[0].tools),
         vec!["alpha"]
     );
-    let path = recorded_tools_path(directory.path());
-    assert_eq!(tools_records(&path), 2);
-    let stored = read_transcript(&path).unwrap().tools.unwrap();
+    let stored = read(locator.as_ref(), &recorded_tools_stem(locator.as_ref()))
+        .tools
+        .unwrap();
     assert_eq!(
         tool_names(&ToolSnapshot::from_json(&stored).unwrap()),
         vec!["alpha"]
@@ -3784,8 +3741,7 @@ async fn without_retention_a_changed_tool_set_is_sent_and_recorded_as_is() {
 
 #[tokio::test]
 async fn an_exact_tool_turn_neither_merges_nor_records() {
-    let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     one_file_turn(locator.clone(), two_tools(), true, 0).await;
 
     let mut history: Vec<Message> = (0..2).map(|_| Message::user("x")).collect();
@@ -3799,7 +3755,7 @@ async fn an_exact_tool_turn_neither_merges_nor_records() {
         .codec(Arc::new(Codec::default()))
         .hooks(hook)
         .retain_recorded_tools(true)
-        .session(locator, recorded_tools_session(), meta())
+        .session(locator.clone(), recorded_tools_session(), meta())
         .build()
         .unwrap();
     session
@@ -3811,8 +3767,7 @@ async fn an_exact_tool_turn_neither_merges_nor_records() {
         .unwrap();
 
     assert!(driver.requests.lock().unwrap()[0].tools.specs().is_empty());
-    let stored = read_transcript(&recorded_tools_path(directory.path()))
-        .unwrap()
+    let stored = read(locator.as_ref(), &recorded_tools_stem(locator.as_ref()))
         .tools
         .unwrap();
     assert_eq!(
@@ -3823,8 +3778,7 @@ async fn an_exact_tool_turn_neither_merges_nor_records() {
 
 #[tokio::test]
 async fn an_exact_tool_turn_carries_recorded_tools_into_a_compaction_generation() {
-    let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     one_file_turn(locator.clone(), two_tools(), true, 0).await;
 
     // Return a reduced history so persistence opens a successor generation.
@@ -3839,7 +3793,7 @@ async fn an_exact_tool_turn_carries_recorded_tools_into_a_compaction_generation(
         .codec(Arc::new(Codec::default()))
         .hooks(hook)
         .retain_recorded_tools(true)
-        .session(locator, recorded_tools_session(), meta())
+        .session(locator.clone(), recorded_tools_session(), meta())
         .build()
         .unwrap();
     session
@@ -3850,12 +3804,9 @@ async fn an_exact_tool_turn_carries_recorded_tools_into_a_compaction_generation(
         .await
         .unwrap();
 
-    let head = std::fs::read_dir(directory.path().join("session_raw"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| path.to_string_lossy().contains(".g1.jsonl"))
-        .expect("compaction successor must exist");
-    let stored = read_transcript(&head).unwrap().tools.unwrap();
+    let head = locator.head_generation(&recorded_tools_session());
+    assert_eq!(head.generation, 1, "compaction successor must exist");
+    let stored = read(locator.as_ref(), &session_stem(&head)).tools.unwrap();
     assert_eq!(
         tool_names(&ToolSnapshot::from_json(&stored).unwrap()),
         vec!["alpha", "beta"]
@@ -3906,7 +3857,7 @@ async fn resume_adopts_the_stored_prefix_and_its_committed_turns() {
 /// says to: lazily from the *current* workspace dir, "never frozen at build
 /// time". That necessarily yields a fresh `Arc` per `before_resume`.
 struct FreshLocatorEachTurn {
-    workspace_dir: PathBuf,
+    store: Arc<dyn TranscriptLocator>,
     session: SessionRef,
     built: Mutex<usize>,
 }
@@ -3922,7 +3873,7 @@ impl SessionHooks for FreshLocatorEachTurn {
         *self.built.lock().unwrap() += 1;
         Ok(ResumePreparation {
             transcript: Some(TranscriptTarget::for_session(
-                Arc::new(FileTranscriptLocator::new(self.workspace_dir.clone())),
+                Arc::new(Destination::new("store", &self.store)),
                 self.session.clone(),
                 meta(),
             )),
@@ -3962,11 +3913,10 @@ impl SessionHooks for FreshLocatorEachTurn {
 /// The turn count matters: turn one binds, so the guard is only consulted from
 /// turn two onwards. A single-turn test passes either way.
 #[tokio::test]
-async fn a_rebuilt_locator_over_the_same_directory_is_the_same_binding() {
-    let directory = tempfile::tempdir().unwrap();
+async fn a_rebuilt_locator_over_the_same_destination_is_the_same_binding() {
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
     let hook = Arc::new(FreshLocatorEachTurn {
-        workspace_dir: directory.path().to_path_buf(),
+        store: memory(),
         session: session_ref.clone(),
         built: Mutex::new(0),
     });
@@ -4021,34 +3971,33 @@ async fn a_rebuilt_locator_over_the_same_directory_is_the_same_binding() {
 /// The converse: two genuinely different destinations must still be rejected,
 /// so the loosened comparison did not turn the redirection guard off.
 #[tokio::test]
-async fn a_locator_over_a_different_directory_is_not_the_same_binding() {
-    let first = tempfile::tempdir().unwrap();
-    let second = tempfile::tempdir().unwrap();
+async fn a_locator_over_a_different_destination_is_not_the_same_binding() {
+    let store = memory();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
 
     let bound = TranscriptTarget::for_session(
-        Arc::new(FileTranscriptLocator::new(first.path())),
+        Arc::new(Destination::new("store-a", &store)),
         session_ref.clone(),
         meta(),
     );
     let same = TranscriptTarget::for_session(
-        Arc::new(FileTranscriptLocator::new(first.path())),
+        Arc::new(Destination::new("store-a", &store)),
         session_ref.clone(),
         meta(),
     );
     let elsewhere = TranscriptTarget::for_session(
-        Arc::new(FileTranscriptLocator::new(second.path())),
+        Arc::new(Destination::new("store-b", &store)),
         session_ref,
         meta(),
     );
 
     assert!(
         bound.same_binding(&same),
-        "same directory, different allocation: the same durable destination"
+        "same destination, different allocation: the same durable destination"
     );
     assert!(
         !bound.same_binding(&elsewhere),
-        "a different directory is a real redirection and must stay rejected"
+        "a different destination is a real redirection and must stay rejected"
     );
 }
 
@@ -4117,8 +4066,7 @@ async fn explicit_prefix_refresh_preserves_history_and_survives_cold_resume() {
                 .collect())
         }
     }
-    let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path().to_path_buf()));
+    let locator = memory();
     let identity = SessionRef::scoped("managed", "agent-id");
     let prefix = vec![Message::system("base"), Message::system("tools")];
     let first = vec![

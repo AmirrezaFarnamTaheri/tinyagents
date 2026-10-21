@@ -27,6 +27,7 @@
 //! - [`HarnessRunStatus`] — a compact run status snapshot readable without
 //!   holding an in-process stream.
 
+mod generation_enrichment;
 mod types;
 
 pub mod call_dedupe;
@@ -37,6 +38,7 @@ pub mod ordered_sender;
 pub use call_dedupe::{CallDedupe, IterationCursor, advance_iteration};
 pub use cap_pauser::{CapPauser, PauseRecorder};
 pub use compaction_log::log_compacted;
+pub use generation_enrichment::{GenerationEnrichment, GenerationPricing};
 pub use ordered_sender::{DEFAULT_MAX_OVERFLOW, OrderedSender, SendFailure};
 pub use types::*;
 // EventSinkInner is pub(crate) so bring it into scope explicitly for impls
@@ -93,6 +95,13 @@ impl Drop for DispatchGuard<'_> {
 // ---------------------------------------------------------------------------
 // EventSink impls
 // ---------------------------------------------------------------------------
+
+/// The id a sink whose stream id is `stream_id` mints for the event at
+/// `offset`: `{stream_id}-evt-{offset}`. Persisted ids are reproducible from
+/// the pair, which the durable journal relies on to avoid storing them.
+pub(crate) fn canonical_event_id(stream_id: &str, offset: u64) -> crate::ids::EventId {
+    crate::ids::EventId::new(format!("{stream_id}-evt-{offset}"))
+}
 
 impl EventSink {
     /// Creates a new, empty event sink with no registered listeners.
@@ -172,7 +181,7 @@ impl EventSink {
             let mut inner = lock_recovering(&self.inner);
             let offset = inner.next_offset;
             inner.next_offset += 1;
-            let id = crate::ids::EventId::new(format!("{}-evt-{offset}", inner.stream_id));
+            let id = canonical_event_id(&inner.stream_id, offset);
             let record = EventRecord { id, offset, event };
             // The id/offset must still be minted with no listeners — callers
             // (e.g. `HarnessRunStatus::set_last_event`) rely on the returned

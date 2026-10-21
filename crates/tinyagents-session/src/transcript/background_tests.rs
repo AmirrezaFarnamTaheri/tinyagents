@@ -1,11 +1,10 @@
 use super::*;
+use crate::transcript::test_locator::driver_locator;
 use crate::transcript::{
-    DisplayRecord, ToolFailure, TranscriptLocator, TranscriptMeta, TranscriptPart, TranscriptTurn,
-    lock_session_turn, read_transcript, read_transcript_display, resolve_keyed_transcript_path,
-    session_stem,
+    DisplayRecord, ToolFailure, TranscriptHistory, TranscriptLocator, TranscriptMeta,
+    TranscriptPart, TranscriptRead, TranscriptTurn, lock_session_turn,
 };
-use std::path::{Path, PathBuf};
-use tempfile::tempdir;
+use std::sync::Arc;
 
 fn meta() -> TranscriptMeta {
     TranscriptMeta {
@@ -41,10 +40,14 @@ fn options(key: &str) -> BackgroundAppend {
     )
 }
 
+fn locator() -> Arc<dyn TranscriptLocator> {
+    driver_locator()
+}
+
 /// Writes one turn the way the live turn path does: through the session's own
 /// history handle, diffing `next` against `prev`.
 fn live_turn(
-    locator: &FileTranscriptLocator,
+    locator: &dyn TranscriptLocator,
     session: &SessionRef,
     prev: &[TranscriptMessage],
     next: &[TranscriptMessage],
@@ -69,69 +72,72 @@ fn first_turn() -> Vec<TranscriptMessage> {
     ]
 }
 
-fn head_path(dir: &Path, session: &SessionRef) -> PathBuf {
-    let locator = FileTranscriptLocator::new(dir);
+/// The head generation's transcript of `session`.
+fn head(locator: &dyn TranscriptLocator, session: &SessionRef) -> Arc<dyn TranscriptRead> {
     let head = locator.head_generation(session);
-    resolve_keyed_transcript_path(dir, &session_stem(&head)).unwrap()
+    locator
+        .read_session_transcript(&head)
+        .expect("the head generation holds a transcript")
+}
+
+/// The head generation's model-context messages.
+fn head_messages(locator: &dyn TranscriptLocator, session: &SessionRef) -> Vec<TranscriptMessage> {
+    head(locator, session)
+        .read_session()
+        .unwrap()
+        .expect("transcript present")
+        .messages
+}
+
+async fn deliver(
+    locator: &dyn TranscriptLocator,
+    key: &str,
+) -> anyhow::Result<BackgroundAppendOutcome> {
+    append_background_message_in(
+        locator,
+        &session(),
+        TranscriptMessage::assistant("Time to stretch!"),
+        options(key),
+    )
+    .await
 }
 
 #[tokio::test]
 async fn an_appended_message_is_resumed_as_an_assistant_turn() {
-    let dir = tempdir().unwrap();
-    let locator = FileTranscriptLocator::new(dir.path());
-    live_turn(&locator, &session(), &[], &first_turn());
+    let locator = locator();
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
 
-    let outcome = append_background_message(
-        &locator,
-        &session(),
-        TranscriptMessage::assistant("Time to stretch!"),
-        options("run-1"),
-    )
-    .await
-    .unwrap();
+    let outcome = deliver(locator.as_ref(), "run-1").await.unwrap();
 
     assert_eq!(outcome, BackgroundAppendOutcome::Appended { generation: 0 });
-    let resumed = read_transcript(&head_path(dir.path(), &session())).unwrap();
-    let last = resumed.messages.last().unwrap();
-    assert_eq!(resumed.messages.len(), 3);
+    let resumed = head_messages(locator.as_ref(), &session());
+    let last = resumed.last().unwrap();
+    assert_eq!(resumed.len(), 3);
     assert_eq!(last.role, "assistant");
     assert_eq!(last.content, "Time to stretch!");
 }
 
 #[tokio::test]
 async fn a_session_without_a_transcript_is_reported_and_not_created() {
-    let dir = tempdir().unwrap();
-    let locator = FileTranscriptLocator::new(dir.path());
+    let locator = locator();
 
-    let outcome = append_background_message(
-        &locator,
-        &session(),
-        TranscriptMessage::assistant("Time to stretch!"),
-        options("run-1"),
-    )
-    .await
-    .unwrap();
+    let outcome = deliver(locator.as_ref(), "run-1").await.unwrap();
 
     assert_eq!(outcome, BackgroundAppendOutcome::NoSession);
-    assert!(!head_path(dir.path(), &session()).exists());
+    assert!(!locator.session_exists(&locator.head_generation(&session())));
 }
 
 #[tokio::test]
 async fn the_display_reader_shows_the_message_with_its_provenance() {
-    let dir = tempdir().unwrap();
-    let locator = FileTranscriptLocator::new(dir.path());
-    live_turn(&locator, &session(), &[], &first_turn());
+    let locator = locator();
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
 
-    append_background_message(
-        &locator,
-        &session(),
-        TranscriptMessage::assistant("Time to stretch!"),
-        options("run-1"),
-    )
-    .await
-    .unwrap();
+    deliver(locator.as_ref(), "run-1").await.unwrap();
 
-    let display = read_transcript_display(&head_path(dir.path(), &session())).unwrap();
+    let display = head(locator.as_ref(), &session())
+        .read_display()
+        .unwrap()
+        .unwrap();
     let Some(DisplayRecord::Message(last)) = display.records.last() else {
         panic!("expected a message record last");
     };
@@ -154,35 +160,24 @@ async fn the_display_reader_shows_the_message_with_its_provenance() {
 
 #[tokio::test]
 async fn a_repeated_idempotency_key_is_a_duplicate_and_writes_nothing() {
-    let dir = tempdir().unwrap();
-    let locator = FileTranscriptLocator::new(dir.path());
-    live_turn(&locator, &session(), &[], &first_turn());
-    let message = TranscriptMessage::assistant("Time to stretch!");
-    let first = append_background_message(&locator, &session(), message.clone(), options("run-1"))
-        .await
-        .unwrap();
-    let before = std::fs::read(head_path(dir.path(), &session())).unwrap();
+    let locator = locator();
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
+    let first = deliver(locator.as_ref(), "run-1").await.unwrap();
+    let before = head_messages(locator.as_ref(), &session());
 
-    let again = append_background_message(&locator, &session(), message.clone(), options("run-1"))
-        .await
-        .unwrap();
+    let again = deliver(locator.as_ref(), "run-1").await.unwrap();
 
     assert_eq!(first, BackgroundAppendOutcome::Appended { generation: 0 });
     assert_eq!(again, BackgroundAppendOutcome::Duplicate { generation: 0 });
-    assert_eq!(
-        std::fs::read(head_path(dir.path(), &session())).unwrap(),
-        before
-    );
+    assert_eq!(head_messages(locator.as_ref(), &session()), before);
     // A different key is a different delivery.
-    let other = append_background_message(&locator, &session(), message, options("run-2"))
-        .await
-        .unwrap();
+    let other = deliver(locator.as_ref(), "run-2").await.unwrap();
     assert_eq!(other, BackgroundAppendOutcome::Appended { generation: 0 });
 }
 
 /// Seals generation 0 and opens generation 1 with `retained`, the way a
 /// compaction in the live turn path does.
-fn compact(locator: &FileTranscriptLocator, retained: &[TranscriptMessage]) {
+fn compact(locator: &dyn TranscriptLocator, retained: &[TranscriptMessage]) {
     let (_, handle) = locator.begin_generation(&session(), meta()).unwrap();
     handle
         .append_turn(TranscriptTurn {
@@ -198,19 +193,20 @@ fn compact(locator: &FileTranscriptLocator, retained: &[TranscriptMessage]) {
 
 #[tokio::test]
 async fn a_stale_expected_generation_writes_nothing() {
-    let dir = tempdir().unwrap();
-    let locator = FileTranscriptLocator::new(dir.path());
-    live_turn(&locator, &session(), &[], &first_turn());
-    compact(&locator, &[TranscriptMessage::system("summary")]);
-    let sealed = resolve_keyed_transcript_path(dir.path(), &session_stem(&session())).unwrap();
-    let head = head_path(dir.path(), &session());
-    let (sealed_before, head_before) = (
-        std::fs::read(&sealed).unwrap(),
-        std::fs::read(&head).unwrap(),
-    );
+    let locator = locator();
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
+    compact(locator.as_ref(), &[TranscriptMessage::system("summary")]);
+    let sealed_before = locator
+        .read_session_transcript(&session())
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap()
+        .messages;
+    let head_before = head_messages(locator.as_ref(), &session());
 
-    let outcome = append_background_message(
-        &locator,
+    let outcome = append_background_message_in(
+        locator.as_ref(),
         &session(),
         TranscriptMessage::assistant("Time to stretch!"),
         options("run-1").expecting_generation(0),
@@ -225,19 +221,25 @@ async fn a_stale_expected_generation_writes_nothing() {
             head: 1
         }
     );
-    assert_eq!(std::fs::read(&sealed).unwrap(), sealed_before);
-    assert_eq!(std::fs::read(&head).unwrap(), head_before);
+    let sealed_after = locator
+        .read_session_transcript(&session())
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap()
+        .messages;
+    assert_eq!(sealed_after, sealed_before);
+    assert_eq!(head_messages(locator.as_ref(), &session()), head_before);
 }
 
 #[tokio::test]
 async fn the_append_lands_in_the_head_generation() {
-    let dir = tempdir().unwrap();
-    let locator = FileTranscriptLocator::new(dir.path());
-    live_turn(&locator, &session(), &[], &first_turn());
-    compact(&locator, &[TranscriptMessage::system("summary")]);
+    let locator = locator();
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
+    compact(locator.as_ref(), &[TranscriptMessage::system("summary")]);
 
-    let outcome = append_background_message(
-        &locator,
+    let outcome = append_background_message_in(
+        locator.as_ref(),
         &session(),
         TranscriptMessage::assistant("Time to stretch!"),
         options("run-1").expecting_generation(1),
@@ -246,18 +248,19 @@ async fn the_append_lands_in_the_head_generation() {
     .unwrap();
 
     assert_eq!(outcome, BackgroundAppendOutcome::Appended { generation: 1 });
-    let head = read_transcript(&head_path(dir.path(), &session())).unwrap();
     assert_eq!(
-        head.messages
+        head_messages(locator.as_ref(), &session())
             .iter()
             .map(|message| message.content.as_str())
             .collect::<Vec<_>>(),
         ["summary", "Time to stretch!"]
     );
-    let sealed = read_transcript(
-        &resolve_keyed_transcript_path(dir.path(), &session_stem(&session())).unwrap(),
-    )
-    .unwrap();
+    let sealed = locator
+        .read_session_transcript(&session())
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
     assert_eq!(sealed.messages.len(), 2);
 }
 
@@ -269,25 +272,19 @@ async fn the_append_lands_in_the_head_generation() {
 /// yields, so "it is still waiting" is decided by the lock, not by timing.
 #[tokio::test]
 async fn a_background_append_waits_for_the_live_turn_and_keeps_both_in_order() {
-    let dir = tempdir().unwrap();
-    let locator = FileTranscriptLocator::new(dir.path());
-    let path = head_path(dir.path(), &session());
-    live_turn(&locator, &session(), &[], &first_turn());
+    let locator = locator();
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
 
     // Turn two starts: lock, then read its baseline.
-    let turn = lock_session_turn(&locator, &session()).await.unwrap();
-    let baseline = read_transcript(&path).unwrap().messages;
-
-    let workspace = dir.path().to_path_buf();
-    let delivery = tokio::spawn(async move {
-        append_background_message(
-            &FileTranscriptLocator::new(workspace),
-            &session(),
-            TranscriptMessage::assistant("Time to stretch!"),
-            options("run-1"),
-        )
+    let turn = lock_session_turn(locator.as_ref(), &session())
         .await
-    });
+        .unwrap();
+    let baseline = head_messages(locator.as_ref(), &session());
+
+    let delivery = {
+        let locator = Arc::clone(&locator);
+        tokio::spawn(async move { deliver(locator.as_ref(), "run-1").await })
+    };
     for _ in 0..50 {
         tokio::task::yield_now().await;
     }
@@ -295,13 +292,13 @@ async fn a_background_append_waits_for_the_live_turn_and_keeps_both_in_order() {
         !delivery.is_finished(),
         "delivery must wait for the live turn"
     );
-    assert_eq!(read_transcript(&path).unwrap().messages, baseline);
+    assert_eq!(head_messages(locator.as_ref(), &session()), baseline);
 
     // Turn two persists against the baseline it read, then releases the lock.
     let mut second = baseline.clone();
     second.push(TranscriptMessage::user("what's the weather?"));
     second.push(TranscriptMessage::assistant("Sunny."));
-    live_turn(&locator, &session(), &baseline, &second);
+    live_turn(locator.as_ref(), &session(), &baseline, &second);
     drop(turn);
 
     assert_eq!(
@@ -310,16 +307,16 @@ async fn a_background_append_waits_for_the_live_turn_and_keeps_both_in_order() {
     );
 
     // Turn three resumes over everything and appends on top of it.
-    let _turn = lock_session_turn(&locator, &session()).await.unwrap();
-    let resumed = read_transcript(&path).unwrap().messages;
+    let _turn = lock_session_turn(locator.as_ref(), &session())
+        .await
+        .unwrap();
+    let resumed = head_messages(locator.as_ref(), &session());
     let mut third = resumed.clone();
     third.push(TranscriptMessage::user("did you remind me?"));
     third.push(TranscriptMessage::assistant("Yes, at 5."));
-    live_turn(&locator, &session(), &resumed, &third);
+    live_turn(locator.as_ref(), &session(), &resumed, &third);
 
-    let contents: Vec<(String, String)> = read_transcript(&path)
-        .unwrap()
-        .messages
+    let contents: Vec<(String, String)> = head_messages(locator.as_ref(), &session())
         .into_iter()
         .map(|message| (message.role, message.content))
         .collect();
@@ -340,10 +337,9 @@ async fn a_background_append_waits_for_the_live_turn_and_keeps_both_in_order() {
 
 #[tokio::test]
 async fn only_plain_assistant_messages_with_a_key_are_accepted() {
-    let dir = tempdir().unwrap();
-    let locator = FileTranscriptLocator::new(dir.path());
-    live_turn(&locator, &session(), &[], &first_turn());
-    let before = std::fs::read(head_path(dir.path(), &session())).unwrap();
+    let locator = locator();
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
+    let before = head_messages(locator.as_ref(), &session());
     let mut interrupted = TranscriptMessage::assistant("half an ans");
     interrupted.interrupted = true;
     let calls = TranscriptMessage::assistant_with_calls(
@@ -377,49 +373,23 @@ async fn only_plain_assistant_messages_with_a_key_are_accepted() {
         (interrupted, "run-1"),
         (TranscriptMessage::assistant("fine"), "  "),
     ] {
-        let result = append_background_message(&locator, &session(), message, options(key)).await;
+        let result =
+            append_background_message_in(locator.as_ref(), &session(), message, options(key)).await;
         assert!(result.is_err(), "{result:?}");
     }
-    assert_eq!(
-        std::fs::read(head_path(dir.path(), &session())).unwrap(),
-        before
-    );
+    assert_eq!(head_messages(locator.as_ref(), &session()), before);
 }
 
-/// A line whose `background` value is not a [`BackgroundOrigin`] (a newer or
-/// foreign writer) still resumes as a message; only the origin is dropped.
 #[tokio::test]
-async fn an_unreadable_origin_does_not_cost_the_message() {
-    let dir = tempdir().unwrap();
-    let locator = FileTranscriptLocator::new(dir.path());
-    live_turn(&locator, &session(), &[], &first_turn());
-    let path = head_path(dir.path(), &session());
-    append_bytes(
-        &path,
-        b"{\"role\":\"assistant\",\"content\":\"from elsewhere\",\"background\":42}\n",
-    )
-    .unwrap();
+async fn an_attempt_against_a_sealed_head_writes_nothing_and_asks_to_re_resolve() {
+    let locator = locator();
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
+    compact(locator.as_ref(), &[TranscriptMessage::system("summary")]);
+    let sealed = locator.read_session_transcript(&session()).unwrap();
+    let before = sealed.read_session().unwrap().unwrap().messages;
 
-    let resumed = read_transcript(&path).unwrap();
-    assert_eq!(resumed.messages.last().unwrap().content, "from elsewhere");
-    let display = read_transcript_display(&path).unwrap();
-    let Some(DisplayRecord::Message(last)) = display.records.last() else {
-        panic!("expected a message record last");
-    };
-    assert_eq!(last.background, None);
-}
-
-#[test]
-fn an_attempt_against_a_sealed_head_writes_nothing_and_asks_to_re_resolve() {
-    let dir = tempdir().unwrap();
-    let locator = FileTranscriptLocator::new(dir.path());
-    live_turn(&locator, &session(), &[], &first_turn());
-    compact(&locator, &[TranscriptMessage::system("summary")]);
-    let sealed = resolve_keyed_transcript_path(dir.path(), &session_stem(&session())).unwrap();
-    let before = std::fs::read(&sealed).unwrap();
-
-    let attempt = append_to_head(
-        &locator,
+    let attempt = append_to_stored_head(
+        locator.as_ref(),
         &session(),
         &TranscriptMessage::assistant("Time to stretch!"),
         &options("run-1"),
@@ -427,76 +397,33 @@ fn an_attempt_against_a_sealed_head_writes_nothing_and_asks_to_re_resolve() {
     .unwrap();
 
     assert!(matches!(attempt, Attempt::HeadMoved));
-    assert_eq!(std::fs::read(&sealed).unwrap(), before);
+    assert_eq!(sealed.read_session().unwrap().unwrap().messages, before);
 }
 
-#[tokio::test]
-async fn an_agents_files_adopt_a_shared_session_before_the_append() {
-    let dir = tempdir().unwrap();
-    // The conversation exists only in the shared workspace, as written
-    // before the agent kept its own directory.
-    let shared = FileTranscriptLocator::new(dir.path());
-    live_turn(&shared, &session(), &[], &first_turn());
-    let shared_path = head_path(dir.path(), &session());
-    let before = std::fs::read(&shared_path).unwrap();
-
-    let agent = super::super::AgentTranscriptFiles::new(dir.path(), "orchestrator");
-    let outcome = append_background_message_in(
-        &agent,
-        &session(),
-        TranscriptMessage::assistant("Time to stretch!"),
-        options("run-1"),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(outcome, BackgroundAppendOutcome::Appended { generation: 0 });
-    let own_root = super::super::agent_transcript_root(dir.path(), "orchestrator");
-    let own = read_transcript(&head_path(&own_root, &session())).unwrap();
-    assert_eq!(
-        own.messages.last().unwrap().content,
-        "Time to stretch!",
-        "the adopted copy receives the message"
-    );
-    assert_eq!(
-        std::fs::read(&shared_path).unwrap(),
-        before,
-        "the shared file is never modified"
-    );
-}
-
-/// A store-like locator that names no destination (and is not file backed),
-/// over real transcript files.
-struct Unnamed(FileTranscriptLocator);
+/// A store-like locator that names no destination, over real transcripts.
+struct Unnamed(Arc<dyn TranscriptLocator>);
 
 impl TranscriptLocator for Unnamed {
-    fn latest_for_agent(
-        &self,
-        agent_name: &str,
-    ) -> Option<std::sync::Arc<dyn crate::transcript::TranscriptRead>> {
+    fn latest_for_agent(&self, agent_name: &str) -> Option<Arc<dyn TranscriptRead>> {
         self.0.latest_for_agent(agent_name)
     }
-    fn root_for_thread(
-        &self,
-        thread_id: &str,
-    ) -> Option<std::sync::Arc<dyn crate::transcript::TranscriptRead>> {
+    fn root_for_thread(&self, thread_id: &str) -> Option<Arc<dyn TranscriptRead>> {
         self.0.root_for_thread(thread_id)
     }
     fn open_stem(
         &self,
         stem: &str,
         seed: TranscriptMeta,
-    ) -> anyhow::Result<std::sync::Arc<dyn crate::transcript::TranscriptHistory>> {
+    ) -> anyhow::Result<Arc<dyn TranscriptHistory>> {
         self.0.open_stem(stem, seed)
     }
 }
 
 #[tokio::test]
 async fn appends_through_one_unnamed_locator_are_serialised() {
-    let dir = tempdir().unwrap();
-    let files = FileTranscriptLocator::new(dir.path());
-    live_turn(&files, &session(), &[], &first_turn());
-    let locator = std::sync::Arc::new(Unnamed(FileTranscriptLocator::new(dir.path())));
+    let inner = locator();
+    live_turn(inner.as_ref(), &session(), &[], &first_turn());
+    let locator = Arc::new(Unnamed(inner));
     assert!(locator.destination_key().is_none());
 
     let held = super::super::turn_lock::lock_session_turn_or_identity(
@@ -505,16 +432,8 @@ async fn appends_through_one_unnamed_locator_are_serialised() {
     )
     .await;
     let delivery = {
-        let locator = std::sync::Arc::clone(&locator);
-        tokio::spawn(async move {
-            append_background_message_in(
-                locator.as_ref(),
-                &session(),
-                TranscriptMessage::assistant("Time to stretch!"),
-                options("run-1"),
-            )
-            .await
-        })
+        let locator = Arc::clone(&locator);
+        tokio::spawn(async move { deliver(locator.as_ref(), "run-1").await })
     };
     for _ in 0..50 {
         tokio::task::yield_now().await;
@@ -531,39 +450,29 @@ async fn appends_through_one_unnamed_locator_are_serialised() {
 }
 
 /// A compaction that keeps the delivered message carries its provenance into
-/// the successor, so a retry is a duplicate there too — as it is for a store
-/// that keeps rows.
+/// the successor, so a retry is a duplicate there too.
 #[tokio::test]
 async fn a_delivery_carried_through_a_compaction_is_still_a_duplicate() {
-    let dir = tempdir().unwrap();
-    let locator = FileTranscriptLocator::new(dir.path());
-    live_turn(&locator, &session(), &[], &first_turn());
-    let bound = session();
-    let deliver = || {
-        append_background_message(
-            &locator,
-            &bound,
-            TranscriptMessage::assistant("Time to stretch!"),
-            options("run-1"),
-        )
-    };
+    let locator = locator();
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
     assert_eq!(
-        deliver().await.unwrap(),
+        deliver(locator.as_ref(), "run-1").await.unwrap(),
         BackgroundAppendOutcome::Appended { generation: 0 }
     );
 
     // The runtime compacts from the context it read back.
-    let retained = read_transcript(&head_path(dir.path(), &session()))
-        .unwrap()
-        .messages;
-    compact(&locator, &retained);
+    let retained = head_messages(locator.as_ref(), &session());
+    compact(locator.as_ref(), &retained);
 
     assert_eq!(
-        deliver().await.unwrap(),
+        deliver(locator.as_ref(), "run-1").await.unwrap(),
         BackgroundAppendOutcome::Duplicate { generation: 1 }
     );
-    let head = read_transcript_display(&head_path(dir.path(), &session())).unwrap();
-    let carried = head
+    let display = head(locator.as_ref(), &session())
+        .read_display()
+        .unwrap()
+        .unwrap();
+    let carried = display
         .records
         .iter()
         .filter_map(|record| match record {
@@ -572,4 +481,55 @@ async fn a_delivery_carried_through_a_compaction_is_still_a_duplicate() {
         })
         .count();
     assert_eq!(carried, 1, "the successor's row keeps its provenance");
+}
+
+/// A compaction inside the *same* generation (the handle's `replace`) that
+/// drops the delivered message removes it from the live context, so the key is
+/// free again: retrying the delivery appends it instead of reporting a
+/// duplicate of a row the model no longer sees.
+#[tokio::test]
+async fn a_delivery_dropped_by_a_same_generation_compaction_is_appended_again() {
+    let locator = locator();
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
+    assert_eq!(
+        deliver(locator.as_ref(), "run-1").await.unwrap(),
+        BackgroundAppendOutcome::Appended { generation: 0 }
+    );
+
+    head_handle(locator.as_ref())
+        .replace(&[TranscriptMessage::system("summary")])
+        .unwrap();
+
+    assert_eq!(
+        deliver(locator.as_ref(), "run-1").await.unwrap(),
+        BackgroundAppendOutcome::Appended { generation: 0 },
+        "the compaction dropped the delivery, so the key is not held"
+    );
+    assert_eq!(
+        deliver(locator.as_ref(), "run-1").await.unwrap(),
+        BackgroundAppendOutcome::Duplicate { generation: 0 },
+        "the fresh delivery is held again"
+    );
+}
+
+/// The same-generation counterpart: a compaction that keeps the delivery keeps
+/// its provenance, so the retry is still a duplicate.
+#[tokio::test]
+async fn a_delivery_kept_by_a_same_generation_compaction_is_still_a_duplicate() {
+    let locator = locator();
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
+    deliver(locator.as_ref(), "run-1").await.unwrap();
+
+    let retained = head_messages(locator.as_ref(), &session());
+    head_handle(locator.as_ref()).replace(&retained).unwrap();
+
+    assert_eq!(
+        deliver(locator.as_ref(), "run-1").await.unwrap(),
+        BackgroundAppendOutcome::Duplicate { generation: 0 }
+    );
+}
+
+fn head_handle(locator: &dyn TranscriptLocator) -> Arc<dyn TranscriptHistory> {
+    let head = locator.head_generation(&session());
+    locator.open_session(&head, meta()).unwrap()
 }

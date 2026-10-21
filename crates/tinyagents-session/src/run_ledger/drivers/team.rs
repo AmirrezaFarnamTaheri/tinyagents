@@ -5,7 +5,7 @@
 //! observed. A concurrent writer that changed a dependency, the task or the
 //! member makes the batch conflict, and the operation re-reads and decides
 //! again. The decision rules are the classic SQLite ones.
-use super::storage::{CAS_ATTEMPTS, MEMBERS, TASKS, encode, key};
+use super::storage::{CAS_ATTEMPTS, MEMBERS, TASKS, encode, key, now};
 use super::*;
 use tinystoragedrivers_core::{ErrorKind, ExpectedDocument, Precondition, ReadCheck, WriteOp};
 
@@ -35,7 +35,7 @@ impl DriverRunLedger {
                 done,
                 check: ReadCheck {
                     collection: TASKS.into(),
-                    id: key(&[dep_id]),
+                    id: key(&[dep_id])?,
                     expected: row.as_ref().map_or(ExpectedDocument::Absent, |row| {
                         ExpectedDocument::Version(row.version)
                     }),
@@ -80,7 +80,7 @@ impl DriverRunLedger {
             let mut checks: Vec<ReadCheck> = deps.iter().map(|dep| dep.check.clone()).collect();
             checks.push(ReadCheck {
                 collection: TASKS.into(),
-                id: key(&[task_id]),
+                id: key(&[task_id])?,
                 expected: ExpectedDocument::Version(task.version),
             });
             let unmet: Vec<String> = deps
@@ -117,13 +117,13 @@ impl DriverRunLedger {
             claimed.claimed_by_member_id = Some(member_id.into());
             claimed.claim_token = Some(claim_token.into());
             claimed.status = AgentTeamTaskStatus::InProgress;
-            claimed.updated_at = Utc::now();
+            claimed.updated_at = now();
             // The task itself is guarded by the write precondition, so its read
             // check would be redundant (and a batch refuses contradictory ones).
             checks.pop();
             let write = WriteOp::Put {
                 collection: TASKS.into(),
-                id: key(&[task_id]),
+                id: key(&[task_id])?,
                 doc: encode(&claimed)?,
                 precondition: Precondition::Version(task.version),
             };
@@ -144,6 +144,27 @@ impl DriverRunLedger {
         evidence: &[String],
         require_evidence: bool,
     ) -> Result<CompletionOutcome> {
+        self.complete_team_task_if_claimed(
+            team_id,
+            task_id,
+            member_id,
+            None,
+            evidence,
+            require_evidence,
+        )
+        .await
+    }
+
+    /// Complete a task with an optional claim-token fence.
+    pub(super) async fn complete_team_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: Option<&str>,
+        evidence: &[String],
+        require_evidence: bool,
+    ) -> Result<CompletionOutcome> {
         for _ in 0..CAS_ATTEMPTS {
             let Some(task) = self
                 .read::<AgentTeamTask>(TASKS, task_id)
@@ -153,11 +174,12 @@ impl DriverRunLedger {
                 tracing::debug!("{LOG_PREFIX} complete.unknown team={team_id} task={task_id}");
                 return Ok(CompletionOutcome::UnknownTask);
             };
-            let is_claimant = task.doc.claimed_by_member_id.as_deref() == Some(member_id);
+            let is_claimant = task.doc.claimed_by_member_id.as_deref() == Some(member_id)
+                && claim_token.is_none_or(|token| task.doc.claim_token.as_deref() == Some(token));
             let in_progress = task.doc.status == AgentTeamTaskStatus::InProgress;
             let task_check = ReadCheck {
                 collection: TASKS.into(),
-                id: key(&[task_id]),
+                id: key(&[task_id])?,
                 expected: ExpectedDocument::Version(task.version),
             };
             if !is_claimant || !in_progress {
@@ -201,7 +223,7 @@ impl DriverRunLedger {
             let checks: Vec<ReadCheck> = deps.into_iter().map(|dep| dep.check).collect();
             let mut next = task.doc;
             next.evidence = merged;
-            next.updated_at = Utc::now();
+            next.updated_at = now();
             if reasons.is_empty() {
                 next.status = AgentTeamTaskStatus::Done;
                 next.gate_status = "passed".into();
@@ -214,7 +236,7 @@ impl DriverRunLedger {
             }
             let write = WriteOp::Put {
                 collection: TASKS.into(),
-                id: key(&[task_id]),
+                id: key(&[task_id])?,
                 doc: encode(&next)?,
                 precondition: Precondition::Version(task.version),
             };
@@ -250,20 +272,20 @@ impl DriverRunLedger {
                 tracing::debug!("{LOG_PREFIX} shutdown.unknown team={team_id} member={member_id}");
                 return Ok(None);
             };
-            let filter = Filter::eq("record.teamId", team_id)
-                .and(Filter::eq("record.claimedByMemberId", member_id))
-                .and(Filter::eq("record.status", "in_progress"));
+            let filter = Filter::eq("team_id", team_id)
+                .and(Filter::eq("claimed_by_member_id", member_id))
+                .and(Filter::eq("status", "in_progress"));
             let held = self
                 .scoped
                 .documents()
                 .query_all(
                     TASKS,
                     &Query::filter(filter)
-                        .sort(Sort::asc("record.orderIndex"))
-                        .sort(Sort::asc("createdSql")),
+                        .sort(Sort::asc("order_index"))
+                        .sort(Sort::asc("created_ms")),
                 )
                 .await?;
-            let now = Utc::now();
+            let now = now();
             let mut released = Vec::with_capacity(held.len());
             let mut writes = Vec::with_capacity(held.len() + 1);
             for row in held {
@@ -286,7 +308,7 @@ impl DriverRunLedger {
             stopped.updated_at = now;
             writes.push(WriteOp::Put {
                 collection: MEMBERS.into(),
-                id: key(&[member_id]),
+                id: key(&[member_id])?,
                 doc: encode(&stopped)?,
                 precondition: Precondition::Version(member.version),
             });
