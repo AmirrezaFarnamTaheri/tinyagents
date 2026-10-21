@@ -99,7 +99,9 @@ impl SubAgentJobRegistry {
                     continue;
                 }
                 if lease.pinned_jobs.insert(id.clone()) {
-                    control.waiters.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    control
+                        .waiters
+                        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                 }
                 for child_run_id in &control.lineage.children {
                     if lease.reachable_runs.insert(child_run_id.clone()) {
@@ -118,7 +120,9 @@ impl SubAgentJobRegistry {
         let mut controls = self.controls();
         for job_id in record.pinned_jobs {
             if let Some(control) = controls.get(&job_id) {
-                control.waiters.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+                control
+                    .waiters
+                    .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
             }
         }
         drop(controls);

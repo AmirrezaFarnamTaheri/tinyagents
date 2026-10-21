@@ -503,7 +503,10 @@ async fn root_lease_preserves_parent_and_grandchild_before_settlement_starts() {
     jobs.mark_running(&grandchild);
     jobs.mark_driver_result(
         &parent,
-        Ok(SubagentOutcome::completed(parent.as_str(), "retained parent output")),
+        Ok(SubagentOutcome::completed(
+            parent.as_str(),
+            "retained parent output",
+        )),
     );
 
     for index in 0..=super::types::SUBAGENT_JOB_SOFT_CAP {
@@ -515,10 +518,7 @@ async fn root_lease_preserves_parent_and_grandchild_before_settlement_starts() {
             )
             .unwrap();
         jobs.set_attempt_run_id(&id, &format!("{task}-attempt"));
-        jobs.mark_driver_result(
-            &id,
-            Ok(SubagentOutcome::completed(id.as_str(), "pressure")),
-        );
+        jobs.mark_driver_result(&id, Ok(SubagentOutcome::completed(id.as_str(), "pressure")));
     }
     assert!(jobs.get(parent.as_str()).is_some());
 
@@ -535,13 +535,15 @@ async fn root_lease_preserves_parent_and_grandchild_before_settlement_starts() {
     }
     jobs.mark_driver_result(
         &grandchild,
-        Ok(SubagentOutcome::completed(grandchild.as_str(), "grandchild output")),
+        Ok(SubagentOutcome::completed(
+            grandchild.as_str(),
+            "grandchild output",
+        )),
     );
     let settled = settling.await.unwrap();
     assert_eq!(settled.len(), 2);
     assert!(settled.iter().any(|job| {
-        job.id == parent
-            && job.output.as_deref() == Some("retained parent output")
+        job.id == parent && job.output.as_deref() == Some("retained parent output")
     }));
     assert!(settled.iter().any(|job| job.id == grandchild));
 }
@@ -609,10 +611,20 @@ async fn root_lease_keeps_completed_history_and_overlapping_lease_pins_independe
         &child,
         Ok(SubagentOutcome::completed(child.as_str(), "child")),
     );
-    assert_eq!(jobs.controls()[&parent].waiters.load(std::sync::atomic::Ordering::Acquire), 3);
+    assert_eq!(
+        jobs.controls()[&parent]
+            .waiters
+            .load(std::sync::atomic::Ordering::Acquire),
+        3
+    );
     drop(foreign);
     drop(first);
-    assert_eq!(jobs.controls()[&parent].waiters.load(std::sync::atomic::Ordering::Acquire), 2);
+    assert_eq!(
+        jobs.controls()[&parent]
+            .waiters
+            .load(std::sync::atomic::Ordering::Acquire),
+        2
+    );
     assert!(jobs.get(parent.as_str()).is_some());
 
     for index in 0..=super::types::SUBAGENT_JOB_SOFT_CAP {
@@ -638,10 +650,7 @@ async fn root_lease_keeps_completed_history_and_overlapping_lease_pins_independe
             )
             .unwrap();
         jobs.set_attempt_run_id(&id, &format!("{task}-attempt"));
-        jobs.mark_driver_result(
-            &id,
-            Ok(SubagentOutcome::completed(id.as_str(), "pressure")),
-        );
+        jobs.mark_driver_result(&id, Ok(SubagentOutcome::completed(id.as_str(), "pressure")));
     }
     assert!(jobs.get(parent.as_str()).is_some());
     drop(second);
@@ -654,9 +663,20 @@ async fn root_lease_keeps_completed_history_and_overlapping_lease_pins_independe
         .await
         .unwrap();
     assert_eq!(settled.len(), 2);
-    assert!(settled.iter().any(|job| job.id == parent && job.output.as_deref() == Some("parent")));
-    assert!(settled.iter().any(|job| job.id == child && job.output.as_deref() == Some("child")));
-    assert!(jobs.get(parent.as_str()).is_none(), "last lease drop releases retention and allows pruning");
+    assert!(
+        settled
+            .iter()
+            .any(|job| job.id == parent && job.output.as_deref() == Some("parent"))
+    );
+    assert!(
+        settled
+            .iter()
+            .any(|job| job.id == child && job.output.as_deref() == Some("child"))
+    );
+    assert!(
+        jobs.get(parent.as_str()).is_none(),
+        "last lease drop releases retention and allows pruning"
+    );
 }
 
 #[tokio::test]
@@ -690,7 +710,10 @@ async fn cancelled_root_lease_releases_history_retention() {
     jobs.set_attempt_run_id(&parent, "cancelled-lease-attempt");
     jobs.mark_driver_result(
         &parent,
-        Ok(SubagentOutcome::completed(parent.as_str(), "retained until cancellation")),
+        Ok(SubagentOutcome::completed(
+            parent.as_str(),
+            "retained until cancellation",
+        )),
     );
     for index in 0..=super::types::SUBAGENT_JOB_SOFT_CAP {
         let task = format!("cancel-lease-pressure-{index}");
@@ -715,10 +738,7 @@ async fn cancelled_root_lease_releases_history_retention() {
             )
             .unwrap();
         jobs.set_attempt_run_id(&id, &format!("{task}-attempt"));
-        jobs.mark_driver_result(
-            &id,
-            Ok(SubagentOutcome::completed(id.as_str(), "pressure")),
-        );
+        jobs.mark_driver_result(&id, Ok(SubagentOutcome::completed(id.as_str(), "pressure")));
     }
     assert!(jobs.get(parent.as_str()).is_some());
     let cancellation = CancellationToken::new();

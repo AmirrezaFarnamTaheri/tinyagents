@@ -1240,7 +1240,8 @@ impl SubAgentJobRegistry {
 
     pub(super) fn root_leases(
         &self,
-    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<u64, super::types::RootLeaseRecord>> {
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<u64, super::types::RootLeaseRecord>>
+    {
         self.root_leases
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
