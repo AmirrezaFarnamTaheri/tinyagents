@@ -66,7 +66,7 @@ the module map below.
    `summarization` to keep the loop productive and in-budget, and `middleware` around every
    step.
 3. **Recurse**: a tool can wrap a whole nested `AgentHarness` invocation
-   (`SubAgent` / `SubAgentTool` in `tinyagents-orchestration`), so the same
+   (`DriverSubAgentTool` in `tinyagents-harness-tools`), so the same
    loop runs again one level deeper, tracked by `ids`/`limits`/`cost` roll-up.
 4. **Observe**: every step emits an `AgentEvent` (`events`); `stream` projects
    those onto consumer-facing `StreamChunk`s, and `observability` durably
