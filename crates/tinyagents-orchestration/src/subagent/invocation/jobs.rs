@@ -14,7 +14,6 @@ use tinyagents_tasks::DetachedTaskRegistryError;
 use tinyinference_llm::message::Message;
 use tokio::sync::watch;
 
-use crate::subagent::IncompleteKind;
 
 use super::types::{DriverJobRegistration, JobControl, JobMeta, ParentJobScope};
 use super::{SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus};
@@ -483,65 +482,6 @@ impl SubAgentJobRegistry {
         }
     }
 
-    pub(crate) fn mark_result(
-        &self,
-        id: &SubAgentJobId,
-        result: Result<tinyagents_harness::middleware::AgentRun, TinyAgentsError>,
-    ) {
-        self.mark_result_applied(id, result, None);
-    }
-
-    /// Settles a job like [`Self::mark_result`], publishing the
-    /// result-policy-applied output in the same registry write so no reader
-    /// ever sees a terminal job with the raw, unpolicied output.
-    pub(crate) fn mark_result_applied(
-        &self,
-        id: &SubAgentJobId,
-        result: Result<tinyagents_harness::middleware::AgentRun, TinyAgentsError>,
-        applied: Option<AppliedResult>,
-    ) {
-        let settled = self.settle(id, |job, cancellation_requested| match result {
-            Ok(run) => {
-                if cancellation_requested {
-                    job.status = SubAgentJobStatus::Cancelled;
-                    job.error = Some(TinyAgentsError::Cancelled.to_string());
-                } else {
-                    job.status = SubAgentJobStatus::Completed;
-                    job.output = run.text();
-                    if let Some(applied) = applied {
-                        job.output = Some(applied.text);
-                        job.artifacts.extend(applied.artifact);
-                        job.schema_error = applied.schema_error;
-                        job.artifact_error = applied.artifact_error;
-                    }
-                }
-            }
-            Err(TinyAgentsError::Cancelled) => {
-                job.status = SubAgentJobStatus::Cancelled;
-                job.error = Some(TinyAgentsError::Cancelled.to_string());
-            }
-            Err(error @ TinyAgentsError::LimitExceeded(_)) => {
-                job.status = SubAgentJobStatus::Incomplete;
-                job.incomplete_kind = Some(IncompleteKind::BudgetExceeded);
-                job.error = Some(error.to_string());
-            }
-            Err(error @ TinyAgentsError::Timeout(_)) => {
-                job.status = SubAgentJobStatus::Incomplete;
-                job.incomplete_kind = Some(IncompleteKind::Timeout);
-                job.error = Some(error.to_string());
-            }
-            Err(error) => {
-                job.status = SubAgentJobStatus::Failed;
-                job.error = Some(error.to_string());
-            }
-        });
-        if !settled {
-            // Already settled (e.g. cancelled by the owner): the first
-            // terminal state wins.
-            tracing::debug!("{LOG_PREFIX} mark_result.ignored job_id={id}");
-        }
-    }
-
     /// Mirrors a host-driver completion into the same registry used by the
     /// Jobs and Message aliases. Durable pauses remain nonterminal and resumable.
     pub fn mark_driver_result(
@@ -716,32 +656,6 @@ impl SubAgentJobRegistry {
             }
             self.refresh_root_leases_locked(&mut root_leases, &mut controls);
         }
-    }
-
-    /// Settles a job whose run finished but overshot a budget: it keeps the
-    /// (policy-applied) output and ends `Incomplete(BudgetExceeded)`.
-    pub(crate) fn mark_budget_overrun(
-        &self,
-        id: &SubAgentJobId,
-        applied: AppliedResult,
-        reason: String,
-    ) {
-        self.settle(id, |job, cancellation_requested| {
-            if cancellation_requested {
-                // An owner cancellation that raced the finish wins, as in
-                // `mark_result`.
-                job.status = SubAgentJobStatus::Cancelled;
-                job.error = Some(TinyAgentsError::Cancelled.to_string());
-                return;
-            }
-            job.status = SubAgentJobStatus::Incomplete;
-            job.incomplete_kind = Some(IncompleteKind::BudgetExceeded);
-            job.error = Some(reason);
-            job.output = Some(applied.text);
-            job.artifacts.extend(applied.artifact);
-            job.schema_error = applied.schema_error;
-            job.artifact_error = applied.artifact_error;
-        });
     }
 
     /// Marks a job `Failed` because its child task panicked or was aborted
