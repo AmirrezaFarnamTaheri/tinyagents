@@ -1325,6 +1325,7 @@ fn hosted_timeout_round_trip_preserves_the_bound() {
         kind: HostedErrorKind::Timeout,
         message: "timed out".to_string(),
         timeout_bound: bound,
+        dispatch_refusal: None,
         run: None,
     };
     assert!(matches!(
@@ -1344,6 +1345,7 @@ fn hosted_timeout_round_trip_preserves_the_bound() {
         kind,
         message: "sanitized failure".to_string(),
         timeout_bound: None,
+        dispatch_refusal: None,
         run: None,
     };
     assert!(matches!(
