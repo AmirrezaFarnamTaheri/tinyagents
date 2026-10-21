@@ -11,6 +11,88 @@ deleted parent's withdrawn completions do not sit in the store until
 give-up writer and stores the emptied one. Dedupe, tombstones and reopen
 behaviour are unchanged.
 
+## Unreleased: dedicated hooks crate (tinyagents#470)
+
+**Breaking.** Stop-hook and lifecycle-hook APIs now live in
+`tinyagents_hooks::{stop,lifecycle}`. `tinyagents-runtime::command_hooks`
+remains as a one-release compatibility re-export; new integrations should
+depend on `tinyagents-hooks` directly. The workspace version is bumped to
+`2.2.0` for this package-boundary change.
+
+- Added `tinyagents-hooks` with typed tool hooks, command hooks, stop policies,
+  lifecycle middleware, per-scope hook lists, and safe tool-output summaries.
+- Added `BudgetStopHook`, the optional `goals`-feature
+  `GoalBudgetStopHook`, and `StopHookMiddleware::with_halt_summary`.
+- Added per-tool outcome records to completed-turn summaries.
+
+## Unreleased: Langfuse v4 trace export over OTLP
+
+Langfuse v4 ingests traces only over OTLP, and Langfuse Cloud removes the
+legacy `/api/public/ingestion` trace path on 2026-11-16.
+
+- `LangfuseClient::send_otlp` sends `x-langfuse-ingestion-version: 4` and
+  reports a 2xx answer with rejected spans (`partialSuccess.rejectedSpans`)
+  as an error.
+- New `trace_export::ingestion_otlp` (`ingestion_batch_to_otlp_spans`,
+  `ingestion_batch_otlp_requests`): converts a locally built ingestion batch
+  into v4 OTLP spans, with trace name, user, session, tags, metadata,
+  environment, release and version on every span and the trace input/output
+  on the root observation.
+- New `LangfuseClient::send_observations_otlp` / `send_batch_otlp` and
+  `GraphLangfuseExporter::send_observations_otlp` / `build_otlp_requests`.
+  The batch-path `send_observations` methods stay for legacy deployments.
+- `trace_export::otlp::chunk_otlp_spans` exposes the request chunking that
+  `otlp_requests` uses.
+
+## Unreleased: the path-based transcript API is removed (tinyagents#453)
+
+**Breaking.** `tinyagents-session` no longer reads or writes a workspace
+directory for transcripts. Everything goes through the store port
+(`TranscriptLocator`/`TranscriptHistory`/`TranscriptRead`, served by
+`DriverSessionStores`, `WorkspaceStores` or `InMemorySessionStores`); the only
+reader of classic `session_raw/*.jsonl` files is the one-time, read-only
+`legacy::import_transcripts_once` / `WorkspaceStores`, and
+`legacy::rewrite_legacy_transcripts` for pre-import fixups.
+
+Removed from `tinyagents_session::transcript`: `FileTranscriptLocator`,
+`FileTranscriptHistory`, `AgentTranscriptFiles`, `agent_transcript_root`,
+`write_transcript*`, `append_transcript_turn*`, `append_interrupted_partial`,
+`append_tools_record`, `read_transcript`, `read_transcript_display`,
+`read_transcript_legacy_md`, `adopt_legacy_session_transcripts`,
+`migrate_layout_if_needed`, `find_latest_transcript`,
+`find_root_transcript_for_thread*`, `find_root_transcripts_for_thread`,
+`read_thread_usage_summary` (and `ThreadUsageSummary`/`SubagentArchetypeUsage`),
+`resolve_keyed_transcript_path*`, `append_background_message` and its
+lock-notification variant, `TranscriptLocator::file_backing`, `view::get_page`,
+`view::get_page_scoped`, `view::project_thread*`, `view::resolve_files_scoped`,
+the view's projection cache, and `thread_spend`. Replacements:
+`append_background_message_in`, `view::get_page_in`,
+`view::project_thread_in(locator, thread_id, agent_id, lookup)`,
+`spend::thread_spend_in`, `TranscriptLocator::thread_transcripts` /
+`root_for_thread_scoped` / `read_session_transcript`, and
+`TranscriptLocator::adopt_legacy` (driver stores).
+`SessionAdoption`, `SessionTurnGuard`, `lock_session_turn` and the rest of the
+locator-based surface are unchanged. The `fs2` dependency is gone.
+
+Fixes (the two deferred tinyagents#463 findings):
+
+- A background append's idempotency check considered every row of the head
+  generation's log, so a key dropped by a compaction *inside the same
+  generation* still reported `Duplicate` and the delivery was lost. It now
+  looks at the generation's live context only (rows after the last compaction
+  plus that compaction's replacement), which is what the contract always said:
+  a key a compaction dropped is appended again.
+- The driver-backed thread listing read the index alone, so a root whose
+  index refresh failed stayed invisible until something read or wrote that
+  transcript again. A listing now compares written index documents with
+  written transcript logs and re-indexes any missing stem before it answers.
+- `legacy::import_transcripts` now carries a classic line's top-level
+  `background` provenance onto the imported row, so an out-of-band delivery
+  keeps its origin and idempotency key after import.
+
+The Release workflow derives the next version from the highest of the
+workspace version and the latest `v*` tag instead of the (stale) workspace
+version alone, so it no longer proposes a tag that already exists.
 ## Unreleased: locator-based transcript reads and writes (tinyagents#453)
 
 Hosts can now do through a `TranscriptLocator` everything they used the
@@ -38,8 +120,7 @@ driver store:
 - `legacy::rewrite_legacy_transcripts(workspace_dir, rewrite) ->
   LegacyRewriteReport` for pre-import fixups of classic `session_raw/` files.
 
-The path API is unchanged; `project_from_files` and `thread_spend` now share
-the locator code path.
+(The path API was still present at this point and was removed in the entry above.)
 
 Review follow-ups: `rewrite_legacy_transcripts` keeps a transcript's recorded
 tool declarations, counts unreadable directories and entries in `errors`
@@ -163,6 +244,7 @@ drivers.
 | `JsonlTaskStore`, `JsonlCompletionStore` (tasks) | `DriverTaskStore`, `DriverCompletionStore` |
 | session SQLite functions (`record_session_start`, `search_sessions`, `apply_retention`, `with_connection`, ...), `run_ledger` free functions and `sqlite` ledger | `DriverRunLedger` through `SessionHistoryStore` and `RunLedgerStore` |
 | `session::transcript::import` (ledger import) | `session::legacy` |
+| `SessionCompactionSink` (session) | A host implementation of `tinyagents_harness::summarization::CompactionSink` attached with `RunContext::with_compaction_sink`; only compactions with trusted live boundaries are persisted, and the session crate no longer supplies a sink. |
 
 The `sqlite` cargo features on harness and graph remain as no-ops so existing
 manifests keep resolving, and `storage-drivers` is a no-op because the driver
@@ -171,8 +253,8 @@ stores are now unconditional.
 ### Signature changes
 
 - `JsonlSink::new` takes an `Arc<dyn AppendStore>`.
-- `SessionTeamLedger::new`, `SessionWorkflowStore::new` and
-  `SessionCompactionSink::new` take an `Arc<dyn RunLedgerStore>`.
+- `SessionTeamLedger::new` and `SessionWorkflowStore::new` take an
+  `Arc<dyn RunLedgerStore>`.
 - `testkit::conformance::run_ledger_conformance` is async and takes an
   `Arc<dyn RunLedgerStore>`.
 - Transcript view projection takes an optional `SpawnCallLookup` instead of a

@@ -28,10 +28,17 @@ call `orchestration_tools` to build the full set, or call
   `OrchestrationToolKind` and a `TaskStore`; `.with_steering(..)` wires it to a
   `SteeringRegistry` for controls that need to reach a running task (e.g.
   `steer`, `cancel`).
+- `.with_status_overlay(..)` adds host-owned durable session snapshots and
+  collected completion records to the `list` and `await` JSON payloads. The
+  `OrchestrationStatusOverlay` port keeps storage and session policy outside
+  this crate; tools without an overlay retain their original array responses.
 - `orchestration_tools(store)` — builds the full default set of controls
   against one store.
 - `orchestration_tools_with_steering(store, steering)` — same, with steering
   wired.
+- `orchestration_tools_with_status_overlay(store, overlay)` and
+  `register_orchestration_tools_with_status_overlay(..)` — build or register
+  the full set with a host's durable session/completion snapshots.
 - `register_orchestration_tools(registry, store, ..)` — inserts the full set
   into a `ToolRegistry`.
 - `orchestration_tool_schema(kind)` / `orchestration_tool_schemas()` — the
