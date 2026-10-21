@@ -55,7 +55,7 @@ impl ToolRulePolicy {
     /// Whether the policy admits every tool, so the loop can skip it.
     #[must_use]
     pub fn is_permissive(&self) -> bool {
-        self.rules.is_permissive()
+        self.permission_ceiling.is_none() && self.rules.is_permissive()
     }
 }
 

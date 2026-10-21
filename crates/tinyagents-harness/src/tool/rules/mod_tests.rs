@@ -163,6 +163,7 @@ impl Tool for ArgumentPermission {
 async fn permission_ceiling_checks_argument_aware_dispatch_permissions() {
     let policy =
         ToolRulePolicy::default().with_permission_ceiling(tinytools::PermissionLevel::ReadOnly);
+    assert!(!policy.is_permissive());
     let gate = ToolGate::new(None, &policy, None);
     let tool = ArgumentPermission;
 
