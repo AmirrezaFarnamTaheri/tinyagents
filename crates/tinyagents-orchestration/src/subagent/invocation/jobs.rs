@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::error::TinyAgentsError;
-use tinyagents_harness::ids::TaskId;
+use tinyagents_harness::ids::{TaskId, next_seq};
 use tinyagents_harness::run_queue::QueueLane;
 use tinyagents_harness::steering::{
     SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy,
@@ -14,7 +14,7 @@ use tinyagents_tasks::DetachedTaskRegistryError;
 use tinyinference_llm::message::Message;
 use tokio::sync::watch;
 
-use crate::subagent::{AppliedResult, IncompleteKind};
+use crate::subagent::IncompleteKind;
 
 use super::types::{DriverJobRegistration, JobControl, JobMeta, ParentJobScope};
 use super::{SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus};
@@ -108,7 +108,7 @@ impl SubAgentJobRegistry {
         agent: &str,
         owner: String,
         parent_run_id: tinyagents_harness::ids::RunId,
-        parent_thread_id: String,
+        parent_thread_id: Option<String>,
         workspace: Option<tinytools::WorkspaceDescriptor>,
         execution: JobExecutionControls,
         driver_jobs: &mut std::collections::HashMap<
@@ -120,7 +120,7 @@ impl SubAgentJobRegistry {
             return Err(SubAgentJobError::Registry("empty job id".into()));
         }
         let metadata = JobMeta {
-            parent_thread_id: Some(parent_thread_id),
+            parent_thread_id,
             workspace,
         };
         let lineage = super::types::JobLineage::new(Some(parent_run_id), None);
