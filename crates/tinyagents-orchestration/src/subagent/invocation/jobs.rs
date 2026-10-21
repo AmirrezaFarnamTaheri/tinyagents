@@ -726,7 +726,8 @@ impl SubAgentJobRegistry {
 
     /// Points the job link at the attempt that is now running.
     pub(crate) fn set_attempt_run_id(&self, id: &SubAgentJobId, run_id: &str) {
-        if let Some(control) = self.controls().get(id) {
+        let mut controls = self.controls();
+        if let Some(control) = controls.get_mut(id) {
             control
                 .lineage
                 .children

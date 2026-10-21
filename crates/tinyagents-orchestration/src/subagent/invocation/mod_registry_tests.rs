@@ -4,6 +4,7 @@
 use super::*;
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::TaskId;
+use crate::subagent::{SubagentPause, SubagentResume, SubagentOutcome, SubagentOutcomeKind};
 
 fn register_driver_job(
     jobs: &SubAgentJobRegistry,
