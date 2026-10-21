@@ -323,11 +323,11 @@ pub struct SubAgentJobRegistry {
     // Private to `jobs.rs`. Invariant: only cooperative calls (register,
     // cancel_cooperative, release_cancellation, snapshots) may touch it, under
     // `controls`. Adapter cleanup removes from all three maps under the lock
-    // order driver_jobs -> controls -> tasks.
+    // order driver_jobs -> root_leases -> controls -> tasks.
     pub(super) tasks: DetachedTaskRegistry<JobMeta, SubAgentJob>,
     pub(crate) steering: SteeringRegistry,
     /// Status senders and cancel flags. Also the transition gate: every
-    /// mutation holds this lock, so a settle and a cancel never interleave.
+    /// Mutation holds this lock, so a settle and a cancel never interleave.
     pub(crate) controls: Arc<Mutex<HashMap<SubAgentJobId, JobControl>>>,
     /// Scoped bridge from driver task identity to the public job control id.
     pub(crate) driver_jobs: Arc<Mutex<HashMap<crate::subagent::SubagentTaskKey, SubAgentJobId>>>,

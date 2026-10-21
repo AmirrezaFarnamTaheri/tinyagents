@@ -154,6 +154,9 @@ impl SubAgentJobRegistry {
             &mut driver_jobs,
         ) {
             tracing::error!("{LOG_PREFIX} register.failed job_id={id} error={error}");
+        } else {
+            let mut controls = self.controls();
+            self.refresh_root_leases_locked(&mut root_leases, &mut controls);
         }
         (id, steering)
     }
@@ -375,6 +378,8 @@ impl SubAgentJobRegistry {
             .driver_jobs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Lock order: driver_jobs -> root_leases -> controls -> detached task registry.
+        let mut root_leases = self.root_leases();
         if let Some(id) = driver_jobs.get(&key) {
             if self.get_owned(id.as_str(), &owner).is_none() {
                 return Err(SubAgentJobError::NotFound(id.as_str().to_owned()));
@@ -419,6 +424,7 @@ impl SubAgentJobRegistry {
                     control.cancellation.clone(),
                     true,
                 );
+                drop(control);
                 self.refresh_root_leases_locked(&mut root_leases, &mut controls);
                 return Ok(result);
             }

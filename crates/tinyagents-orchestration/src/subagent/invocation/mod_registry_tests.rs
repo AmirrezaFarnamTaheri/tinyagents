@@ -555,6 +555,10 @@ async fn root_lease_keeps_completed_history_and_overlapping_lease_pins_independe
     let root = RunId::new("history-root");
     let first = jobs.retain_root_run_descendants(&root, "owner").unwrap();
     let second = jobs.retain_root_run_descendants(&root, "owner").unwrap();
+    let settling_lease = jobs.retain_root_run_descendants(&root, "owner").unwrap();
+    let foreign = jobs
+        .retain_root_run_descendants(&root, "foreign-owner")
+        .unwrap();
     let (parent, _, _, _, _) = jobs
         .register_driver_job_with_parent_run(
             DriverJobRegistration {
@@ -605,9 +609,10 @@ async fn root_lease_keeps_completed_history_and_overlapping_lease_pins_independe
         &child,
         Ok(SubagentOutcome::completed(child.as_str(), "child")),
     );
-    assert_eq!(jobs.controls()[&parent].waiters.load(std::sync::atomic::Ordering::Acquire), 2);
+    assert_eq!(jobs.controls()[&parent].waiters.load(std::sync::atomic::Ordering::Acquire), 3);
+    drop(foreign);
     drop(first);
-    assert_eq!(jobs.controls()[&parent].waiters.load(std::sync::atomic::Ordering::Acquire), 1);
+    assert_eq!(jobs.controls()[&parent].waiters.load(std::sync::atomic::Ordering::Acquire), 2);
     assert!(jobs.get(parent.as_str()).is_some());
 
     for index in 0..=super::types::SUBAGENT_JOB_SOFT_CAP {
@@ -640,7 +645,94 @@ async fn root_lease_keeps_completed_history_and_overlapping_lease_pins_independe
     }
     assert!(jobs.get(parent.as_str()).is_some());
     drop(second);
+    assert!(jobs.get(parent.as_str()).is_some());
+    let settled = settling_lease
+        .settle(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.len(), 2);
+    assert!(settled.iter().any(|job| job.id == parent && job.output.as_deref() == Some("parent")));
+    assert!(settled.iter().any(|job| job.id == child && job.output.as_deref() == Some("child")));
     assert!(jobs.get(parent.as_str()).is_none(), "last lease drop releases retention and allows pruning");
+}
+
+#[tokio::test]
+async fn cancelled_root_lease_releases_history_retention() {
+    use tinyagents_harness::cancel::CancellationToken;
+    use tinyagents_harness::ids::RunId;
+
+    let jobs = SubAgentJobRegistry::new();
+    let root = RunId::new("cancelled-lease-root");
+    let lease = jobs.retain_root_run_descendants(&root, "owner").unwrap();
+    let (parent, _, _, _, _) = jobs
+        .register_driver_job_with_parent_run(
+            DriverJobRegistration {
+                key: crate::subagent::SubagentTaskKey {
+                    root_run_id: root.as_str().into(),
+                    parent_run_id: "ignored".into(),
+                    thread_id: None,
+                    task_id: "cancelled-lease-parent".into(),
+                },
+                agent: "worker".into(),
+                owner: "owner".into(),
+                workspace: None,
+                cancellation: CancellationToken::new(),
+                steering: None,
+                run_queue: None,
+                continuing: false,
+            },
+            root.clone(),
+        )
+        .unwrap();
+    jobs.set_attempt_run_id(&parent, "cancelled-lease-attempt");
+    jobs.mark_driver_result(
+        &parent,
+        Ok(SubagentOutcome::completed(parent.as_str(), "retained until cancellation")),
+    );
+    for index in 0..=super::types::SUBAGENT_JOB_SOFT_CAP {
+        let task = format!("cancel-lease-pressure-{index}");
+        let (id, _, _, _, _) = jobs
+            .register_driver_job_with_parent_run(
+                DriverJobRegistration {
+                    key: crate::subagent::SubagentTaskKey {
+                        root_run_id: root.as_str().into(),
+                        parent_run_id: "ignored".into(),
+                        thread_id: None,
+                        task_id: task.clone(),
+                    },
+                    agent: "worker".into(),
+                    owner: "owner".into(),
+                    workspace: None,
+                    cancellation: CancellationToken::new(),
+                    steering: None,
+                    run_queue: None,
+                    continuing: false,
+                },
+                RunId::new("unrelated-root"),
+            )
+            .unwrap();
+        jobs.set_attempt_run_id(&id, &format!("{task}-attempt"));
+        jobs.mark_driver_result(
+            &id,
+            Ok(SubagentOutcome::completed(id.as_str(), "pressure")),
+        );
+    }
+    assert!(jobs.get(parent.as_str()).is_some());
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    assert_eq!(
+        lease
+            .settle(
+                tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+                &cancellation,
+            )
+            .await,
+        Err(SubAgentJobError::SettlementCancelled)
+    );
+    assert!(jobs.get(parent.as_str()).is_none());
 }
 
 #[tokio::test]
