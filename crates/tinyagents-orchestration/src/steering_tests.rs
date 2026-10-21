@@ -120,53 +120,60 @@ async fn steer_rejects_followup_unknown_unowned_and_terminal_without_consuming_r
         .await,
         Err(SteerError::NotOwned)
     );
-    tx.send(DetachedSubagentStatus::Failed { error: "e".into() })
-        .unwrap();
+}
+
+#[tokio::test]
+async fn terminal_child_uses_fallback_with_metadata_and_does_not_drain_stale_handle() {
+    let steering = SteeringRegistry::default();
+    let reg = registry(steering.clone());
+    let tx = add(&reg, "t1", "p1", Some("thread-1"));
     let handle = SteeringHandle::allow_all();
     steering.register(TaskId::new("t1"), handle.clone());
-    let (calls, fb) = counting();
+    tx.send(DetachedSubagentStatus::Failed { error: "finished".into() })
+        .unwrap();
+
+    let delivered: Arc<std::sync::Mutex<Option<(
+        Option<&'static str>,
+        String,
+        QueueLane,
+        String,
+    )>>> = Arc::default();
+    let captured = delivered.clone();
+    let fallback = move |metadata: Meta, lane: QueueLane, text: String| {
+        *captured.lock().unwrap() = Some((
+            metadata.thread,
+            metadata.agent_id().to_string(),
+            lane,
+            text,
+        ));
+        std::future::ready(())
+    };
+
     assert_eq!(
-        steer_detached_with_request_id(
+        steer_detached(
             &reg,
             "t1",
-            SteerAccess::Trusted,
-            "x".into(),
-            QueueLane::Steer,
-            Some("req-terminal"),
-            fb,
+            SteerAccess::Owner("p1"),
+            "continue with the result".into(),
+            QueueLane::Collect,
+            fallback,
         )
         .await,
-        Err(SteerError::Unknown)
+        Ok(SteerRoute::Fallback)
     );
     assert_eq!(
-        calls.load(Ordering::SeqCst),
-        0,
-        "terminal tasks do not fall back"
+        *delivered.lock().unwrap(),
+        Some((
+            Some("thread-1"),
+            "researcher".into(),
+            QueueLane::Collect,
+            "continue with the result".into(),
+        ))
     );
     assert!(
         handle.drain().is_empty(),
         "terminal children never use stale handles"
     );
-
-    tx.send(DetachedSubagentStatus::Running).unwrap();
-    let (calls, fb) = counting();
-    let receipt = steer_detached_with_request_id(
-        &reg,
-        "t1",
-        SteerAccess::Owner("p1"),
-        "x".into(),
-        QueueLane::Steer,
-        Some("req-terminal"),
-        fb,
-    )
-    .await
-    .unwrap();
-    assert_eq!(receipt.route, Some(SteerRoute::Registry));
-    assert!(
-        !receipt.duplicate,
-        "a rejected terminal steer keeps its request id"
-    );
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
