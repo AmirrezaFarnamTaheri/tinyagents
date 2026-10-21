@@ -337,6 +337,18 @@ async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_froz
         args.contains("--tools\n\n"),
         "built-in tools must be disabled: {args:?}"
     );
+    assert!(
+        args.contains("--max-turns\n1\n"),
+        "one turn is allowed: {args:?}"
+    );
+    assert!(
+        args.contains("--system-prompt\n\n"),
+        "the CLI default prompt must be replaced: {args:?}"
+    );
+    assert!(
+        !args.contains("dummy-inspection-key"),
+        "credentials must never be passed as argv"
+    );
     assert_eq!(
         std::fs::read_to_string(input_path).expect("captured prompt"),
         "Reply OK",
@@ -360,6 +372,15 @@ async fn inspection_invocation_disables_tools_sessions_and_caps_output_with_froz
         std::fs::read_to_string(state_path).expect("captured session state"),
         "no",
         "inspection must not expose or load an existing CLI login/session"
+    );
+}
+
+#[test]
+fn inspection_auth_rejects_opaque_cli_managed_login() {
+    let result = ClaudeAgentSdkInspectionAuth::new(None, None, None);
+    assert!(
+        result.is_err(),
+        "inspection cannot read the CLI's saved login"
     );
 }
 
