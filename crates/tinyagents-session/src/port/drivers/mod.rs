@@ -34,6 +34,7 @@
 //! grammar is hashed by [`Scope::agent`] (the segment only, so the agent
 //! stays under its tenant and its fence); an empty id has no scope.
 
+mod rebound;
 mod refused;
 mod schema;
 mod transcripts;
@@ -49,6 +50,7 @@ use tinystoragedrivers_core::{
 
 use super::{AgentStores, SessionStoreProvider};
 
+pub use rebound::{RebindableSessionStores, SessionStoreRegistry};
 pub use schema::storage_schema;
 pub use transcripts::{DriverTranscriptHistory, DriverTranscriptLocator};
 pub use turn_states::DriverTurnStates;

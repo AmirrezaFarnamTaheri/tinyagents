@@ -25,6 +25,34 @@ fn reason_of(error: &TinyAgentsError) -> FailoverReason {
     FailoverReason::classify(error)
 }
 
+#[test]
+fn unstructured_classification_uses_unknown_only_for_unrecognized_messages() {
+    assert_eq!(
+        FailoverReason::classify_unstructured("reconnection is disabled"),
+        FailoverReason::Unknown
+    );
+
+    for (message, expected) in [
+        ("provider is overloaded", FailoverReason::Overloaded),
+        ("HTTP 429 Too Many Requests", FailoverReason::RateLimit),
+        ("the request timed out", FailoverReason::Timeout),
+        ("connection reset by peer", FailoverReason::Transport),
+    ] {
+        assert_eq!(
+            FailoverReason::classify_unstructured(message),
+            expected,
+            "{message}"
+        );
+    }
+
+    // The existing `Model(String)` API intentionally keeps its established
+    // fallback for callers that already rely on provider-failure semantics.
+    assert_eq!(
+        reason_of(&TinyAgentsError::Model("reconnection is disabled".into())),
+        FailoverReason::Transport
+    );
+}
+
 // ── classification ───────────────────────────────────────────────────────────
 
 #[test]
@@ -133,6 +161,49 @@ fn classifies_flattened_model_errors_from_their_text() {
             "{message}"
         );
     }
+}
+
+#[test]
+fn classifies_the_hosts_transient_transport_phrases_without_reclassifying_client_errors() {
+    for message in [
+        "connection refused",
+        "connect error: no route to host",
+        "broken pipe",
+        "connection reset by peer",
+        "deadline exceeded",
+        "temporarily unavailable",
+    ] {
+        assert_eq!(
+            reason_of(&TinyAgentsError::Model(message.into())),
+            FailoverReason::Transport,
+            "{message}"
+        );
+    }
+    for message in ["timed out", "timeout"] {
+        assert_eq!(
+            reason_of(&TinyAgentsError::Model(message.into())),
+            FailoverReason::Timeout,
+            "{message}"
+        );
+    }
+    for code in [500, 501, 550, 599] {
+        assert_eq!(
+            reason_of(&TinyAgentsError::Model(format!("upstream returned {code}"))),
+            FailoverReason::Transport,
+            "{code}"
+        );
+    }
+    assert!(has_transient_transport_phrase("connection reset by peer"));
+    assert!(!has_transient_transport_phrase("reconnection is disabled"));
+
+    let client_error = provider(Some(400), None, "invalid connection option", true);
+    assert_eq!(reason_of(&client_error), FailoverReason::Format);
+    assert_eq!(
+        reason_of(&TinyAgentsError::Model("upstream returned 503".into())),
+        FailoverReason::Transport
+    );
+    let unrelated = TinyAgentsError::Model("reconnection is disabled".into());
+    assert_eq!(reason_of(&unrelated), FailoverReason::Transport);
 }
 
 #[test]

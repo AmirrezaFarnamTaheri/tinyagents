@@ -16,15 +16,13 @@
 
 use super::error::LedgerResult as Result;
 use chrono::{DateTime, Utc};
-use tinyagents_harness::tinyinference_llm::Message;
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
 use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
 use super::types::*;
-use crate::entry_tree::{Branch, Entry, EntryId, EntryKind, Fork};
 use crate::retention::RetentionReport;
 
-/// Bound storage for runs, workflows, coordination, effects and entry trees.
+/// Bound storage for runs, workflows, coordination and effects.
 ///
 /// Handles are selected by the host, never by a run's payload or tool arguments.
 /// Shared deployments must bind their tenant/agent namespace before returning a
@@ -286,6 +284,19 @@ pub trait RunLedgerStore: Send + Sync {
         require_evidence: bool,
     ) -> Result<CompletionOutcome>;
 
+    /// Complete a task only while `member_id` still owns `claim_token`.
+    /// The claim check, gate evaluation, and status update share the same
+    /// transaction so an old worker cannot complete a successor's claim.
+    async fn complete_agent_team_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+        evidence: &[String],
+        require_evidence: bool,
+    ) -> Result<CompletionOutcome>;
+
     /// Stop a team member and release any task it is actively working on.
     ///
     /// In one transaction: unclaim the member's `in_progress` tasks back to `todo`
@@ -299,10 +310,11 @@ pub trait RunLedgerStore: Send + Sync {
         member_id: &str,
     ) -> Result<Option<(AgentTeamMember, Vec<String>)>>;
 
-    /// Mark a member as actively running a task: status → `active`, with the
-    /// current task id and the worker/run identifiers of the spawned agent. Used by
-    /// the live runtime right after it claims a task and dispatches a worker.
-    /// Returns the updated member, or `None` if the member is not in the team.
+    /// Legacy unconditional setter for a member's active task and execution ids.
+    /// It does not verify that the member is pending or idle and can overwrite a
+    /// concurrent active run. New task admission must use
+    /// [`RunLedgerStore::try_start_agent_team_member`]. Returns the updated member,
+    /// or `None` if the member is not in the team.
     async fn mark_agent_team_member_running(
         &self,
         team_id: &str,
@@ -311,6 +323,18 @@ pub trait RunLedgerStore: Send + Sync {
         worker_thread_id: &str,
         run_id: &str,
     ) -> Result<Option<AgentTeamMember>>;
+
+    /// Atomically admit a member to one task execution. Pending and idle
+    /// members become active; active members are returned unchanged, and
+    /// stopped or missing members are not admitted.
+    async fn try_start_agent_team_member(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<AgentTeamMemberRunAdmission>;
 
     /// Mark a member idle: status → `idle`, clearing `current_task_id`. The
     /// `worker_thread_id` / `run_id` are intentionally retained as a pointer to the
@@ -323,6 +347,18 @@ pub trait RunLedgerStore: Send + Sync {
         member_id: &str,
     ) -> Result<Option<AgentTeamMember>>;
 
+    /// Mark a member idle only if it still owns this exact task execution.
+    /// This compare-and-set prevents cleanup from an older worker from idling
+    /// a member that has since been stopped and assigned a newer run.
+    async fn mark_agent_team_member_idle_if_current(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<Option<AgentTeamMember>>;
+
     /// Release a single `in_progress` task back to `todo`, clearing its claim and
     /// resetting the quality gate. Returns `true` if a row was actually released
     /// (the task existed, belonged to the team, and was `in_progress`). Used by the
@@ -330,6 +366,16 @@ pub trait RunLedgerStore: Send + Sync {
     /// another teammate — the per-task analogue of the bulk release in
     /// `shutdown_agent_team_member`.
     async fn release_agent_team_task(&self, team_id: &str, task_id: &str) -> Result<bool>;
+
+    /// Release a task only while the specified member still owns the exact
+    /// claim token. The comparison and release are one atomic operation.
+    async fn release_agent_team_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+    ) -> Result<bool>;
 
     /// Records that a tool call has been admitted and is about to execute.
     ///
@@ -354,52 +400,6 @@ pub trait RunLedgerStore: Send + Sync {
         run_id: &str,
         call_id: &str,
     ) -> Result<Option<ToolEffectRow>>;
-
-    /// Appends `kind` as a new entry under `parent_id` and returns its id. `None`
-    /// is only valid for a session's first entry.
-    async fn entry_append(
-        &self,
-        session_id: &str,
-        parent_id: Option<&EntryId>,
-        kind: EntryKind,
-    ) -> Result<EntryId>;
-
-    /// Appends `kind` as a child of the current head (the entry with the greatest
-    /// ordinal), the "linear append still works" path.
-    async fn entry_append_to_head(&self, session_id: &str, kind: EntryKind) -> Result<EntryId>;
-
-    /// The entry with the greatest ordinal, if any entry has been appended.
-    async fn entry_head(&self, session_id: &str) -> Result<Option<EntryId>>;
-
-    /// One entry by id.
-    async fn entry_get(&self, session_id: &str, id: &EntryId) -> Result<Option<Entry>>;
-
-    /// The root-to-`tip` ancestor chain in chronological order.
-    async fn entry_ancestor_chain(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Entry>>;
-
-    /// Every current tip (an entry with no children), in ordinal order.
-    async fn entry_tips(&self, session_id: &str) -> Result<Vec<EntryId>>;
-
-    /// Every named branch label and the tip it names.
-    async fn entry_branches(&self, session_id: &str) -> Result<Vec<Branch>>;
-
-    /// Names `tip` by appending a label entry under it; returns the label entry's id.
-    async fn entry_label(&self, session_id: &str, tip: &EntryId, name: &str) -> Result<EntryId>;
-
-    /// Creates a new tip without disturbing existing ones: `Branch` scope names an
-    /// existing entry, `Tree` scope copies the ancestor path.
-    async fn entry_fork(&self, session_id: &str, tip: &EntryId, fork: Fork) -> Result<EntryId>;
-
-    /// Rebuilds the materialized ancestor-chain index from the immutable entries.
-    async fn entry_rebuild_index(&self, session_id: &str) -> Result<()>;
-
-    /// Imports legacy linear entries, skipping any id already present so a repeated
-    /// import of the same source is a no-op.
-    async fn entry_import_legacy(&self, session_id: &str, entries: &[Entry]) -> Result<()>;
-
-    /// Projects `tip`'s ancestor chain to a model-ready message list, stopping at
-    /// the newest compaction on the path.
-    async fn entry_build_context(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Message>>;
 
     /// Deletes every **finished** session that ended before `older_than`, together
     /// with its messages, tool calls and search-index entries.

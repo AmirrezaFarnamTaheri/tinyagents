@@ -24,6 +24,25 @@ fn oh_like_router() -> WorkloadRouter {
 }
 
 #[test]
+fn projects_inference_routes_with_the_host_vision_hint() {
+    let router = WorkloadRouter::from_workload_routes("hint:vision");
+    assert_eq!(
+        router.fallback_policy("hint:chat").unwrap().models,
+        vec!["hint:chat".to_string(), "hint:burst".to_string()]
+    );
+    assert!(
+        router
+            .required_capabilities("hint:vision")
+            .unwrap()
+            .image_in
+    );
+    assert!(router.fallback_policy("hint:vision").is_none());
+
+    let other_host = WorkloadRouter::from_workload_routes("vision-tier");
+    assert!(other_host.required_capabilities("hint:vision").is_none());
+}
+
+#[test]
 fn resolves_alias_to_target_model() {
     let r = oh_like_router();
     assert_eq!(r.target_model("reasoning-v1"), Some("reasoning-v1"));

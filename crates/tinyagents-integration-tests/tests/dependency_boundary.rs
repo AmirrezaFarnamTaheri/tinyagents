@@ -673,6 +673,36 @@ fn host_independent_crates_do_not_depend_on_or_name_openhuman_types() {
 }
 
 #[test]
+fn harness_tools_dependencies_stay_within_the_harness_boundary() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("integration crate is nested under the TinyAgents workspace");
+    let manifest = fs::read_to_string(workspace.join("crates/tinyagents-harness-tools/Cargo.toml"))
+        .expect("harness-tools manifest is readable");
+    let dependencies = manifest
+        .split("[dependencies]")
+        .nth(1)
+        .and_then(|section| section.split("[features]").next())
+        .expect("harness-tools has a dependencies section");
+    assert!(dependencies.contains("tinyagents-harness ="));
+    assert!(dependencies.contains("tinytools ="));
+    assert!(!dependencies.contains("tinyagents-graph ="));
+    assert!(!dependencies.contains("tinyagents-runtime ="));
+    let inference_dep = dependencies
+        .lines()
+        .find(|line| line.trim_start().starts_with("tinyinference-llm ="))
+        .expect("subagent inference dependency is declared");
+    assert!(inference_dep.contains("optional = true"));
+    let tasks_dep = dependencies
+        .lines()
+        .find(|line| line.trim_start().starts_with("tinyagents-tasks ="))
+        .expect("subagent task dependency is declared");
+    assert!(tasks_dep.contains("optional = true"));
+    assert!(manifest.contains("subagents = [\"dep:tinyagents-orchestration\", \"dep:tinyagents-tasks\", \"dep:tinyinference-llm\"]"));
+}
+
+#[test]
 fn workspace_root_manifest_is_inside_the_dependency_guard() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

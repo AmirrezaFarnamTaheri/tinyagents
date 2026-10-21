@@ -20,15 +20,28 @@
 //! Live pushes are at-least-once: the host acknowledges with
 //! `mark_delivered`. Nothing here relaunches a child.
 
+mod delivery;
 mod driver;
 mod format;
+mod registry;
 mod router;
 mod store;
 mod types;
 
+pub use delivery::{
+    CompletionDelivery, CompletionDeliveryConfig, DeliveryFence, DeliveryOutcome, DeliveryTarget,
+    ParentBusyGate, ParentBusyLease, ThreadDeliveryLeases,
+};
 pub use driver::DriverCompletionStore;
 pub use format::{CompletionFormatter, NeutralCompletionFormatter};
-pub use router::{CompletionRouter, DEFAULT_MAX_ATTEMPTS, RecordOutcome, TombstoneOutcome};
+pub use registry::{
+    CompletionRouterPool, CompletionRouterPoolError, CompletionRouterReplaceOutcome,
+    open_driver_completion_store_or_memory,
+};
+pub use router::{
+    CompletionRouter, CompletionStoreReplaceOutcome, DEFAULT_MAX_ATTEMPTS, RecordOutcome,
+    TombstoneOutcome,
+};
 pub use store::{CompletionStore, InMemoryCompletionStore};
 pub use types::{
     CompletionArtifact, CompletionRecord, CompletionResult, CompletionState, CompletionStatus,
@@ -38,3 +51,11 @@ pub use types::{
 #[cfg(test)]
 #[path = "router_tests.rs"]
 mod router_tests;
+
+#[cfg(test)]
+#[path = "delivery_tests.rs"]
+mod delivery_tests;
+
+#[cfg(test)]
+#[path = "registry_tests.rs"]
+mod registry_tests;

@@ -116,7 +116,7 @@ const COMPOSIO_EXECUTE: &str = "composio_execute";
 /// `args`) or `composio_execute` (`tool`, `arguments`). `None` for any other
 /// tool, or when the call names no target.
 pub fn dispatch_target<'a>(tool: &str, args: &'a Value) -> Option<DispatchTarget<'a>> {
-    let (args_field, skill) = if tool == crate::tool::packs::USE_SKILL {
+    let (args_field, skill) = if tool == crate::tool::USE_SKILL_TOOL {
         ("args", args.get("skill").and_then(Value::as_str))
     } else if tool == COMPOSIO_EXECUTE {
         ("arguments", None)

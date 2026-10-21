@@ -26,8 +26,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::context::RunContext;
-use crate::error::Result;
+use crate::context::{MiddlewareControl, RunContext};
+use crate::error::{Result, TinyAgentsError};
 use crate::middleware::{MiddlewareToolOutcome, ToolHandler, ToolMiddleware};
 use tinyinference_llm::tool::ToolCall;
 use tinytools::ToolResult;
@@ -115,10 +115,78 @@ pub trait ApprovalResolver<Ctx: Send + Sync = ()>: Send + Sync {
     /// waiting for a decision or an expiry).
     async fn resolve(&self, ctx: &RunContext<Ctx>, call: &ToolCall) -> ApprovalResolution;
 
-    /// Records the terminal result of an approved call. Called once, only for
-    /// an [`ApprovalResolution::Allow`] carrying a ticket whose tool call
-    /// returned a result.
+    /// Optionally admits an already-allowed call without prompting or
+    /// requesting human approval, and attaches an audit or admission ticket.
+    /// Calls to this method may run concurrently; implementations must be
+    /// thread-safe. The harness does not serialize this callback with the
+    /// approval prompt lock, which serializes calls to [`Self::resolve`] only.
+    /// This callback must never widen the policy decision; returning `Deny`
+    /// can only fail the call closed. The default preserves existing resolver
+    /// behavior and leaves allowed calls ticket-free.
+    async fn resolve_allowed(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        _call: &ToolCall,
+    ) -> ApprovalResolution {
+        ApprovalResolution::Allow { ticket: None }
+    }
+
+    /// Records a returned tool result for older resolvers. New resolvers
+    /// should implement [`Self::record_terminal`] to observe every terminal
+    /// outcome for an acquired ticket.
     fn record(&self, ticket: &str, result: &ToolResult);
+
+    /// Records the terminal outcome of an approved call. This callback must
+    /// not panic: it runs during unwinding when an acquired ticket is abandoned.
+    /// `Abandoned` means the harness dropped the in-flight future; the tool may
+    /// already have produced partial side effects.
+    fn record_terminal(&self, ticket: &str, outcome: ApprovalExecutionOutcome<'_>) {
+        if let ApprovalExecutionOutcome::Result(result) = outcome {
+            self.record(ticket, result);
+        }
+    }
+}
+
+/// A terminal outcome observed after an approval ticket was acquired.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ApprovalExecutionOutcome<'a> {
+    /// The wrapped middleware returned a tool result.
+    Result(&'a ToolResult),
+    /// The wrapped middleware returned a harness error other than cancellation.
+    Failed(&'a TinyAgentsError),
+    /// The wrapped middleware returned a typed cancellation error.
+    Cancelled(&'a TinyAgentsError),
+    /// The wrapped middleware returned control instead of a tool result.
+    Control(&'a MiddlewareControl),
+    /// The in-flight future was dropped before the harness observed a result.
+    Abandoned,
+}
+
+struct TicketGuard<'a, Ctx: Send + Sync> {
+    resolver: &'a dyn ApprovalResolver<Ctx>,
+    ticket: Option<String>,
+}
+
+impl<'a, Ctx: Send + Sync> TicketGuard<'a, Ctx> {
+    fn new(resolver: &'a dyn ApprovalResolver<Ctx>, ticket: Option<String>) -> Self {
+        Self { resolver, ticket }
+    }
+
+    fn complete(&mut self, outcome: ApprovalExecutionOutcome<'_>) {
+        if let Some(ticket) = self.ticket.take() {
+            self.resolver.record_terminal(&ticket, outcome);
+        }
+    }
+}
+
+impl<Ctx: Send + Sync> Drop for TicketGuard<'_, Ctx> {
+    fn drop(&mut self) {
+        if let Some(ticket) = self.ticket.take() {
+            self.resolver
+                .record_terminal(&ticket, ApprovalExecutionOutcome::Abandoned);
+        }
+    }
 }
 
 /// What a host must do with a call after [`ToolPolicyGate::evaluate`].
@@ -188,7 +256,8 @@ impl<Ctx: Send + Sync> ToolPolicyGate<Ctx> {
     /// Decides one call end to end for hosts that interleave the gate with
     /// their own checks: the policy decision (with the `waive_approval`
     /// downgrade of [`Self::check`]), then, for a
-    /// [`PolicyDecision::RequireApproval`], settlement through `resolver`.
+    /// [`PolicyDecision::Allow`] admission or [`PolicyDecision::RequireApproval`]
+    /// settlement through `resolver`.
     /// Without a resolver an approval requirement fails closed as
     /// [`GateVerdict::Blocked`].
     pub async fn evaluate(
@@ -200,7 +269,13 @@ impl<Ctx: Send + Sync> ToolPolicyGate<Ctx> {
     ) -> GateVerdict {
         let decision = self.check(ctx, call, waive_approval).await;
         match (decision, resolver) {
-            (PolicyDecision::Allow, _) => GateVerdict::Proceed { ticket: None },
+            (PolicyDecision::Allow, Some(resolver)) => {
+                match resolver.resolve_allowed(ctx, call).await {
+                    ApprovalResolution::Allow { ticket } => GateVerdict::Proceed { ticket },
+                    ApprovalResolution::Deny { reason } => GateVerdict::Refused { reason },
+                }
+            }
+            (PolicyDecision::Allow, None) => GateVerdict::Proceed { ticket: None },
             (PolicyDecision::RequireApproval { .. }, Some(resolver)) => {
                 match resolver.resolve(ctx, call).await {
                     ApprovalResolution::Allow { ticket } => GateVerdict::Proceed { ticket },
@@ -212,15 +287,23 @@ impl<Ctx: Send + Sync> ToolPolicyGate<Ctx> {
     }
 }
 
-/// Records the terminal result of an approved call with its resolver. A no-op
-/// when there is no ticket or the outcome is not a tool result.
+/// Records a returned tool result or control outcome. A no-op when there is no
+/// ticket. Middleware should use the terminal guard to include errors and
+/// cancellation.
 pub fn record_approved<Ctx: Send + Sync>(
     resolver: &dyn ApprovalResolver<Ctx>,
     ticket: Option<&str>,
     outcome: &MiddlewareToolOutcome,
 ) {
-    if let (Some(ticket), MiddlewareToolOutcome::Result(result)) = (ticket, outcome) {
-        resolver.record(ticket, result);
+    if let Some(ticket) = ticket {
+        match outcome {
+            MiddlewareToolOutcome::Result(result) => {
+                resolver.record_terminal(ticket, ApprovalExecutionOutcome::Result(result))
+            }
+            MiddlewareToolOutcome::Command { control } => {
+                resolver.record_terminal(ticket, ApprovalExecutionOutcome::Control(control))
+            }
+        }
     }
 }
 
@@ -243,9 +326,28 @@ async fn run_approved<State: Send + Sync, Ctx: Send + Sync>(
             Ok(MiddlewareToolOutcome::Result(ToolResult::error(reason)))
         }
         ApprovalResolution::Allow { ticket } => {
-            let outcome = next.run(ctx, state, call).await?;
-            record_approved(resolver, ticket.as_deref(), &outcome);
-            Ok(outcome)
+            let mut guard = TicketGuard::new(resolver, ticket);
+            match next.run(ctx, state, call).await {
+                Ok(outcome) => {
+                    match &outcome {
+                        MiddlewareToolOutcome::Result(result) => {
+                            guard.complete(ApprovalExecutionOutcome::Result(result))
+                        }
+                        MiddlewareToolOutcome::Command { control } => {
+                            guard.complete(ApprovalExecutionOutcome::Control(control))
+                        }
+                    }
+                    Ok(outcome)
+                }
+                Err(error) => {
+                    if matches!(error, TinyAgentsError::Cancelled) {
+                        guard.complete(ApprovalExecutionOutcome::Cancelled(&error));
+                    } else {
+                        guard.complete(ApprovalExecutionOutcome::Failed(&error));
+                    }
+                    Err(error)
+                }
+            }
         }
     }
 }
@@ -304,6 +406,103 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
 /// the blocking decision.
 pub type DenialRenderer = Arc<dyn Fn(&ToolCall, &str, &PolicyDecision) -> String + Send + Sync>;
 
+/// Host wording for each part of a structured policy denial.
+///
+/// The harness supplies stable section labels; hosts supply the actual
+/// product-specific copy, including any typed marker they need to preserve.
+/// [`StructuredDenialRenderOptions`] lets a host select its reason label and
+/// punctuation without replacing the shared renderer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructuredDenialParts {
+    /// What was blocked, including a marker when downstream policy needs it.
+    pub blocked: String,
+    /// Why the action was blocked.
+    pub why: String,
+    /// A permitted next step.
+    pub workaround: String,
+    /// Instruction to relay the result instead of silently stopping.
+    pub relay: String,
+}
+
+/// Host-selected labels and punctuation for structured policy denials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StructuredDenialRenderOptions<'a> {
+    /// Label for the denial's explanation section.
+    pub reason_label: &'a str,
+    /// Text between the workaround and the instruction to relay the denial.
+    pub relay_separator: &'a str,
+}
+
+impl<'a> Default for StructuredDenialRenderOptions<'a> {
+    fn default() -> Self {
+        Self {
+            reason_label: "Why",
+            relay_separator: ". ",
+        }
+    }
+}
+
+impl StructuredDenialParts {
+    /// Creates the four host-authored sections of a denial.
+    pub fn new(
+        blocked: impl Into<String>,
+        why: impl Into<String>,
+        workaround: impl Into<String>,
+        relay: impl Into<String>,
+    ) -> Self {
+        Self {
+            blocked: blocked.into(),
+            why: why.into(),
+            workaround: workaround.into(),
+            relay: relay.into(),
+        }
+    }
+
+    /// Renders the shared blocked/why/workaround/relay structure.
+    pub fn render(&self) -> String {
+        self.render_with_options(&StructuredDenialRenderOptions::default())
+    }
+
+    /// Renders the shared denial structure with host-selected labels and
+    /// punctuation. The default options preserve [`Self::render`] byte for
+    /// byte.
+    pub fn render_with_options(&self, options: &StructuredDenialRenderOptions<'_>) -> String {
+        format!(
+            "Blocked: {}. {}: {}. Workaround: {}{}{}",
+            self.blocked,
+            options.reason_label,
+            self.why,
+            self.workaround,
+            options.relay_separator,
+            self.relay
+        )
+    }
+}
+
+/// Creates a [`DenialRenderer`] with shared structure and host-owned wording.
+pub fn structured_denial_renderer(
+    wording: impl Fn(&ToolCall, &str, &PolicyDecision) -> StructuredDenialParts + Send + Sync + 'static,
+) -> DenialRenderer {
+    Arc::new(move |call, policy, decision| wording(call, policy, decision).render())
+}
+
+/// Optional per-session ceiling consulted before the builder-level tool policy.
+/// The host supplies it from its own session snapshot; an `Allow` only means
+/// this ceiling permits the call, after which the primary policy still runs.
+pub type SessionToolCeiling<Ctx> = Arc<dyn ToolCallPolicy<Ctx>>;
+
+/// Host callback that filters candidate tool names for a session-scoped
+/// listing such as `use_skill`. It receives only names already available to the
+/// current run and must return a subset of those names.
+pub type SessionToolListing<Ctx> =
+    Arc<dyn Fn(&RunContext<Ctx>, &[String]) -> Vec<String> + Send + Sync>;
+
+/// Optional host response applied after both policy gates allow a call and
+/// before the wrapped tool executes. Hosts use this for session-scoped
+/// disclosures such as filtering a `use_skill` listing.
+pub type ToolPolicyPostGate<Ctx> =
+    Arc<dyn Fn(&RunContext<Ctx>, &ToolCall) -> Option<ToolResult> + Send + Sync>;
+
 fn default_denial(call: &ToolCall, policy: &str, decision: &PolicyDecision) -> String {
     let (action, reason) = match decision {
         PolicyDecision::RequireApproval { reason } => ("requires approval", reason.as_str()),
@@ -319,10 +518,13 @@ fn default_denial(call: &ToolCall, policy: &str, decision: &PolicyDecision) -> S
 /// Tool-wrap middleware that enforces a [`ToolCallPolicy`].
 pub struct ToolPolicyGateMiddleware<Ctx: Send + Sync = ()> {
     gate: ToolPolicyGate<Ctx>,
+    session_ceiling: Option<SessionToolCeiling<Ctx>>,
+    session_listing: Option<SessionToolListing<Ctx>>,
     resolver: Option<Arc<dyn ApprovalResolver<Ctx>>>,
     render: DenialRenderer,
-    /// Serialises approval prompts across the overlapping calls of a
-    /// concurrent batch; calls the policy allows or denies never take it.
+    post_gate: Option<ToolPolicyPostGate<Ctx>>,
+    /// Serialises calls to `resolve` across an overlapping concurrent batch;
+    /// already-allowed `resolve_allowed` admissions do not take this lock.
     prompt_lock: tokio::sync::Mutex<()>,
 }
 
@@ -331,8 +533,11 @@ impl<Ctx: Send + Sync> ToolPolicyGateMiddleware<Ctx> {
     pub fn new(policy: Arc<dyn ToolCallPolicy<Ctx>>) -> Self {
         Self {
             gate: ToolPolicyGate::new(policy),
+            session_ceiling: None,
+            session_listing: None,
             resolver: None,
             render: Arc::new(default_denial),
+            post_gate: None,
             prompt_lock: tokio::sync::Mutex::new(()),
         }
     }
@@ -348,6 +553,42 @@ impl<Ctx: Send + Sync> ToolPolicyGateMiddleware<Ctx> {
     pub fn with_denial_renderer(mut self, render: DenialRenderer) -> Self {
         self.render = render;
         self
+    }
+
+    /// Adds a session permission ceiling that runs before the builder policy.
+    /// `Allow` delegates to the builder policy; a block or approval requirement
+    /// is handled by this middleware's normal denial/resolver path.
+    pub fn with_session_ceiling(mut self, policy: SessionToolCeiling<Ctx>) -> Self {
+        self.session_ceiling = Some(policy);
+        self
+    }
+
+    /// Adds the session-scoped name filter used by host-owned skill/listing
+    /// adapters. Names not present in `candidates` are discarded even if the
+    /// callback returns them.
+    pub fn with_session_listing(mut self, listing: SessionToolListing<Ctx>) -> Self {
+        self.session_listing = Some(listing);
+        self
+    }
+
+    /// Applies an optional host response after both gates allow a call and
+    /// before invoking its wrapped tool.
+    pub fn with_post_gate(mut self, post_gate: ToolPolicyPostGate<Ctx>) -> Self {
+        self.post_gate = Some(post_gate);
+        self
+    }
+
+    /// Filters candidate names through the configured session listing policy.
+    /// Without a listing callback, all candidates are returned unchanged.
+    pub fn visible_tool_names(&self, ctx: &RunContext<Ctx>, candidates: &[String]) -> Vec<String> {
+        let Some(listing) = &self.session_listing else {
+            return candidates.to_vec();
+        };
+        let selected = listing(ctx, candidates);
+        selected
+            .into_iter()
+            .filter(|name| candidates.contains(name))
+            .collect()
     }
 }
 
@@ -368,7 +609,66 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
     ) -> Result<MiddlewareToolOutcome> {
         // Evaluate without the resolver first so only a call that actually
         // needs approval waits on the prompt lock; the rest stay concurrent.
-        let mut verdict = self.gate.evaluate(ctx, &call, false, None).await;
+        let mut policy_name = self.gate.policy_name().to_owned();
+        let session_decision = if let Some(session) = &self.session_ceiling {
+            session.check(ctx, &call).await
+        } else {
+            PolicyDecision::Allow
+        };
+        // A session denial is decisive and avoids consulting a wider builder
+        // policy. Otherwise both decisions are required before resolving any
+        // approval: neither policy may waive the other's denial.
+        let mut verdict = match session_decision {
+            decision @ PolicyDecision::Deny { .. } => {
+                policy_name = self
+                    .session_ceiling
+                    .as_ref()
+                    .map(|session| session.name().to_owned())
+                    .unwrap_or_else(|| self.gate.policy_name().to_owned());
+                GateVerdict::Blocked(decision)
+            }
+            session_decision => {
+                let builder_decision = self.gate.check(ctx, &call, false).await;
+                match (builder_decision, session_decision) {
+                    (decision @ PolicyDecision::Deny { .. }, _) => GateVerdict::Blocked(decision),
+                    (PolicyDecision::RequireApproval { reason }, PolicyDecision::Allow) => {
+                        GateVerdict::Blocked(PolicyDecision::RequireApproval { reason })
+                    }
+                    (PolicyDecision::Allow, PolicyDecision::RequireApproval { reason }) => {
+                        policy_name = self
+                            .session_ceiling
+                            .as_ref()
+                            .map(|session| session.name().to_owned())
+                            .unwrap_or_else(|| self.gate.policy_name().to_owned());
+                        GateVerdict::Blocked(PolicyDecision::RequireApproval { reason })
+                    }
+                    (
+                        PolicyDecision::RequireApproval { reason: builder },
+                        PolicyDecision::RequireApproval { reason: session },
+                    ) => GateVerdict::Blocked(PolicyDecision::RequireApproval {
+                        reason: format!("{builder}; {session}"),
+                    }),
+                    (PolicyDecision::Allow, PolicyDecision::Allow) => {
+                        if let Some(resolver) = self.resolver.as_deref() {
+                            match resolver.resolve_allowed(ctx, &call).await {
+                                ApprovalResolution::Allow { ticket } => {
+                                    GateVerdict::Proceed { ticket }
+                                }
+                                ApprovalResolution::Deny { reason } => {
+                                    GateVerdict::Refused { reason }
+                                }
+                            }
+                        } else {
+                            GateVerdict::Proceed { ticket: None }
+                        }
+                    }
+                    // A session denial was returned above.
+                    (_, PolicyDecision::Deny { .. }) => {
+                        unreachable!("session denial handled first")
+                    }
+                }
+            }
+        };
         if let (GateVerdict::Blocked(PolicyDecision::RequireApproval { .. }), Some(resolver)) =
             (&verdict, self.resolver.as_deref())
         {
@@ -380,17 +680,52 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
         }
         match verdict {
             GateVerdict::Proceed { ticket } => {
-                let outcome = next.run(ctx, state, call).await?;
-                if let Some(resolver) = &self.resolver {
-                    record_approved(resolver.as_ref(), ticket.as_deref(), &outcome);
+                let Some(resolver) = &self.resolver else {
+                    if let Some(result) = self
+                        .post_gate
+                        .as_ref()
+                        .and_then(|post_gate| post_gate(ctx, &call))
+                    {
+                        return Ok(MiddlewareToolOutcome::Result(result));
+                    }
+                    return next.run(ctx, state, call).await;
+                };
+                let mut guard = TicketGuard::new(resolver.as_ref(), ticket);
+                if let Some(result) = self
+                    .post_gate
+                    .as_ref()
+                    .and_then(|post_gate| post_gate(ctx, &call))
+                {
+                    guard.complete(ApprovalExecutionOutcome::Result(&result));
+                    return Ok(MiddlewareToolOutcome::Result(result));
                 }
-                Ok(outcome)
+                match next.run(ctx, state, call).await {
+                    Ok(outcome) => {
+                        match &outcome {
+                            MiddlewareToolOutcome::Result(result) => {
+                                guard.complete(ApprovalExecutionOutcome::Result(result))
+                            }
+                            MiddlewareToolOutcome::Command { control } => {
+                                guard.complete(ApprovalExecutionOutcome::Control(control))
+                            }
+                        }
+                        Ok(outcome)
+                    }
+                    Err(error) => {
+                        if matches!(error, TinyAgentsError::Cancelled) {
+                            guard.complete(ApprovalExecutionOutcome::Cancelled(&error));
+                        } else {
+                            guard.complete(ApprovalExecutionOutcome::Failed(&error));
+                        }
+                        Err(error)
+                    }
+                }
             }
             GateVerdict::Refused { reason } => {
                 Ok(MiddlewareToolOutcome::Result(ToolResult::error(reason)))
             }
             GateVerdict::Blocked(decision) => {
-                let text = (self.render)(&call, self.gate.policy_name(), &decision);
+                let text = (self.render)(&call, &policy_name, &decision);
                 Ok(MiddlewareToolOutcome::Result(ToolResult::error(text)))
             }
         }

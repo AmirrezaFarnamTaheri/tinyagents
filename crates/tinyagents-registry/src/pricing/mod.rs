@@ -121,6 +121,24 @@ pub fn estimate_cost_usd(
         + (output_tokens as f64) * per_tok(p.output_per_mtok_usd)
 }
 
+/// Resolve a model's flat list-price projection, including explicit `:free`
+/// variants such as OpenRouter's free routes.
+///
+/// This is an estimate input only. Call accounting must still prefer a
+/// provider-reported charge, including when a model id ends in `:free`.
+pub fn lookup_pricing(model: &str) -> Option<tinyagents_harness::cost::ModelPricing> {
+    if model.trim().to_ascii_lowercase().ends_with(":free") {
+        return Some(tinyagents_harness::cost::ModelPricing {
+            input_per_token: Some(0.0),
+            cache_read_input_per_token: Some(0.0),
+            output_per_token: Some(0.0),
+            ..Default::default()
+        });
+    }
+    let price = lookup(model.trim())?;
+    Some(flat_catalog_entry(price, "tinyagents-registry-pricing").pricing)
+}
+
 fn per_token(rate_per_mtok: f64) -> Option<f64> {
     (rate_per_mtok > 0.0).then_some(rate_per_mtok / 1_000_000.0)
 }

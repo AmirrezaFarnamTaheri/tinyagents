@@ -19,6 +19,7 @@
 pub mod collect;
 pub mod hooks;
 pub mod staging;
+pub mod tool;
 pub mod workers;
 
 pub use collect::{BranchReport, Collected, OverlapWarning, overlap_warnings};
@@ -27,6 +28,7 @@ pub use staging::{
     AdmissionPolicy, AdmissionVerdict, Plan, Preflight, Rejection, RejectionKind, Task, Worker,
     WorkerDispatchMode, with_ownership_boundary,
 };
+pub use tool::ParallelFanoutTool;
 pub use workers::run;
 
 #[cfg(test)]
@@ -36,3 +38,7 @@ mod tests;
 #[cfg(test)]
 #[path = "hooks_tests.rs"]
 mod hooks_tests;
+
+#[cfg(test)]
+#[path = "tool_tests.rs"]
+mod tool_tests;

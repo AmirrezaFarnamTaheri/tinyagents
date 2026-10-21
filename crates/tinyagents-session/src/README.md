@@ -61,7 +61,7 @@ reachable under `session::`, `session::run_ledger::`, and
 - **Chat threads** — `DriverConversationStore` and its wire types (re-exported at
   the root) under `session::threads` — see its own [README](./threads/README.md)
 - **Store port** — `SessionStoreProvider`, `AgentStores`, `TurnStates`,
-  `InMemorySessionStores`, and `DriverSessionStores` over a `tinystoragedrivers` backend — see
+  `InMemorySessionStores`, `DriverSessionStores`, and `RebindableSessionStores` over a `tinystoragedrivers` backend — see
   [`docs/modules/session/store-port.md`](../../../docs/modules/session/store-port.md)
 - **Legacy import** — `legacy::import_workspace` and
   `DriverRunLedger::import_legacy_database` (feature `legacy-import`)

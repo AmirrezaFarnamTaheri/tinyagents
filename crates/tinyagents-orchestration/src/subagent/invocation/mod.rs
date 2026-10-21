@@ -15,7 +15,7 @@
 //!   runs in the background by default, returning a job id immediately; callers
 //!   can request `mode: "inline"` to await the child and receive its final
 //!   result in the same call.
-//! - [`SubAgentJobsTool`] and [`SubAgentMessageTool`] let the host or parent
+//! - [`tinyagents_harness_tools::subagents::SubAgentJobsTool`] and [`tinyagents_harness_tools::subagents::SubAgentMessageTool`] let the host or parent
 //!   query those jobs and steer live children by job id.
 //! - [`SubAgentSession`] keeps a single [`SubAgent`] alive across multiple
 //!   turns, *reusing* the same harness while accumulating the conversation
@@ -29,7 +29,7 @@
 //! - **Reuse** ([`SubAgentSession`]): the child run *completes*, the
 //!   orchestrator obtains human input, then calls the **same** sub-agent again
 //!   carrying the prior transcript. Nothing is killed or restarted.
-//! - **Steering** ([`SubAgentMessageTool`]): an orchestrator or human sends a
+//! - **Steering** ([`tinyagents_harness_tools::subagents::SubAgentMessageTool`]): an orchestrator or human sends a
 //!   message to a **still-running** job. Delivery occurs at a safe checkpoint.
 //!
 //! `SubAgentSession` implements the first. The flow is:
@@ -73,6 +73,7 @@
 //!   typed-parent dispatcher).
 //! - `*_tests.rs` files hold the focused tests.
 
+mod delegation_tool;
 mod jobs;
 mod policy_run;
 mod status_map;
@@ -80,8 +81,17 @@ mod types;
 
 const LOG_PREFIX: &str = "[subagent-tool]";
 
-pub use jobs::{SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools};
+pub use delegation_tool::{
+    DELEGATION_EXECUTE_PROMPT, DELEGATION_MODE_FIELD, DELEGATION_PLAN_PROMPT,
+    DELEGATION_REVIEW_PROMPT, DelegationEnvelope, DelegationRequest, DelegationTool,
+    MultiTargetDelegationTool, ReviewApprovalPolicy, parse_approval, review_stage_output,
+};
+pub use jobs::InlineJobGuard;
 pub use types::*;
+
+#[cfg(test)]
+#[path = "delegation_tool_tests.rs"]
+mod delegation_tool_tests;
 
 use std::sync::Arc;
 
@@ -299,6 +309,7 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         streaming: bool,
     ) -> Result<AgentRun> {
         let depth = ctx.depth();
+        let child_run_id = ctx.run_id().clone();
         let messages = self.seed_messages(input.clone());
         // Clone the sink (it shares listeners and the offset counter with the
         // context) so the completion event can be emitted after `ctx` is moved
@@ -308,6 +319,11 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         events.emit(AgentEvent::SubAgentStarted {
             name: self.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunStarted {
+            name: self.name.clone(),
+            depth,
+            run_id: child_run_id.clone(),
         });
 
         let run = if streaming {
@@ -321,6 +337,9 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         events.emit(AgentEvent::SubAgentCompleted {
             name: self.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunCompleted {
+            run_id: child_run_id,
         });
 
         Ok(run)
@@ -371,11 +390,17 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
             return self.run_child(state, ctx, input, streaming).await;
         }
         let depth = ctx.depth();
+        let child_run_id = ctx.run_id().clone();
         let messages = self.seed_messages(input.clone());
         let events = ctx.events.clone();
         events.emit(AgentEvent::SubAgentStarted {
             name: self.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunStarted {
+            name: self.name.clone(),
+            depth,
+            run_id: child_run_id.clone(),
         });
         let run = match self
             .harness
@@ -392,6 +417,9 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
         events.emit(AgentEvent::SubAgentCompleted {
             name: self.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunCompleted {
+            run_id: child_run_id,
         });
         Ok(run)
     }
@@ -541,6 +569,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
         let config = self.child_config()?;
         let depth = config.depth();
         let ctx = RunContext::new(config, ctx_data).with_events(self.events.clone());
+        let child_run_id = ctx.run_id().clone();
 
         // Clone the sink so we can emit the completion event after `ctx` is
         // moved into the child agent loop.
@@ -548,6 +577,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
         events.emit(AgentEvent::SubAgentStarted {
             name: self.subagent.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunStarted {
+            name: self.subagent.name.clone(),
+            depth,
+            run_id: child_run_id.clone(),
         });
         if self.turn > 0 {
             events.emit(AgentEvent::SubAgentReused {
@@ -567,6 +601,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
         events.emit(AgentEvent::SubAgentCompleted {
             name: self.subagent.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunCompleted {
+            run_id: child_run_id,
         });
 
         // Carry the produced assistant/tool messages forward. `run.messages` is
@@ -607,9 +644,11 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
     /// for every recursive invocation.
     pub fn new(subagent: Arc<SubAgent<State, Ctx>>, child_data: ChildDataPolicy<Ctx>) -> Self {
         let tool_name = subagent.name().to_owned();
+        let tool_description = subagent.description().to_owned();
         Self {
             subagent,
             tool_name,
+            tool_description,
             child_data,
             parameters: Self::default_parameters(),
             declaration: std::sync::OnceLock::new(),
@@ -619,6 +658,8 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
             role: crate::subagent::SubagentRole::default(),
             delegation_tools: Vec::new(),
             result_policy: crate::subagent::ResultPolicy::default(),
+            job_registry: None,
+            job_owner_scope: Arc::new(|owner| owner.to_string()),
         }
     }
 
@@ -702,7 +743,19 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
 
     /// Uses a host-shared registry for spawned jobs and control tools.
     pub fn with_job_registry(mut self, jobs: SubAgentJobRegistry) -> Self {
-        self.jobs = jobs;
+        self.jobs = jobs.clone();
+        self.job_registry = Some(jobs);
+        self
+    }
+
+    /// Resolves ephemeral turn run ids to a stable host-owned job scope.
+    /// Configure the same resolver on this spawn tool and its Jobs/Message
+    /// aliases when the host recreates run contexts between turns.
+    pub fn with_job_owner_scope(
+        mut self,
+        resolve: Arc<dyn Fn(u64) -> String + Send + Sync>,
+    ) -> Self {
+        self.job_owner_scope = resolve;
         self
     }
 
@@ -714,12 +767,21 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
     /// Overrides the model-visible tool name.
     pub fn with_tool_name(mut self, name: impl Into<String>) -> Self {
         self.tool_name = name.into();
+        self.declaration = std::sync::OnceLock::new();
+        self
+    }
+
+    /// Overrides the model-facing description for a named driver alias.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.tool_description = description.into();
+        self.declaration = std::sync::OnceLock::new();
         self
     }
 
     /// Overrides the model-visible JSON Schema for the tool arguments.
     pub fn with_parameters(mut self, parameters: Value) -> Self {
         self.parameters = parameters;
+        self.declaration = std::sync::OnceLock::new();
         self
     }
 
@@ -845,7 +907,8 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
         };
         let subagent_run_id = child.run_id().as_str().to_owned();
         let tool_call_id = call_id.map(|id| id.as_str().to_owned());
-        let (job_id, steering) = self.jobs.create_with_cancellation(
+        let run_queue = Arc::new(tinyagents_harness::run_queue::RunQueue::new());
+        let (job_id, steering) = self.jobs.create_with_cancellation_and_queue(
             &self.tool_name,
             parent.instance_id(),
             child.cancellation.clone(),
@@ -853,11 +916,14 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
                 subagent_run_id: Some(subagent_run_id.clone()),
                 parent_tool_call_id: tool_call_id.clone(),
             },
+            Some(run_queue.clone()),
         );
         tracing::debug!(
             "{LOG_PREFIX} spawn job_id={job_id} subagent_run_id={subagent_run_id} tool_call_id={tool_call_id:?}"
         );
-        let mut child = child.with_steering(steering.clone());
+        let mut child = child
+            .with_steering(steering.clone())
+            .with_run_queue(run_queue.clone());
         stamp_link_metadata(
             &mut child.config.metadata,
             &subagent_run_id,
@@ -1002,7 +1068,7 @@ where
         Arc::clone(self.declaration.get_or_init(|| {
             Arc::new(SubAgentToolDeclaration {
                 name: self.tool_name.clone(),
-                description: self.subagent.description().to_owned(),
+                description: self.tool_description.clone(),
                 parameters: self.parameters.clone(),
             })
         }))
@@ -1064,8 +1130,8 @@ impl tinytools::Tool for SubAgentToolDeclaration {
 mod test;
 
 #[cfg(test)]
-#[path = "mod_jobs_tests.rs"]
-mod jobs_tests;
+#[path = "test_helpers.rs"]
+mod test_helpers;
 
 #[cfg(test)]
 #[path = "mod_link_tests.rs"]

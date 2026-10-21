@@ -5,13 +5,15 @@ typed state-graph runtime. It takes its shape from LangChain (models, tools,
 middleware, structured output, streaming, usage/cost) and LangGraph
 (`START`/`END`, nodes, conditional edges, channels/reducers, checkpoints,
 interrupts, subgraphs, time travel) — rebuilt as ordinary, typed Rust. The
-system is organized as five public crates:
+system is organized as focused workspace packages:
 
 1. the harness
-2. the graph
-3. the registry
-4. durable sessions
-5. host-neutral session runtime
+2. reusable harness tools
+3. the graph
+4. the registry
+5. durable sessions
+6. host-neutral session runtime
+7. host-neutral orchestration
 
 The goal is to make agent systems easy to define, inspect, run, test, and
 serialize without hiding the Rust types that make production systems reliable.
@@ -35,6 +37,7 @@ observability, or test contracts.
 
 ## Detailed Module Docs
 
+- [Harness tools crate](../../crates/tinyagents-harness-tools/README.md)
 - [Harness module](../modules/harness/README.md)
   - [Context](../modules/harness/context.md)
   - [Model and providers](../modules/harness/model.md)
@@ -148,6 +151,7 @@ they use. Shared runtime errors live in `tinyagents-harness`.
 ```text
 crates/
   tinyagents-harness/           # models, tools, middleware, providers, runtime
+  tinyagents-harness-tools/     # reusable tool implementations and stateful support
   tinyagents-graph/             # durable typed state graphs
   tinyagents-tasks/             # graph-independent detached-task registry, task stores, orchestration tools
   tinyagents-registry/          # named capabilities and model catalog

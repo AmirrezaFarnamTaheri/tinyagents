@@ -92,6 +92,131 @@ async fn stored_bodies(offload: &ArtifactOffload) -> Vec<(String, String)> {
     out
 }
 
+#[tokio::test]
+async fn filesystem_policy_denial_precedes_blob_or_file_writes() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    let workspace = temp.path().join("private");
+    std::fs::create_dir_all(root.join(OUTPUTS_DIR)).expect("create output root");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let target = root
+        .join(OUTPUTS_DIR)
+        .join("worker")
+        .join("task-1-result.md");
+    std::fs::create_dir_all(target.parent().expect("target parent")).expect("create target parent");
+    std::fs::write(&target, "keep the existing content").expect("seed previous output");
+    let offload = ArtifactOffload::in_memory("worker", "task-1").with_path_policy(Arc::new(
+        TestPolicy::rooted_at(workspace).with_internal_suffix(&format!("/action/{OUTPUTS_DIR}/")),
+    ));
+
+    let output = "sensitive result".repeat(100);
+    let (text, artifact) =
+        offload_oversized_result_to_fs(output.clone(), &offload, 1, READ_TOOL, &root).await;
+
+    assert_eq!(text, output);
+    assert!(artifact.is_none());
+    assert!(
+        stored_bodies(&offload).await.is_empty(),
+        "denied targets must not create blob records"
+    );
+    assert_eq!(
+        std::fs::read_to_string(target).expect("read existing target"),
+        "keep the existing content"
+    );
+}
+
+#[tokio::test]
+async fn filesystem_offload_materializes_only_the_redacted_stored_body() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    std::fs::create_dir_all(&root).expect("create root");
+    let offload =
+        ArtifactOffload::in_memory("worker", "materialized").with_redactor(Arc::new(TestRedactor));
+    let output = format!("before {SECRET} after");
+
+    let (pointer, artifact) =
+        offload_oversized_result_to_fs(output, &offload, 1, READ_TOOL, &root).await;
+
+    let artifact = artifact.expect("offloaded artifact");
+    assert!(pointer.contains(&artifact.relative_path));
+    let materialized = std::fs::read_to_string(root.join(&artifact.relative_path))
+        .expect("read materialized file");
+    assert_eq!(materialized, format!("before {REDACTION} after"));
+    assert!(!materialized.contains(SECRET));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn filesystem_offload_refuses_symlinked_output_directory_before_storage() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&root).expect("create root");
+    std::fs::create_dir_all(&outside).expect("create outside");
+    std::fs::create_dir_all(root.join(OUTPUTS_DIR).parent().expect("outputs parent"))
+        .expect("create namespaced parent");
+    std::os::unix::fs::symlink(&outside, root.join(OUTPUTS_DIR)).expect("symlink outputs");
+    let offload = ArtifactOffload::in_memory("worker", "symlink");
+
+    let output = "must remain inline".repeat(100);
+    let (text, artifact) =
+        offload_oversized_result_to_fs(output.clone(), &offload, 1, READ_TOOL, &root).await;
+
+    assert_eq!(text, output);
+    assert!(artifact.is_none());
+    assert!(stored_bodies(&offload).await.is_empty());
+    assert_eq!(
+        std::fs::read_dir(&outside).expect("read outside").count(),
+        0
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_materialization_does_not_create_descendants_through_a_symlink() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&root).expect("create root");
+    std::fs::create_dir_all(&outside).expect("create outside");
+    std::fs::create_dir_all(root.join(OUTPUTS_DIR).parent().expect("outputs parent"))
+        .expect("create namespaced parent");
+    std::os::unix::fs::symlink(&outside, root.join(OUTPUTS_DIR)).expect("symlink outputs");
+
+    let result = super::ops::atomic_write_under_dir(
+        &root,
+        &Path::new(OUTPUTS_DIR).join("worker"),
+        std::ffi::OsStr::new("result.md"),
+        b"body",
+    );
+
+    assert!(result.is_err(), "symlinked parent must fail closed");
+    assert!(
+        !outside.join("worker").exists(),
+        "no directory is created outside the root"
+    );
+}
+
+#[test]
+fn capability_materialization_writes_atomically_beneath_the_open_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    std::fs::create_dir_all(&root).expect("create root");
+
+    super::ops::atomic_write_with_capability(
+        &root,
+        Path::new("outputs/worker"),
+        std::ffi::OsStr::new("result.md"),
+        b"body",
+    )
+    .expect("capability-relative atomic write");
+
+    assert_eq!(
+        std::fs::read(root.join("outputs/worker/result.md")).expect("read materialized body"),
+        b"body"
+    );
+}
+
 // ── Kinds and directories ─────────────────────────────────────────────────────
 
 #[test]

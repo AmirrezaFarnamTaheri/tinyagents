@@ -9,7 +9,8 @@ use tinyagents_session::transcript::{
 };
 use tinyinference_llm::message::Message;
 
-use crate::{PrefixSnapshot, ToolSnapshot};
+use crate::PrefixSnapshot;
+use tinyagents_harness::tool::ToolSnapshot;
 
 /// Selects the durable transcript a turn should load before execution.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -260,10 +261,13 @@ pub enum TranscriptDelta {
 }
 
 /// Durable transcript information supplied after a successful append.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TranscriptCommitReceipt {
     pub path: PathBuf,
     pub delta: TranscriptDelta,
+    /// Lossless durable rows written by this commit: appended rows for an
+    /// extension, or the complete replacement set for a new generation.
+    pub rows: Vec<TranscriptMessage>,
 }
 
 /// Exactly-once post-durability observation data.

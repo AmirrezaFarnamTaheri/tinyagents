@@ -1,15 +1,13 @@
-use std::{
-    collections::HashMap,
-    future::Future,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use tinyagents_tasks::CompletionRouter;
-use tokio::sync::{Mutex as AsyncMutex, Notify};
+use tokio::sync::Mutex as AsyncMutex;
 
 use super::completion::{CompletionOrigin, deliver};
 use super::policy::{AttemptSource, apply_outcome_policies, may_retry};
-use super::{IncompleteKind, SpawnAdmission, SpawnRejection, SubagentIncomplete, restrict_tools};
+use super::{
+    IncompleteKind, SpawnAdmission, SpawnRejection, SubagentIncomplete, restrict_tools_with_scope,
+};
 use super::{
     PersistedSubagentPause, SubagentError, SubagentExecution, SubagentExecutor, SubagentOutcome,
     SubagentOutcomeKind, SubagentPausePersistenceDisposition, SubagentPersistence,
@@ -19,7 +17,15 @@ use super::{
 use tinyagents_harness::error::TinyAgentsError;
 
 const LOG_PREFIX: &str = "[subagent-driver]";
-use tinyagents_harness::{CancellationToken, context::RunConfig, ids::RunId};
+
+/// Cloneable process-scope in-flight registry that can be shared by drivers.
+pub type SubagentInFlight = SharedFlightMap<SubagentTaskKey, SubagentRunResult, SubagentError>;
+use tinyagents_harness::{
+    CancellationToken,
+    cache::{SharedFlightEntry, SharedFlightMap},
+    context::RunConfig,
+    ids::RunId,
+};
 
 /// Optional host seams accepted by [`SubagentDriver::new`].
 ///
@@ -44,57 +50,9 @@ pub struct SubagentDriver<C: Send + 'static = (), H: Send + 'static = ()> {
     executor: Arc<dyn SubagentExecutor<C>>,
     persistence: Arc<dyn SubagentPersistence>,
     terminal_outcomes: AsyncMutex<HashMap<SubagentTaskKey, SubagentOutcome>>,
-    in_flight: Arc<Mutex<HashMap<SubagentTaskKey, Arc<InFlight>>>>,
+    in_flight: SharedFlightMap<SubagentTaskKey, SubagentRunResult, SubagentError>,
     admission: SpawnAdmission,
     completions: Option<Arc<CompletionRouter>>,
-}
-
-/// Result shared by callers that arrived while the same task was executing.
-///
-/// The map only protects reservation and removal. Planner, executor, and
-/// persistence futures never run while it is locked.
-struct InFlight {
-    result: Mutex<Option<Result<SubagentRunResult, SubagentError>>>,
-    notify: Notify,
-}
-
-impl InFlight {
-    fn new() -> Self {
-        Self {
-            result: Mutex::new(None),
-            notify: Notify::new(),
-        }
-    }
-
-    async fn wait(
-        &self,
-        cancellation: &CancellationToken,
-        task_id: &str,
-    ) -> Result<SubagentRunResult, SubagentError> {
-        loop {
-            let notified = self.notify.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if let Some(result) = self
-                .result
-                .lock()
-                .expect("in-flight result poisoned")
-                .clone()
-            {
-                return result;
-            }
-            tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => return Ok(SubagentRunResult::new(SubagentOutcome::cancelled(task_id), SubagentPersistenceDisposition::ObserverCancelled)),
-                _ = &mut notified => {}
-            }
-        }
-    }
-
-    fn complete(&self, result: Result<SubagentRunResult, SubagentError>) {
-        *self.result.lock().expect("in-flight result poisoned") = Some(result);
-        self.notify.notify_waiters();
-    }
 }
 
 /// Owns the leader's in-flight reservation until its result is published.
@@ -102,22 +60,16 @@ impl InFlight {
 /// Dropping a caller future must also release its reservation: otherwise a
 /// later caller becomes a follower of work that will never publish a result.
 struct LeaderReservation {
-    in_flight: Arc<Mutex<HashMap<SubagentTaskKey, Arc<InFlight>>>>,
+    in_flight: SharedFlightMap<SubagentTaskKey, SubagentRunResult, SubagentError>,
     task_key: SubagentTaskKey,
-    entry: Arc<InFlight>,
+    entry: SharedFlightEntry<SubagentRunResult, SubagentError>,
     finished: bool,
 }
 
 impl LeaderReservation {
     fn finish(mut self, result: Result<SubagentRunResult, SubagentError>) {
         self.entry.complete(result);
-        let mut in_flight = self.in_flight.lock().expect("in-flight map poisoned");
-        if in_flight
-            .get(&self.task_key)
-            .is_some_and(|current| Arc::ptr_eq(current, &self.entry))
-        {
-            in_flight.remove(&self.task_key);
-        }
+        self.in_flight.retire(&self.task_key, &self.entry);
         self.finished = true;
     }
 }
@@ -127,19 +79,10 @@ impl Drop for LeaderReservation {
         if self.finished {
             return;
         }
-        let in_flight = self.in_flight.clone();
-        let task_key = self.task_key.clone();
-        let entry = self.entry.clone();
         // Publish a typed result before removal so existing followers cannot
         // wait indefinitely, even if the future is dropped outside a runtime.
-        entry.complete(Err(SubagentError::Cancelled));
-        let mut in_flight = in_flight.lock().expect("in-flight map poisoned");
-        if in_flight
-            .get(&task_key)
-            .is_some_and(|current| Arc::ptr_eq(current, &entry))
-        {
-            in_flight.remove(&task_key);
-        }
+        self.entry.complete(Err(SubagentError::Cancelled));
+        self.in_flight.retire(&self.task_key, &self.entry);
     }
 }
 
@@ -157,7 +100,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                 .persistence
                 .ok_or(SubagentError::MissingCapability("persistence"))?,
             terminal_outcomes: AsyncMutex::new(HashMap::new()),
-            in_flight: Arc::new(Mutex::new(HashMap::new())),
+            in_flight: SharedFlightMap::new(),
             admission: SpawnAdmission::default(),
             completions: None,
         })
@@ -190,6 +133,16 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
     /// call the driver behaves exactly as before.
     pub fn with_completion_router(mut self, router: Arc<CompletionRouter>) -> Self {
         self.completions = Some(router);
+        self
+    }
+
+    /// Shares in-flight deduplication with other drivers using this registry.
+    ///
+    /// Hosts should keep one registry for the process and inject clones into
+    /// independently composed drivers. Durable persistence remains necessary
+    /// to deduplicate across processes.
+    pub fn with_shared_in_flight(mut self, in_flight: SubagentInFlight) -> Self {
+        self.in_flight = in_flight;
         self
     }
 
@@ -236,22 +189,15 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
             ));
         }
 
-        let (entry, is_leader) = {
-            let mut in_flight = self.in_flight.lock().expect("in-flight map poisoned");
-            match in_flight.get(&task_key) {
-                Some(entry) => (entry.clone(), false),
-                None => {
-                    let entry = Arc::new(InFlight::new());
-                    in_flight.insert(task_key.clone(), entry.clone());
-                    (entry, true)
-                }
-            }
-        };
+        let (entry, is_leader) = self.in_flight.claim(task_key.clone());
         if !is_leader {
-            return entry
-                .wait(&cancellation, &task_key.task_id)
-                .await
-                .map(|result| {
+            return match entry.wait_or_cancel(&cancellation).await {
+                None => Ok(SubagentRunResult::new(
+                    SubagentOutcome::cancelled(task_key.task_id.clone()),
+                    SubagentPersistenceDisposition::ObserverCancelled,
+                )),
+                Some(Err(error)) => Err(error),
+                Some(Ok(result)) => Ok({
                     SubagentRunResult::new(
                         result.outcome,
                         match result.disposition {
@@ -269,7 +215,8 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                             }
                         },
                     )
-                });
+                }),
+            };
         }
         let reservation = LeaderReservation {
             in_flight: self.in_flight.clone(),
@@ -391,11 +338,13 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                 .await;
             return Ok(result);
         }
-        prepared.tools = restrict_tools(
+        prepared.tools = restrict_tools_with_scope(
             &prepared.tools,
             prepared.role,
             prepared.tool_ceiling.as_ref(),
             &prepared.delegation_tools,
+            prepared.tool_scope.as_ref(),
+            prepared.skill_filter.as_deref(),
         );
         prepared
             .policy
@@ -416,6 +365,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         let mut attempt = 0usize;
         let mut execution = SubagentExecution {
             prepared,
+            task_key: task_key.clone(),
             cancellation: child_token,
         };
         let mut timed_out = false;
@@ -466,6 +416,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                 Ok(next) => {
                     execution = SubagentExecution {
                         prepared: next,
+                        task_key: task_key.clone(),
                         cancellation: next_token,
                     };
                 }

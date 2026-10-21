@@ -21,6 +21,7 @@ use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::runtime::{AgentHarness, AgentInvocation, AgentTurnRequest, RunPolicy};
 use crate::testkit::ScriptedModel;
 use futures::StreamExt;
+use sha2::Digest;
 use tinyagents_definition::{
     AgentDefinition, DefinitionRegistry, DefinitionRegistryError, InMemoryDefinitionRegistry,
 };
@@ -82,6 +83,25 @@ struct SecretRecordBudget;
 struct SecretAfterModelMiddleware;
 
 struct FallbackGuidance;
+
+struct CarryCountOnUsageEvent {
+    carried: Arc<AtomicUsize>,
+    observed: Arc<Mutex<Vec<usize>>>,
+}
+
+impl crate::events::EventListener for CarryCountOnUsageEvent {
+    fn on_event(&self, record: &crate::events::EventRecord) {
+        if matches!(
+            &record.event,
+            crate::events::AgentEvent::UsageRecorded { .. }
+        ) {
+            self.observed
+                .lock()
+                .expect("usage ordering lock")
+                .push(self.carried.load(Ordering::SeqCst));
+        }
+    }
+}
 
 #[async_trait]
 impl Middleware<()> for FallbackGuidance {
@@ -856,6 +876,24 @@ impl Tool for NoopTool {
     }
 }
 
+struct ReportedFailureTool;
+
+#[async_trait]
+impl Tool for ReportedFailureTool {
+    fn name(&self) -> &str {
+        "reported_failure"
+    }
+    fn description(&self) -> &str {
+        "reports a classified error"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type":"object"})
+    }
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::error("permission denied for /secret/file"))
+    }
+}
+
 #[async_trait]
 impl Tool for BlockedTool {
     fn name(&self) -> &str {
@@ -970,6 +1008,23 @@ fn with_policy_replaces_policy() {
 }
 
 #[test]
+fn install_depth_only_narrows_the_existing_limit() {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    let mut policy = RunPolicy::default();
+    policy.limits.max_depth = 4;
+    harness.with_policy(policy);
+
+    super::install_depth(&mut harness, 2);
+    assert_eq!(harness.policy().limits.max_depth, 2);
+    super::install_depth(&mut harness, 9);
+    assert_eq!(
+        harness.policy().limits.max_depth,
+        2,
+        "installing a later host limit cannot widen the active policy"
+    );
+}
+
+#[test]
 fn default_matches_new() {
     let harness: AgentHarness<()> = AgentHarness::default();
     assert!(harness.models().default_name().is_none());
@@ -1029,6 +1084,105 @@ async fn host_driven_turn_resolves_and_composes_without_touching_explicit_sdk_de
         harness.models().default_name().is_none(),
         "host resolution does not mutate SDK model defaults"
     );
+}
+
+#[tokio::test]
+async fn workload_observers_carry_one_usage_record_on_buffered_and_streaming_turns() {
+    use crate::events::{AgentEvent, RecordingListener};
+    use crate::host::{
+        AllowAllSecurityGate, FixedModelResolver, HostCapabilities, StaticContextComposer,
+    };
+    use tinyinference_llm::model::{ModelResolutionSource, ResolvedModel};
+
+    for streaming in [false, true] {
+        let mut response = ModelResponse::assistant("reply");
+        response.usage = Some(Usage::new(8, 3));
+        response.resolved_model = Some(ResolvedModel {
+            name: "backup".into(),
+            requested: None,
+            source: ModelResolutionSource::RegistryDefault,
+        });
+        let model = Arc::new(crate::testkit::ScriptedModel::new(vec![response]));
+        let host = HostCapabilities::new(
+            Arc::new(StaticContextComposer::empty()),
+            Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+                "helper",
+                "Helper",
+                "test helper",
+            )])),
+            Arc::new(AllowAllSecurityGate),
+            Arc::new(FixedModelResolver::new(model)),
+        );
+        let carried = Arc::new(AtomicUsize::new(0));
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.push_model_middleware(Arc::new(
+            crate::middleware::FallbackObserverMiddleware::new("primary"),
+        ));
+        let carried_by_middleware = Arc::clone(&carried);
+        harness.push_model_middleware(Arc::new(crate::middleware::UsageCarryMiddleware::new(
+            move |response| {
+                if response.usage.is_some() {
+                    carried_by_middleware.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        )));
+        let context = RunContext::new(
+            RunConfig::new(if streaming {
+                "route-stream"
+            } else {
+                "route-buffer"
+            })
+            .with_thread("workload"),
+            (),
+        );
+        let recorder = Arc::new(RecordingListener::new());
+        context.events.subscribe(recorder.clone());
+        let carry_order = Arc::new(Mutex::new(Vec::new()));
+        context.events.subscribe(Arc::new(CarryCountOnUsageEvent {
+            carried: Arc::clone(&carried),
+            observed: Arc::clone(&carry_order),
+        }));
+        let invocation = AgentInvocation::new(
+            host,
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("go")],
+            ),
+            context,
+        );
+        if streaming {
+            harness
+                .invoke_agent_streaming(invocation, &())
+                .await
+                .expect("streaming hosted turn");
+        } else {
+            harness
+                .invoke_agent(invocation, &())
+                .await
+                .expect("buffered hosted turn");
+        }
+        let events = recorder.events();
+        assert_eq!(carried.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *carry_order.lock().expect("usage ordering lock"),
+            vec![1],
+            "the host usage carry must run before the corresponding UsageRecorded event"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.event, AgentEvent::UsageRecorded { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(&event.event, AgentEvent::FallbackSelected { from, to } if from == "primary" && to == "backup"))
+                .count(),
+            1
+        );
+    }
 }
 
 #[tokio::test]
@@ -1171,6 +1325,7 @@ fn hosted_timeout_round_trip_preserves_the_bound() {
         kind: HostedErrorKind::Timeout,
         message: "timed out".to_string(),
         timeout_bound: bound,
+        dispatch_refusal: None,
         run: None,
     };
     assert!(matches!(
@@ -1190,6 +1345,7 @@ fn hosted_timeout_round_trip_preserves_the_bound() {
         kind,
         message: "sanitized failure".to_string(),
         timeout_bound: None,
+        dispatch_refusal: None,
         run: None,
     };
     assert!(matches!(
@@ -2760,6 +2916,130 @@ async fn denied_tool_calls_do_not_enter_terminal_executed_tool_summary() {
         summaries[0].tools_invoked.is_empty(),
         "denied calls never reached a tool executor"
     );
+}
+
+#[tokio::test]
+async fn learning_summary_contains_digested_success_and_classified_failure_outcomes() {
+    let mut response = tinyinference_llm::model::ModelResponse::assistant("");
+    response.message.tool_calls.extend([
+        tinyinference_llm::tool::ToolCall::new("ok-call", "noop", json!({"value":"safe"})),
+        tinyinference_llm::tool::ToolCall::new(
+            "failed-call",
+            "reported_failure",
+            json!({"path":"/secret/file"}),
+        ),
+    ]);
+    let learning = Arc::new(RecordingLearning::default());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            AgentDefinition::new("helper", "Helper", "test helper")
+                .with_tools(["noop", "reported_failure"]),
+        ])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(Arc::new(ScriptedModel::new(vec![
+            response,
+            tinyinference_llm::model::ModelResponse::assistant("finished"),
+        ])))),
+    )
+    .with_learning(learning.clone());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(NoopTool));
+    harness.register_tool(Arc::new(ReportedFailureTool));
+    harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("run tools")],
+                ),
+                RunContext::new(RunConfig::new("learning-outcomes"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect("turn completes");
+    yield_until(|| learning.summaries.lock().expect("learning lock").len() == 1).await;
+    let summaries = learning.summaries.lock().expect("learning lock");
+    let outcomes = &summaries[0].tool_outcomes;
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes[0].success);
+    assert!(outcomes[0].duration_ms < 10_000);
+    assert_eq!(
+        outcomes[0].args_digest,
+        sha2::Sha256::digest(serde_json::to_vec(&json!({"value":"safe"})).unwrap())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    assert!(!outcomes[1].success);
+    assert_eq!(
+        outcomes[1].failure_class.as_deref(),
+        Some("permission_denied")
+    );
+    assert!(outcomes[1].duration_ms < 10_000);
+    assert!(
+        !serde_json::to_string(&summaries[0])
+            .unwrap()
+            .contains("/secret/file")
+    );
+}
+
+#[tokio::test]
+async fn hosted_stream_learning_summary_preserves_tool_outcomes() {
+    let mut response = tinyinference_llm::model::ModelResponse::assistant("");
+    response
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "stream-call",
+            "noop",
+            json!({"value":"stream"}),
+        ));
+    let learning = Arc::new(RecordingLearning::default());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            AgentDefinition::new("helper", "Helper", "test helper").with_tools(["noop"]),
+        ])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(Arc::new(ScriptedModel::new(vec![
+            response,
+            tinyinference_llm::model::ModelResponse::assistant("done"),
+        ])))),
+    )
+    .with_learning(learning.clone());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(NoopTool));
+    let mut stream = harness
+        .invoke_agent_stream(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("stream")],
+                ),
+                RunContext::new(RunConfig::new("hosted-learning-outcomes"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect("stream starts");
+    while stream.next().await.is_some() {}
+    yield_until(|| learning.summaries.lock().expect("learning lock").len() == 1).await;
+    let summaries = learning.summaries.lock().expect("learning lock");
+    assert_eq!(summaries[0].tool_outcomes.len(), 1);
+    let outcome = &summaries[0].tool_outcomes[0];
+    assert!(outcome.success);
+    assert_eq!(
+        outcome.args_digest,
+        sha2::Sha256::digest(serde_json::to_vec(&json!({"value":"stream"})).unwrap())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    assert!(outcome.duration_ms < 10_000);
 }
 
 #[tokio::test]

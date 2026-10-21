@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use tinyagents_harness::tool::ToolSnapshot;
 use tinyagents_harness::{CancellationToken, context::RunContext};
-use tinyagents_runtime::ToolSnapshot;
 use tinyagents_tasks::NotifyMode;
 use tinyinference_llm::{message::Message, usage::UsageTotals};
 
@@ -58,6 +58,33 @@ pub struct SubagentTaskKey {
     pub thread_id: Option<String>,
     /// Host-local task id within the scoped recursive run.
     pub task_id: String,
+}
+
+/// Target used to continue a durable subagent lifecycle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubagentContinuationTarget {
+    /// The original lifecycle key.
+    TaskKey(SubagentTaskKey),
+    /// Public reusable-session id resolved through the durable session store.
+    SessionId(String),
+}
+
+impl From<SubagentTaskKey> for SubagentContinuationTarget {
+    fn from(value: SubagentTaskKey) -> Self {
+        Self::TaskKey(value)
+    }
+}
+
+impl From<String> for SubagentContinuationTarget {
+    fn from(value: String) -> Self {
+        Self::SessionId(value)
+    }
+}
+
+impl From<&str> for SubagentContinuationTarget {
+    fn from(value: &str) -> Self {
+        Self::SessionId(value.to_owned())
+    }
 }
 
 impl SubagentTaskKey {
@@ -117,15 +144,41 @@ impl<C, H> SubagentRequest<C, H> {
 
     /// Continues an authorized durable lifecycle with a fresh owned context.
     ///
-    /// Hosts must authorize and recover `original_key` from their own durable
-    /// record; do not derive a replacement key from the fresh context.
-    pub fn continue_with_key(
-        original_key: SubagentTaskKey,
+    /// Pass the original [`SubagentTaskKey`] or a durable session id. Session
+    /// ids are resolved through `sessions`; hosts must authorize them before
+    /// calling. Never derive a replacement key from the fresh context.
+    pub async fn continue_with_key(
+        target: impl Into<SubagentContinuationTarget>,
         fresh_owned_context: RunContext<C>,
         host_request: H,
         input: impl Into<String>,
         resume: Option<SubagentResume>,
+        sessions: Option<&dyn super::SubagentSessionStore>,
     ) -> Result<Self, SubagentError> {
+        let original_key = match target.into() {
+            SubagentContinuationTarget::TaskKey(key) => key,
+            SubagentContinuationTarget::SessionId(session_id) => {
+                let sessions = sessions.ok_or_else(|| {
+                    SubagentError::InvalidRequest(
+                        "continuing by session id requires a durable session store".into(),
+                    )
+                })?;
+                sessions
+                    .get(&session_id)
+                    .await?
+                    .ok_or_else(|| {
+                        SubagentError::InvalidRequest(format!(
+                            "unknown subagent session `{session_id}`"
+                        ))
+                    })?
+                    .lifecycle_key
+                    .ok_or_else(|| {
+                        SubagentError::InvalidRequest(format!(
+                            "subagent session `{session_id}` has no validated lifecycle key"
+                        ))
+                    })?
+            }
+        };
         Self::validate_key(&original_key)?;
         Self::validate_thread(&original_key, &fresh_owned_context)?;
         Ok(Self {
@@ -136,6 +189,54 @@ impl<C, H> SubagentRequest<C, H> {
             input: input.into(),
             resume,
         })
+    }
+
+    /// Continues a host-authorized lifecycle when the durable task key has
+    /// already been resolved by the host adapter.
+    ///
+    /// This synchronous constructor is suitable for request factories. Hosts
+    /// must authorize the key before calling it; it never derives a replacement
+    /// identity from the fresh execution context.
+    pub fn continue_with_task_key(
+        task_key: SubagentTaskKey,
+        fresh_owned_context: RunContext<C>,
+        host_request: H,
+        input: impl Into<String>,
+        resume: Option<SubagentResume>,
+    ) -> Result<Self, SubagentError> {
+        Self::validate_key(&task_key)?;
+        Self::validate_thread(&task_key, &fresh_owned_context)?;
+        Ok(Self {
+            target: None,
+            task_key,
+            run_context: fresh_owned_context,
+            host_request,
+            input: input.into(),
+            resume,
+        })
+    }
+
+    /// Continues an authorized durable session by its public session id.
+    ///
+    /// The store resolves the id to the original lifecycle key; the request
+    /// never derives a replacement key from its fresh execution context.
+    pub async fn continue_with_session_id(
+        sessions: &dyn super::SubagentSessionStore,
+        session_id: &str,
+        fresh_owned_context: RunContext<C>,
+        host_request: H,
+        input: impl Into<String>,
+        resume: Option<SubagentResume>,
+    ) -> Result<Self, SubagentError> {
+        Self::continue_with_key(
+            session_id,
+            fresh_owned_context,
+            host_request,
+            input,
+            resume,
+            Some(sessions),
+        )
+        .await
     }
 
     /// Names the sub-agent this lifecycle runs, for spawn-policy
@@ -169,7 +270,23 @@ impl<C, H> SubagentRequest<C, H> {
         &self.run_context
     }
 
-    pub(crate) fn resume(&self) -> Option<&SubagentResume> {
+    /// Attaches the live control channels registered for this lifecycle.
+    /// Hosts normally construct a child context without these channels; the
+    /// driver-backed tool uses this after admission so its generic job and
+    /// message tools control the exact request being executed.
+    pub fn with_job_controls(
+        mut self,
+        steering: tinyagents_harness::steering::SteeringHandle,
+        run_queue: tinyagents_harness::run_queue::RunQueueHandle,
+        cancellation: CancellationToken,
+    ) -> Self {
+        self.run_context.steering = Some(steering);
+        self.run_context.run_queue = Some(run_queue);
+        self.run_context.cancellation = cancellation;
+        self
+    }
+
+    pub fn resume(&self) -> Option<&SubagentResume> {
         self.resume.as_ref()
     }
 
@@ -246,6 +363,10 @@ pub struct PreparedSubagent<C = ()> {
     /// Names of the host's own [`SubAgentTool`](super::SubAgentTool)s, which a
     /// leaf must not keep (the crate cannot know custom tool names).
     pub delegation_tools: Vec<String>,
+    /// Authored capability scope to intersect with the supplied declarations.
+    pub tool_scope: Option<tinyagents_definition::ToolScope>,
+    /// Optional skill prefix (`{skill}__`) to intersect with the scope.
+    pub skill_filter: Option<String>,
     /// Timeout, retry and budget the driver applies around the execution.
     pub policy: SubAgentPolicy,
     /// How the driver trims and checks the child's final output.
@@ -287,6 +408,8 @@ impl<C> PreparedSubagent<C> {
             role: SubagentRole::default(),
             tool_ceiling: None,
             delegation_tools: Vec::new(),
+            tool_scope: None,
+            skill_filter: None,
             policy: SubAgentPolicy::default(),
             result_policy: ResultPolicy::default(),
             retry_context: None,
@@ -325,6 +448,18 @@ impl<C> PreparedSubagent<C> {
         self
     }
 
+    /// Sets an authored capability scope that can only narrow the snapshot.
+    pub fn with_tool_scope(mut self, scope: tinyagents_definition::ToolScope) -> Self {
+        self.tool_scope = Some(scope);
+        self
+    }
+
+    /// Sets a `{skill}__` name prefix that can only narrow the snapshot.
+    pub fn with_skill_filter(mut self, skill: impl Into<String>) -> Self {
+        self.skill_filter = Some(skill.into());
+        self
+    }
+
     /// Sets the timeout/retry/budget policy.
     pub fn with_policy(mut self, policy: SubAgentPolicy) -> Self {
         self.policy = policy;
@@ -348,6 +483,11 @@ impl<C> PreparedSubagent<C> {
 pub struct SubagentExecution<C = ()> {
     /// The planner's complete, host-resolved execution description.
     pub prepared: PreparedSubagent<C>,
+    /// The authenticated durable identity selected by the validated request.
+    /// This is carried separately from `prepared.task_id`: task ids are only
+    /// unique inside a root/parent/thread scope and must not key host adapter
+    /// state by themselves.
+    pub task_key: SubagentTaskKey,
     /// Cooperative cancellation shared with the lifecycle owner.
     pub cancellation: CancellationToken,
 }
@@ -516,6 +656,25 @@ impl SubagentRunResult {
 pub struct SubagentOutcome {
     /// Host-stable task identity.
     pub task_id: String,
+    /// Durable worker conversation id, when the host created one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_thread_id: Option<String>,
+    /// Host-resolved agent tier label, when the host has tiered agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    /// Explicit model override used for this run, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_override: Option<String>,
+    /// Known aggregate cost in USD, when the host can price every call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    /// Whether the known `cost_usd` value is billed or estimated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_source: Option<tinyagents_harness::cost::CostSource>,
+    /// Host-owned metadata that survives neutral persistence without making
+    /// this crate depend on a host-specific outcome taxonomy.
+    #[serde(flatten)]
+    pub extensions: BTreeMap<String, serde_json::Value>,
     /// Final visible text, retained even when cancellation arrives after work.
     pub output: String,
     /// Complete model history without lossy transcript conversion.
@@ -539,6 +698,18 @@ pub struct SubagentOutcome {
 }
 
 impl SubagentOutcome {
+    /// Adds a host-owned JSON field that must survive durable lifecycle
+    /// persistence without adding a parallel host outcome type.
+    pub fn with_extension(mut self, name: impl Into<String>, value: serde_json::Value) -> Self {
+        self.extensions.insert(name.into(), value);
+        self
+    }
+
+    /// Reads a host-owned extension by name.
+    pub fn extension(&self, name: &str) -> Option<&serde_json::Value> {
+        self.extensions.get(name)
+    }
+
     /// A completed result with `output` and no history, usage or artifacts.
     pub fn completed(task_id: impl Into<String>, output: impl Into<String>) -> Self {
         Self {
@@ -553,6 +724,12 @@ impl SubagentOutcome {
     pub fn cancelled(task_id: impl Into<String>) -> Self {
         Self {
             task_id: task_id.into(),
+            worker_thread_id: None,
+            tier: None,
+            model_override: None,
+            cost_usd: None,
+            cost_source: None,
+            extensions: BTreeMap::new(),
             output: String::new(),
             history: Vec::new(),
             status: SubagentOutcomeKind::Cancelled,
@@ -578,8 +755,12 @@ impl SubagentOutcome {
     }
 }
 
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;
+
 /// The durable input to [`crate::subagent::SubagentPersistence::save_pause`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PersistedSubagentPause {
     /// Durable scoped lifecycle identity.
     pub key: SubagentTaskKey,

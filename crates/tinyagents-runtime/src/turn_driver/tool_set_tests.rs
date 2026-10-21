@@ -29,6 +29,19 @@ fn registers_each_name_once_across_sets_in_first_seen_order() {
 }
 
 #[test]
+fn synthesized_refresh_diffs_only_dynamic_sets_and_replaces_executors() {
+    let mut builder = ToolSetBuilder::<(), ()>::new()
+        .set(set(&["static"]))
+        .synthesized_set(set(&["old", "kept"]));
+    let diff = builder.refresh_synthesized_sets([set(&["kept", "new"])]);
+    assert_eq!(diff.added, ["new"]);
+    assert_eq!(diff.removed, ["old"]);
+    assert_eq!(diff.retained, ["kept"]);
+    assert_eq!(builder.candidate_names(), ["static", "kept", "new"]);
+    assert_eq!(registered(&builder).0, ["static", "kept", "new"]);
+}
+
+#[test]
 fn an_empty_allowlist_denies_everything_and_none_admits_all() {
     let deny_all = ToolSetBuilder::<(), ()>::new()
         .set(set(&["a", "b"]))

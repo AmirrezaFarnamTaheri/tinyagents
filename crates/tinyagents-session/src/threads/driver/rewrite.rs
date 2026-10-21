@@ -12,6 +12,7 @@
 //! belonged to it are removed after the swap, best effort.
 use super::pending::APPENDS;
 use super::*;
+use std::future::Future;
 
 /// Messages written per stream append while copying a log.
 const COPY_BATCH: usize = 128;
@@ -163,11 +164,33 @@ impl DriverConversationStore {
         })
     }
 
-    pub(super) async fn purge_native(&self) -> ConversationResult<ConversationPurgeStats> {
+    pub(super) async fn purge_native_with<F>(
+        &self,
+        after_delete: F,
+    ) -> ConversationResult<ConversationPurgeStats>
+    where
+        F: FnMut(String) -> std::future::Ready<()> + Send,
+    {
+        self.purge_native_with_async(after_delete).await
+    }
+
+    pub(super) async fn purge_native_with_async<F, Fut>(
+        &self,
+        mut after_delete: F,
+    ) -> ConversationResult<ConversationPurgeStats>
+    where
+        F: FnMut(String) -> Fut + Send,
+        Fut: Future<Output = ()> + Send,
+    {
         let mut stats = ConversationPurgeStats::default();
-        let mut query = Query::filter(Filter::All).limit(PAGE_SIZE);
         loop {
-            let page = self.docs.query(COLLECTION, &query).await?;
+            let page = self
+                .docs
+                .query(COLLECTION, &Query::filter(Filter::All).limit(PAGE_SIZE))
+                .await?;
+            if page.items.is_empty() {
+                return Ok(stats);
+            }
             for item in page.items {
                 let row = Self::decode(item)?;
                 self.retire(&row.doc).await;
@@ -175,16 +198,18 @@ impl DriverConversationStore {
                     stats.thread_count += 1;
                     stats.message_count += row.doc.thread.message_count;
                 }
-                self.docs
+                let deleted = self
+                    .docs
                     .delete(COLLECTION, &row.id, Precondition::None)
                     .await?;
+                if deleted {
+                    after_delete(row.doc.thread.id).await;
+                }
             }
-            // Deleting shifts later rows into the first page, so restart from
-            // the head until the collection is empty.
-            match page.next {
-                Some(_) => query = Query::filter(Filter::All).limit(PAGE_SIZE),
-                None => return Ok(stats),
-            }
+            // Deleting shifts rows into the first page, and callbacks or
+            // concurrent writers may add rows even when the old page had no
+            // continuation cursor. Restart at the head until a fresh query is
+            // actually empty; this is quiescence draining, not a snapshot.
         }
     }
 }

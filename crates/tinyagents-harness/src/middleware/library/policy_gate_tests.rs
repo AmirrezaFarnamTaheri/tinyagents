@@ -5,12 +5,74 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use super::*;
+
 use crate::context::{RunConfig, RunContext};
 use crate::middleware::{
-    BoxToolFuture, MiddlewareStack, MiddlewareToolOutcome, ToolBaseCall, ToolMiddleware,
+    BoxToolFuture, MiddlewareStack, MiddlewareToolOutcome, ToolBaseCall, ToolHandler,
+    ToolMiddleware,
 };
 use tinyinference_llm::tool::ToolCall;
 use tinytools::ToolResult;
+
+#[test]
+fn structured_denial_renderer_preserves_host_marker_and_sections() {
+    let rendered = StructuredDenialParts::new(
+        "[policy-blocked] could not run the tool",
+        "the action violates the configured policy",
+        "choose a permitted alternative",
+        "Tell the user what was blocked and why.",
+    )
+    .render();
+
+    assert!(rendered.starts_with("Blocked: [policy-blocked]"));
+    assert!(rendered.contains("Why: the action violates the configured policy."));
+    assert!(rendered.contains("Workaround: choose a permitted alternative."));
+    assert!(rendered.ends_with("Tell the user what was blocked and why."));
+}
+
+#[test]
+fn structured_denial_parts_keep_the_legacy_rendered_bytes() {
+    let rendered =
+        StructuredDenialParts::new("[blocked] no", "why", "try this", "relay now").render();
+
+    assert_eq!(
+        rendered,
+        "Blocked: [blocked] no. Why: why. Workaround: try this. relay now"
+    );
+}
+
+#[test]
+fn structured_denial_parts_support_host_section_label_and_relay_separator() {
+    let rendered = StructuredDenialParts::new("[blocked] no", "why", "try this", "relay now")
+        .render_with_options(&StructuredDenialRenderOptions {
+            reason_label: "Reason",
+            relay_separator: " ",
+        });
+
+    assert_eq!(
+        rendered,
+        "Blocked: [blocked] no. Reason: why. Workaround: try this relay now"
+    );
+}
+
+fn render_with_borrowed_reason_label(reason_label: &str) -> String {
+    StructuredDenialParts::new("[blocked] no", "why", "try this", "relay now").render_with_options(
+        &StructuredDenialRenderOptions {
+            reason_label,
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn structured_denial_render_options_default_supports_borrowed_labels() {
+    let reason_label = String::from("Reason");
+
+    assert_eq!(
+        render_with_borrowed_reason_label(&reason_label),
+        "Blocked: [blocked] no. Reason: why. Workaround: try this. relay now"
+    );
+}
 
 /// Host context stand-in: the policy reads the channel from it.
 struct Host {
@@ -18,7 +80,11 @@ struct Host {
 }
 
 fn ctx() -> RunContext<Host> {
-    RunContext::new(RunConfig::new("gate"), Host { channel: "web" })
+    ctx_for_channel("web")
+}
+
+fn ctx_for_channel(channel: &'static str) -> RunContext<Host> {
+    RunContext::new(RunConfig::new("gate"), Host { channel })
 }
 
 fn call(name: &str) -> ToolCall {
@@ -72,11 +138,130 @@ impl ToolCallPolicy<Host> for NamePolicy {
     }
 }
 
+struct SessionCeiling;
+
+#[async_trait]
+impl ToolCallPolicy<Host> for SessionCeiling {
+    fn name(&self) -> &str {
+        "session_ceiling"
+    }
+
+    async fn check(&self, ctx: &RunContext<Host>, call: &ToolCall) -> PolicyDecision {
+        if call.name == "ceiling_only" && ctx.data.channel != "web" {
+            PolicyDecision::deny("session ceiling")
+        } else {
+            PolicyDecision::Allow
+        }
+    }
+}
+
+struct SessionApproval;
+
+#[async_trait]
+impl ToolCallPolicy<Host> for SessionApproval {
+    fn name(&self) -> &str {
+        "session_approval"
+    }
+
+    async fn check(&self, _ctx: &RunContext<Host>, call: &ToolCall) -> PolicyDecision {
+        if call.name == "rm" || call.name == "send" {
+            PolicyDecision::require_approval("session requires approval")
+        } else {
+            PolicyDecision::Allow
+        }
+    }
+}
+
 #[derive(Default)]
 struct Resolver {
     verdict: Mutex<Option<ApprovalResolution>>,
     recorded: Mutex<Vec<(String, bool)>>,
     resolved: Mutex<usize>,
+}
+
+#[derive(Default)]
+struct TerminalResolver {
+    outcomes: Mutex<Vec<(String, &'static str)>>,
+}
+
+#[derive(Default)]
+struct AllowedAuditResolver {
+    allowed: Mutex<usize>,
+    outcomes: Mutex<Vec<(String, &'static str)>>,
+    deny_allowed: bool,
+}
+
+#[async_trait]
+impl ApprovalResolver<Host> for TerminalResolver {
+    async fn requires_approval(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> bool {
+        true
+    }
+
+    async fn resolve(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> ApprovalResolution {
+        ApprovalResolution::Allow {
+            ticket: Some("ticket".into()),
+        }
+    }
+
+    fn record(&self, _ticket: &str, _result: &ToolResult) {}
+
+    fn record_terminal(&self, ticket: &str, outcome: ApprovalExecutionOutcome<'_>) {
+        let kind = match outcome {
+            ApprovalExecutionOutcome::Result(_) => "result",
+            ApprovalExecutionOutcome::Failed(_) => "failed",
+            ApprovalExecutionOutcome::Cancelled(_) => "cancelled",
+            ApprovalExecutionOutcome::Control(_) => "control",
+            ApprovalExecutionOutcome::Abandoned => "abandoned",
+        };
+        self.outcomes
+            .lock()
+            .unwrap()
+            .push((ticket.to_owned(), kind));
+    }
+}
+
+#[async_trait]
+impl ApprovalResolver<Host> for AllowedAuditResolver {
+    async fn requires_approval(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> bool {
+        false
+    }
+
+    async fn resolve(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> ApprovalResolution {
+        panic!("an already-allowed call must not enter the approval prompt path")
+    }
+
+    async fn resolve_allowed(
+        &self,
+        _ctx: &RunContext<Host>,
+        _call: &ToolCall,
+    ) -> ApprovalResolution {
+        *self.allowed.lock().unwrap() += 1;
+        if self.deny_allowed {
+            ApprovalResolution::Deny {
+                reason: "audit admission failed".into(),
+            }
+        } else {
+            ApprovalResolution::Allow {
+                ticket: Some("allowed-audit".into()),
+            }
+        }
+    }
+
+    fn record(&self, _ticket: &str, _result: &ToolResult) {}
+
+    fn record_terminal(&self, ticket: &str, outcome: ApprovalExecutionOutcome<'_>) {
+        let kind = match outcome {
+            ApprovalExecutionOutcome::Result(_) => "result",
+            ApprovalExecutionOutcome::Failed(_) => "failed",
+            ApprovalExecutionOutcome::Cancelled(_) => "cancelled",
+            ApprovalExecutionOutcome::Control(_) => "control",
+            ApprovalExecutionOutcome::Abandoned => "abandoned",
+        };
+        self.outcomes
+            .lock()
+            .unwrap()
+            .push((ticket.to_owned(), kind));
+    }
 }
 
 #[async_trait]
@@ -99,6 +284,15 @@ impl ApprovalResolver<Host> for Resolver {
 }
 
 async fn run(mw: Arc<dyn ToolMiddleware<(), Host>>, name: &str, fail: bool) -> (ToolResult, usize) {
+    run_on_channel(mw, name, fail, "web").await
+}
+
+async fn run_on_channel(
+    mw: Arc<dyn ToolMiddleware<(), Host>>,
+    name: &str,
+    fail: bool,
+    channel: &'static str,
+) -> (ToolResult, usize) {
     let runs = Arc::new(Mutex::new(0));
     let base = Base {
         runs: runs.clone(),
@@ -106,7 +300,7 @@ async fn run(mw: Arc<dyn ToolMiddleware<(), Host>>, name: &str, fail: bool) -> (
     };
     let mut stack: MiddlewareStack<(), Host> = MiddlewareStack::new();
     stack.push_tool_middleware(mw);
-    let c = ctx();
+    let c = ctx_for_channel(channel);
     let result = stack
         .run_wrapped_tool(&c, &(), call(name), &base)
         .await
@@ -202,6 +396,205 @@ async fn policy_middleware_uses_the_custom_denial_renderer() {
 }
 
 #[tokio::test]
+async fn post_gate_response_runs_only_after_policy_allows() {
+    let post_calls = Arc::new(Mutex::new(0));
+    let observed = post_calls.clone();
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy)).with_post_gate(Arc::new(
+            move |_ctx, call| {
+                *observed.lock().unwrap() += 1;
+                (call.name == "read").then(|| ToolResult::success("session listing"))
+            },
+        )),
+    );
+
+    let (denied, runs) = run(middleware.clone(), "rm", false).await;
+    assert!(denied.is_error);
+    assert_eq!(runs, 0);
+    assert_eq!(*post_calls.lock().unwrap(), 0, "denials precede disclosure");
+
+    let (listing, runs) = run(middleware, "read", false).await;
+    assert!(!listing.is_error);
+    assert_eq!(listing.output(), "session listing");
+    assert_eq!(runs, 0, "the host response replaces tool execution");
+    assert_eq!(*post_calls.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn approved_post_gate_response_records_the_approval_once() {
+    let resolver = Arc::new(Resolver::default());
+    *resolver.verdict.lock().unwrap() = Some(ApprovalResolution::Allow {
+        ticket: Some("listing-ticket".to_owned()),
+    });
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_approval_resolver(resolver.clone())
+            .with_post_gate(Arc::new(|_ctx, _call| {
+                Some(ToolResult::success("approved listing"))
+            })),
+    );
+    let (listing, runs) = run(middleware, "send", true).await;
+    assert_eq!(listing.output(), "approved listing");
+    assert_eq!(runs, 0);
+    assert_eq!(
+        *resolver.recorded.lock().unwrap(),
+        vec![("listing-ticket".to_owned(), false)]
+    );
+}
+
+#[tokio::test]
+async fn approved_post_gate_response_records_one_terminal_callback() {
+    let resolver = Arc::new(TerminalResolver::default());
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_approval_resolver(resolver.clone())
+            .with_post_gate(Arc::new(|_ctx, _call| {
+                Some(ToolResult::success("short-circuit"))
+            })),
+    );
+    let (result, runs) = run(middleware, "send", false).await;
+    assert_eq!(result.output(), "short-circuit");
+    assert_eq!(runs, 0);
+    assert_eq!(
+        *resolver.outcomes.lock().unwrap(),
+        vec![("ticket".into(), "result")]
+    );
+}
+
+#[tokio::test]
+async fn allowed_call_resolver_admits_and_records_allowed_execution() {
+    let resolver = Arc::new(AllowedAuditResolver::default());
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_approval_resolver(resolver.clone()),
+    );
+
+    let (result, runs) = run(middleware, "read", false).await;
+
+    assert_eq!(result.output(), "ran");
+    assert_eq!(runs, 1);
+    assert_eq!(*resolver.allowed.lock().unwrap(), 1);
+    assert_eq!(
+        *resolver.outcomes.lock().unwrap(),
+        vec![("allowed-audit".into(), "result")]
+    );
+}
+
+#[tokio::test]
+async fn allowed_call_resolver_never_receives_policy_denials() {
+    let resolver = Arc::new(AllowedAuditResolver::default());
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_approval_resolver(resolver.clone()),
+    );
+
+    let (result, runs) = run(middleware, "rm", false).await;
+
+    assert!(result.is_error);
+    assert!(result.output().contains("destructive"));
+    assert_eq!(runs, 0);
+    assert_eq!(*resolver.allowed.lock().unwrap(), 0);
+    assert!(resolver.outcomes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn allowed_admission_denial_precedes_post_gate_and_execution() {
+    let resolver = Arc::new(AllowedAuditResolver {
+        deny_allowed: true,
+        ..Default::default()
+    });
+    let post_gate_calls = Arc::new(Mutex::new(0));
+    let observed = post_gate_calls.clone();
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_approval_resolver(resolver.clone())
+            .with_post_gate(Arc::new(move |_ctx, _call| {
+                *observed.lock().unwrap() += 1;
+                Some(ToolResult::success("must not disclose"))
+            })),
+    );
+
+    let (result, runs) = run(middleware, "read", false).await;
+
+    assert_eq!(result.output(), "audit admission failed");
+    assert!(result.is_error);
+    assert_eq!(runs, 0);
+    assert_eq!(*post_gate_calls.lock().unwrap(), 0);
+    assert_eq!(*resolver.allowed.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn allowed_admission_runs_once_after_both_policies_allow() {
+    let resolver = Arc::new(AllowedAuditResolver::default());
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionCeiling))
+            .with_approval_resolver(resolver.clone()),
+    );
+
+    let (result, runs) = run(middleware, "read", false).await;
+
+    assert_eq!(result.output(), "ran");
+    assert_eq!(runs, 1);
+    assert_eq!(*resolver.allowed.lock().unwrap(), 1);
+    assert_eq!(
+        *resolver.outcomes.lock().unwrap(),
+        vec![("allowed-audit".into(), "result")]
+    );
+}
+
+#[tokio::test]
+async fn session_denial_skips_allowed_admission() {
+    let resolver = Arc::new(AllowedAuditResolver::default());
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionCeiling))
+            .with_approval_resolver(resolver.clone()),
+    );
+
+    let (result, runs) = run_on_channel(middleware, "ceiling_only", false, "cli").await;
+
+    assert!(result.is_error);
+    assert_eq!(runs, 0);
+    assert_eq!(*resolver.allowed.lock().unwrap(), 0);
+    assert!(resolver.outcomes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn evaluate_routes_allow_through_allowed_admission_hook() {
+    let resolver = AllowedAuditResolver::default();
+    let gate = ToolPolicyGate::new(Arc::new(NamePolicy));
+
+    assert_eq!(
+        gate.evaluate(&ctx(), &call("read"), false, Some(&resolver))
+            .await,
+        GateVerdict::Proceed {
+            ticket: Some("allowed-audit".into())
+        }
+    );
+    assert_eq!(*resolver.allowed.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn session_ceiling_deny_precedes_builder_allow_and_post_gate() {
+    let post_calls = Arc::new(Mutex::new(0));
+    let observed = post_calls.clone();
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionCeiling))
+            .with_post_gate(Arc::new(move |_ctx, _call| {
+                *observed.lock().unwrap() += 1;
+                Some(ToolResult::success("disclosed"))
+            })),
+    );
+    let (result, runs) = run_on_channel(middleware, "ceiling_only", false, "cli").await;
+    assert!(result.is_error);
+    assert!(result.output().contains("session ceiling"));
+    assert_eq!(runs, 0);
+    assert_eq!(*post_calls.lock().unwrap(), 0);
+}
+
+#[tokio::test]
 async fn require_approval_with_a_resolver_runs_once_approved_and_records() {
     let resolver = Arc::new(Resolver::default());
     *resolver.verdict.lock().unwrap() = Some(ApprovalResolution::Allow {
@@ -273,6 +666,198 @@ async fn approval_gate_records_success_and_failure_for_an_approved_ticket() {
 }
 
 #[tokio::test]
+async fn terminal_resolver_receives_one_success_outcome() {
+    let resolver = Arc::new(TerminalResolver::default());
+    let mut stack: MiddlewareStack<(), Host> = MiddlewareStack::new();
+    stack.push_tool_middleware(Arc::new(ApprovalGateMiddleware::new(
+        "approval",
+        resolver.clone(),
+    )));
+    let runs = Arc::new(Mutex::new(0));
+    let outcome = stack
+        .run_wrapped_tool(
+            &ctx(),
+            &(),
+            call("send"),
+            &Base {
+                runs: runs.clone(),
+                fail: false,
+            },
+        )
+        .await
+        .unwrap();
+    let result = outcome.into_result();
+    assert_eq!(result.output(), "ran");
+    assert_eq!(*runs.lock().unwrap(), 1);
+    assert_eq!(
+        *resolver.outcomes.lock().unwrap(),
+        vec![("ticket".into(), "result")]
+    );
+}
+
+#[tokio::test]
+async fn approval_gate_records_harness_errors_for_an_approved_ticket() {
+    struct ErrorBase;
+    impl ToolBaseCall<(), Host> for ErrorBase {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a RunContext<Host>,
+            _state: &'a (),
+            _call: ToolCall,
+        ) -> BoxToolFuture<'a> {
+            Box::pin(async { Err(crate::error::TinyAgentsError::Cancelled) })
+        }
+    }
+
+    let resolver = Arc::new(TerminalResolver::default());
+    let mut stack: MiddlewareStack<(), Host> = MiddlewareStack::new();
+    stack.push_tool_middleware(Arc::new(ApprovalGateMiddleware::new(
+        "approval",
+        resolver.clone(),
+    )));
+    let error = stack
+        .run_wrapped_tool(&ctx(), &(), call("send"), &ErrorBase)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, crate::error::TinyAgentsError::Cancelled));
+    assert_eq!(
+        *resolver.outcomes.lock().unwrap(),
+        vec![("ticket".into(), "cancelled")]
+    );
+}
+
+#[tokio::test]
+async fn policy_gate_records_non_cancellation_errors_for_an_approved_ticket() {
+    struct ErrorBase;
+    impl ToolBaseCall<(), Host> for ErrorBase {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a RunContext<Host>,
+            _state: &'a (),
+            _call: ToolCall,
+        ) -> BoxToolFuture<'a> {
+            Box::pin(async { Err(crate::error::TinyAgentsError::Middleware("failed".into())) })
+        }
+    }
+
+    let resolver = Arc::new(TerminalResolver::default());
+    let mut stack: MiddlewareStack<(), Host> = MiddlewareStack::new();
+    stack.push_tool_middleware(Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_approval_resolver(resolver.clone()),
+    ));
+    let error = stack
+        .run_wrapped_tool(&ctx(), &(), call("send"), &ErrorBase)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::error::TinyAgentsError::Middleware(_)
+    ));
+    assert_eq!(
+        *resolver.outcomes.lock().unwrap(),
+        vec![("ticket".into(), "failed")]
+    );
+}
+
+#[tokio::test]
+async fn approval_gate_records_abandoned_in_flight_call_once() {
+    struct PendingBase {
+        started: Arc<tokio::sync::Notify>,
+    }
+    impl ToolBaseCall<(), Host> for PendingBase {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a RunContext<Host>,
+            _state: &'a (),
+            _call: ToolCall,
+        ) -> BoxToolFuture<'a> {
+            Box::pin(async move {
+                self.started.notify_one();
+                std::future::pending().await
+            })
+        }
+    }
+
+    let resolver = Arc::new(TerminalResolver::default());
+    let started = Arc::new(tokio::sync::Notify::new());
+    let task_resolver = resolver.clone();
+    let task_started = started.clone();
+    let task = tokio::spawn(async move {
+        let mut stack: MiddlewareStack<(), Host> = MiddlewareStack::new();
+        stack.push_tool_middleware(Arc::new(ApprovalGateMiddleware::new(
+            "approval",
+            task_resolver,
+        )));
+        let base = PendingBase {
+            started: task_started,
+        };
+        stack
+            .run_wrapped_tool(&ctx(), &(), call("send"), &base)
+            .await
+    });
+    started.notified().await;
+    task.abort();
+    let _ = task.await;
+    assert_eq!(
+        *resolver.outcomes.lock().unwrap(),
+        vec![("ticket".into(), "abandoned")]
+    );
+}
+
+#[tokio::test]
+async fn approval_gate_preserves_and_records_control_outcomes() {
+    struct ControlMiddleware;
+    #[async_trait]
+    impl ToolMiddleware<(), Host> for ControlMiddleware {
+        fn name(&self) -> &str {
+            "control"
+        }
+
+        async fn wrap_tool(
+            &self,
+            _ctx: &RunContext<Host>,
+            _state: &(),
+            _call: ToolCall,
+            _next: ToolHandler<'_, (), Host>,
+        ) -> crate::error::Result<MiddlewareToolOutcome> {
+            Ok(MiddlewareToolOutcome::Command {
+                control: crate::context::MiddlewareControl::StopWithFinal("stop".into()),
+            })
+        }
+    }
+
+    let resolver = Arc::new(TerminalResolver::default());
+    let mut stack: MiddlewareStack<(), Host> = MiddlewareStack::new();
+    stack.push_tool_middleware(Arc::new(ApprovalGateMiddleware::new(
+        "approval",
+        resolver.clone(),
+    )));
+    stack.push_tool_middleware(Arc::new(ControlMiddleware));
+    let outcome = stack
+        .run_wrapped_tool(
+            &ctx(),
+            &(),
+            call("send"),
+            &Base {
+                runs: Arc::new(Mutex::new(0)),
+                fail: false,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        &outcome,
+        MiddlewareToolOutcome::Command { control }
+            if matches!(control, crate::context::MiddlewareControl::StopWithFinal(text) if text == "stop")
+    ));
+    assert_eq!(
+        *resolver.outcomes.lock().unwrap(),
+        vec![("ticket".into(), "control")]
+    );
+}
+
+#[tokio::test]
 async fn evaluate_settles_each_decision_for_a_host_that_interleaves_the_gate() {
     let gate = ToolPolicyGate::new(Arc::new(NamePolicy));
     let resolver = Resolver::default();
@@ -280,7 +865,7 @@ async fn evaluate_settles_each_decision_for_a_host_that_interleaves_the_gate() {
         ticket: Some("t-9".to_string()),
     });
 
-    // Allow never consults the resolver.
+    // A legacy resolver's default admission hook preserves ticket-free Allow.
     assert_eq!(
         gate.evaluate(&ctx(), &call("read"), false, Some(&resolver))
             .await,
@@ -481,4 +1066,106 @@ async fn policy_gate_serialises_concurrent_prompts_only() {
             .with_approval_resolver(resolver.clone()),
     );
     assert_approvals_serialise(middleware, resolver).await;
+}
+
+#[tokio::test]
+async fn session_ceiling_runs_before_builder_policy() {
+    let runs = Arc::new(Mutex::new(0));
+    let base = Base {
+        runs: Arc::clone(&runs),
+        fail: false,
+    };
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionCeiling)),
+    );
+    let mut stack = MiddlewareStack::<(), Host>::new();
+    stack.push_tool_middleware(middleware);
+    let ctx = RunContext::new(RunConfig::new("cli-session"), Host { channel: "cli" });
+    let result = stack
+        .run_wrapped_tool(&ctx, &(), call("ceiling_only"), &base)
+        .await
+        .unwrap()
+        .into_result();
+    assert!(result.is_error);
+    assert!(result.output().contains("session ceiling"));
+    assert_eq!(*runs.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn session_approval_cannot_bypass_builder_denial() {
+    let runs = Arc::new(Mutex::new(0));
+    let base = Base {
+        runs: Arc::clone(&runs),
+        fail: false,
+    };
+    let resolver = Arc::new(Resolver {
+        verdict: Mutex::new(Some(ApprovalResolution::Allow {
+            ticket: Some("approved".into()),
+        })),
+        ..Resolver::default()
+    });
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionApproval))
+            .with_approval_resolver(resolver.clone()),
+    );
+    let mut stack = MiddlewareStack::<(), Host>::new();
+    stack.push_tool_middleware(middleware);
+    let ctx = ctx();
+    let result = stack
+        .run_wrapped_tool(&ctx, &(), call("rm"), &base)
+        .await
+        .unwrap()
+        .into_result();
+    assert!(result.is_error);
+    assert!(result.output().contains("destructive"));
+    assert_eq!(*runs.lock().unwrap(), 0);
+    assert_eq!(*resolver.resolved.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn both_policies_requiring_approval_prompt_once_then_run() {
+    let runs = Arc::new(Mutex::new(0));
+    let base = Base {
+        runs: Arc::clone(&runs),
+        fail: false,
+    };
+    let resolver = Arc::new(Resolver {
+        verdict: Mutex::new(Some(ApprovalResolution::Allow {
+            ticket: Some("approved".into()),
+        })),
+        ..Resolver::default()
+    });
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionApproval))
+            .with_approval_resolver(resolver.clone()),
+    );
+    let mut stack = MiddlewareStack::<(), Host>::new();
+    stack.push_tool_middleware(middleware);
+    let ctx = ctx();
+    let result = stack
+        .run_wrapped_tool(&ctx, &(), call("send"), &base)
+        .await
+        .unwrap()
+        .into_result();
+    assert!(!result.is_error);
+    assert_eq!(*resolver.resolved.lock().unwrap(), 1);
+    assert_eq!(*runs.lock().unwrap(), 1);
+    assert_eq!(
+        resolver.recorded.lock().unwrap().as_slice(),
+        &[("approved".into(), false)]
+    );
+}
+
+#[test]
+fn session_skill_listing_cannot_introduce_unavailable_tools() {
+    let gate = ToolPolicyGateMiddleware::new(Arc::new(NamePolicy)).with_session_listing(Arc::new(
+        |_ctx: &RunContext<Host>, _candidates: &[String]| {
+            vec!["visible".to_owned(), "not-in-this-run".to_owned()]
+        },
+    ));
+    let names = vec!["visible".to_owned(), "hidden".to_owned()];
+    assert_eq!(gate.visible_tool_names(&ctx(), &names), vec!["visible"]);
 }

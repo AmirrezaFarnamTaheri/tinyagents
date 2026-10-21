@@ -42,7 +42,9 @@ already had.
   [`render_artifact_pointer`], [`extract_artifact_paths`],
   [`note_artifact_handoff`] (`ops.rs`) — the supporting free functions:
   threshold decision, cap-aware threshold, abstract truncation, pointer
-  rendering, pointer parsing, and handoff logging.
+  rendering, pointer parsing, handoff logging, and safe filesystem
+  materialization. The filesystem variant checks the host policy against its
+  resolved target before storing the blob.
 - [`resolve_artifact_key`], [`sanitize_component`] (`paths.rs`) — fail-closed
   key resolution under the two convention namespaces and the helper it builds on.
 - [`policy`] module (`policy.rs`) — the two host-supplied gates:

@@ -2,42 +2,47 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use serde_json::{Value, json};
 use tinyagents_harness::cancel::CancellationToken;
-use tinyagents_harness::context::RunContext;
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::{TaskId, next_seq};
+use tinyagents_harness::run_queue::QueueLane;
 use tinyagents_harness::steering::{
     SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy,
 };
-use tinyagents_harness::tool::{ToolDispatch, ToolRegistry};
+use tinyagents_tasks::DetachedTaskRegistryError;
 use tinyinference_llm::message::Message;
-use tinytools::{Tool, ToolResult};
+use tokio::sync::watch;
 
 use crate::subagent::{AppliedResult, IncompleteKind};
 
-use tinyagents_tasks::DetachedTaskRegistryError;
-use tokio::sync::watch;
-
-use super::types::{JobControl, JobMeta};
+use super::types::{DriverJobRegistration, JobControl, JobMeta};
 use super::{
     JobLink, SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus,
 };
 
 const LOG_PREFIX: &str = "[subagent-jobs]";
 
+fn registry_failure(error: DetachedTaskRegistryError) -> SubAgentJobError {
+    SubAgentJobError::Registry(error.to_string())
+}
+
+struct JobExecutionControls {
+    cancellation: CancellationToken,
+    steering: SteeringHandle,
+    run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+}
+
 /// Settles an inline job if its tool future is dropped (tool timeout, parent
 /// stream drop) or unwinds from a panic before the result is recorded.
 /// Call [`Self::disarm`] once the result has been written.
-pub(crate) struct InlineJobGuard {
+pub struct InlineJobGuard {
     jobs: SubAgentJobRegistry,
     id: SubAgentJobId,
     armed: bool,
 }
 
 impl InlineJobGuard {
-    pub(crate) fn new(jobs: SubAgentJobRegistry, id: SubAgentJobId) -> Self {
+    pub fn new(jobs: SubAgentJobRegistry, id: SubAgentJobId) -> Self {
         Self {
             jobs,
             id,
@@ -45,7 +50,7 @@ impl InlineJobGuard {
         }
     }
 
-    pub(crate) fn disarm(&mut self) {
+    pub fn disarm(&mut self) {
         self.armed = false;
     }
 }
@@ -70,14 +75,6 @@ impl SubAgentJobRegistry {
         &self.tasks
     }
 
-    /// Whether the job still holds a live (unreleased) cancellation token.
-    #[cfg(test)]
-    pub(crate) fn holds_live_cancellation(&self, id: &SubAgentJobId) -> bool {
-        self.tasks
-            .holds_cancellation(&TaskId::new(id.as_str()))
-            .unwrap_or(false)
-    }
-
     #[allow(dead_code)]
     pub(crate) fn create(&self, agent: &str, owner: u64) -> (SubAgentJobId, SteeringHandle) {
         self.create_with_cancellation(agent, owner, CancellationToken::new(), JobLink::default())
@@ -92,10 +89,50 @@ impl SubAgentJobRegistry {
         cancellation: CancellationToken,
         link: JobLink,
     ) -> (SubAgentJobId, SteeringHandle) {
+        self.create_with_cancellation_and_queue(agent, owner, cancellation, link, None)
+    }
+
+    /// Registers a job with an optional loop-consumed queue for content
+    /// messages routed to a specific lane.
+    pub(crate) fn create_with_cancellation_and_queue(
+        &self,
+        agent: &str,
+        owner: u64,
+        cancellation: CancellationToken,
+        link: JobLink,
+        run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+    ) -> (SubAgentJobId, SteeringHandle) {
         let id = SubAgentJobId(format!("subagent-job-{}", next_seq()));
-        let task_id = TaskId::new(id.as_str());
         let steering =
             SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage));
+        if let Err(error) = self.insert_job(
+            id.clone(),
+            agent,
+            owner.to_string(),
+            link,
+            JobExecutionControls {
+                cancellation,
+                steering: steering.clone(),
+                run_queue,
+            },
+        ) {
+            tracing::error!("{LOG_PREFIX} register.failed job_id={id} error={error}");
+        }
+        (id, steering)
+    }
+
+    fn insert_job(
+        &self,
+        id: SubAgentJobId,
+        agent: &str,
+        owner: String,
+        link: JobLink,
+        execution: JobExecutionControls,
+    ) -> Result<(), SubAgentJobError> {
+        if id.as_str().is_empty() {
+            return Err(SubAgentJobError::Registry("empty job id".into()));
+        }
+        let task_id = TaskId::new(id.as_str());
         let job = SubAgentJob {
             id: id.clone(),
             agent: agent.to_owned(),
@@ -103,6 +140,8 @@ impl SubAgentJobRegistry {
             output: None,
             error: None,
             subagent_run_id: link.subagent_run_id,
+            worker_thread_id: None,
+            extensions: std::collections::BTreeMap::new(),
             parent_tool_call_id: link.parent_tool_call_id,
             incomplete_kind: None,
             artifacts: Vec::new(),
@@ -111,34 +150,146 @@ impl SubAgentJobRegistry {
         };
         let (status, watcher) = watch::channel(job);
         let mut controls = self.controls();
-        self.steering.register(task_id.clone(), steering.clone());
-        // Ids are unique, so registration can only fail on a poisoned lock;
-        // the job is then left untracked rather than aborting the spawn.
+        if controls.contains_key(&id) {
+            return Err(SubAgentJobError::AlreadyExists(id.as_str().to_owned()));
+        }
+        self.steering
+            .register(task_id.clone(), execution.steering.clone());
         if let Err(error) = self.tasks.register_cooperative(
             task_id.clone(),
-            owner.to_string(),
+            owner,
             JobMeta,
             watcher,
-            cancellation,
+            execution.cancellation.clone(),
         ) {
-            tracing::error!("{LOG_PREFIX} register.failed job_id={id} error={error}");
             self.steering.deregister(&task_id);
-            return (id, steering);
+            return Err(SubAgentJobError::Registry(error.to_string()));
         }
         controls.insert(
             id.clone(),
             JobControl {
                 status,
                 cancellation_requested: false,
+                run_queue: execution.run_queue,
+                steering: execution.steering,
+                cancellation: execution.cancellation,
             },
         );
-        (id, steering)
+        Ok(())
     }
 
-    pub(crate) fn mark_running(&self, id: &SubAgentJobId) {
+    /// Registers or reuses the public job bridge for one scoped driver task.
+    /// Repeated/coalesced requests reuse the same channels; task ids in a
+    /// different root/parent/thread scope receive a distinct public job id.
+    pub fn register_driver_job(
+        &self,
+        registration: DriverJobRegistration,
+    ) -> Result<
+        (
+            SubAgentJobId,
+            SteeringHandle,
+            tinyagents_harness::run_queue::RunQueueHandle,
+            CancellationToken,
+            bool,
+        ),
+        SubAgentJobError,
+    > {
+        let DriverJobRegistration {
+            key,
+            agent,
+            owner,
+            cancellation,
+            steering,
+            run_queue,
+            continuing,
+        } = registration;
+        let mut driver_jobs = self
+            .driver_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(id) = driver_jobs.get(&key) {
+            if self.get_owned(id.as_str(), &owner).is_none() {
+                return Err(SubAgentJobError::NotFound(id.as_str().to_owned()));
+            }
+            let controls = self.controls();
+            let control = controls
+                .get(id)
+                .ok_or_else(|| SubAgentJobError::NotFound(id.as_str().to_owned()))?;
+            let status = control.status.borrow().status;
+            if status.is_terminal() {
+                return Ok((
+                    id.clone(),
+                    control.steering.clone(),
+                    control.run_queue.clone().unwrap_or_else(|| {
+                        Arc::new(tinyagents_harness::run_queue::RunQueue::new())
+                    }),
+                    control.cancellation.clone(),
+                    false,
+                ));
+            }
+            if control.cancellation_requested {
+                return Err(SubAgentJobError::Cancelling(id.as_str().to_owned()));
+            }
+            let queue = control
+                .run_queue
+                .clone()
+                .ok_or_else(|| SubAgentJobError::LaneUnavailable(id.as_str().to_owned()))?;
+            if status == SubAgentJobStatus::AwaitingInput && continuing {
+                control.status.send_modify(|job| {
+                    job.status = SubAgentJobStatus::Running;
+                    job.error = None;
+                });
+                return Ok((
+                    id.clone(),
+                    control.steering.clone(),
+                    queue,
+                    control.cancellation.clone(),
+                    true,
+                ));
+            }
+            return Ok((
+                id.clone(),
+                control.steering.clone(),
+                queue,
+                control.cancellation.clone(),
+                false,
+            ));
+        }
+
+        let id = SubAgentJobId(format!("subagent-job-{}", next_seq()));
+        let queue =
+            run_queue.unwrap_or_else(|| Arc::new(tinyagents_harness::run_queue::RunQueue::new()));
+        let steering = steering.unwrap_or_else(|| {
+            SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage))
+        });
+        self.insert_job(
+            id.clone(),
+            &agent,
+            owner,
+            JobLink::default(),
+            JobExecutionControls {
+                cancellation,
+                steering: steering.clone(),
+                run_queue: Some(queue.clone()),
+            },
+        )?;
+        driver_jobs.insert(key, id.clone());
+        let token = self
+            .controls()
+            .get(&id)
+            .expect("inserted control")
+            .cancellation
+            .clone();
+        Ok((id, steering, queue, token, true))
+    }
+
+    pub fn mark_running(&self, id: &SubAgentJobId) {
         if let Some(control) = self.controls().get(id) {
             control.status.send_if_modified(|job| {
-                if job.status == SubAgentJobStatus::Queued {
+                if matches!(
+                    job.status,
+                    SubAgentJobStatus::Queued | SubAgentJobStatus::AwaitingInput
+                ) {
                     job.status = SubAgentJobStatus::Running;
                     true
                 } else {
@@ -230,6 +381,125 @@ impl SubAgentJobRegistry {
         }
     }
 
+    /// Mirrors a host-driver completion into the same registry used by the
+    /// Jobs and Message aliases. Durable pauses remain nonterminal and resumable.
+    pub fn mark_driver_result(
+        &self,
+        id: &SubAgentJobId,
+        result: Result<crate::subagent::SubagentOutcome, String>,
+    ) {
+        let is_pause = matches!(
+            &result,
+            Ok(outcome) if matches!(outcome.status, crate::subagent::SubagentOutcomeKind::AwaitingInput(_))
+        );
+        if is_pause {
+            let controls = self.controls();
+            if let Some(control) = controls.get(id) {
+                let task_id = TaskId::new(id.as_str());
+                if control.status.borrow().status.is_terminal() {
+                    return;
+                } else if control.cancellation_requested {
+                    let _ = self.tasks.release_cancellation_trusted(&task_id);
+                    control.status.send_modify(|job| {
+                        job.status = SubAgentJobStatus::Cancelled;
+                        job.error = Some(TinyAgentsError::Cancelled.to_string());
+                    });
+                    self.steering.deregister(&task_id);
+                } else if let Ok(outcome) = result {
+                    control.status.send_modify(|job| {
+                        job.output = Some(outcome.output);
+                        job.worker_thread_id = outcome.worker_thread_id;
+                        let task_id = outcome.task_id;
+                        job.extensions = outcome.extensions;
+                        job.extensions
+                            .insert("task_id".into(), serde_json::Value::String(task_id));
+                        job.artifacts = outcome.artifacts;
+                        job.schema_error = outcome.schema_error;
+                        job.artifact_error = outcome.artifact_error;
+                        job.status = SubAgentJobStatus::AwaitingInput;
+                        job.error = None;
+                    });
+                }
+            }
+            return;
+        }
+        self.settle(id, |job, cancellation_requested| {
+            if cancellation_requested {
+                job.status = SubAgentJobStatus::Cancelled;
+                job.error = Some(TinyAgentsError::Cancelled.to_string());
+                return;
+            }
+            match result {
+                Ok(outcome) => {
+                    job.output = Some(outcome.output);
+                    job.worker_thread_id = outcome.worker_thread_id;
+                    let task_id = outcome.task_id;
+                    job.extensions = outcome.extensions;
+                    job.extensions
+                        .insert("task_id".into(), serde_json::Value::String(task_id));
+                    job.artifacts = outcome.artifacts;
+                    job.schema_error = outcome.schema_error;
+                    job.artifact_error = outcome.artifact_error;
+                    match outcome.status {
+                        crate::subagent::SubagentOutcomeKind::Completed => {
+                            job.status = SubAgentJobStatus::Completed;
+                        }
+                        crate::subagent::SubagentOutcomeKind::AwaitingInput(_) => {
+                            unreachable!("pause handled above")
+                        }
+                        crate::subagent::SubagentOutcomeKind::Incomplete(incomplete) => {
+                            job.status = SubAgentJobStatus::Incomplete;
+                            job.incomplete_kind = Some(incomplete.kind);
+                            job.error = Some(incomplete.reason);
+                        }
+                        crate::subagent::SubagentOutcomeKind::Cancelled => {
+                            job.status = SubAgentJobStatus::Cancelled;
+                            job.error = Some(TinyAgentsError::Cancelled.to_string());
+                        }
+                    }
+                }
+                Err(error) => {
+                    job.status = SubAgentJobStatus::Failed;
+                    job.error = Some(error);
+                }
+            }
+        });
+    }
+
+    /// Finds a driver-backed public job by its host-stable task id, while
+    /// enforcing the same owner scope as direct job-id lookups.
+    pub fn driver_job_for_key(
+        &self,
+        key: &crate::subagent::SubagentTaskKey,
+        owner: &str,
+    ) -> Option<SubAgentJobId> {
+        let candidates = self
+            .driver_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|(candidate, _)| *candidate == key)
+            .map(|(_, id)| id.clone())
+            .collect::<Vec<_>>();
+        candidates
+            .into_iter()
+            .find(|id| self.get_owned(id.as_str(), owner).is_some())
+    }
+
+    /// Requests cooperative cancellation for a driver-backed job identified
+    /// by its full host lifecycle key and owner scope.
+    pub fn cancel_key_owned(
+        &self,
+        key: &crate::subagent::SubagentTaskKey,
+        owner: impl ToString,
+    ) -> Result<SubAgentJob, SubAgentJobError> {
+        let owner = owner.to_string();
+        let id = self
+            .driver_job_for_key(key, &owner)
+            .ok_or_else(|| SubAgentJobError::NotFound(key.task_id.clone()))?;
+        self.cancel_owned(id.as_str(), owner)
+    }
+
     /// Points the job link at the attempt that is now running.
     pub(crate) fn set_attempt_run_id(&self, id: &SubAgentJobId, run_id: &str) {
         if let Some(control) = self.controls().get(id) {
@@ -287,10 +557,10 @@ impl SubAgentJobRegistry {
     /// Cancels one queued or running job owned by `owner` and marks it
     /// `Cancelled`. The job's own cancellation token is tripped, so the parent
     /// run and sibling jobs are unaffected.
-    pub(crate) fn cancel_owned(
+    pub fn cancel_owned(
         &self,
         job_id: &str,
-        owner: u64,
+        owner: impl ToString,
     ) -> Result<SubAgentJob, SubAgentJobError> {
         let id = SubAgentJobId(job_id.to_owned());
         let mut controls = self.controls();
@@ -306,29 +576,48 @@ impl SubAgentJobRegistry {
                     status: control.status.borrow().status,
                 });
             }
-            Err(_) => return Err(SubAgentJobError::NotFound(job_id.to_owned())),
+            Err(DetachedTaskRegistryError::Unknown | DetachedTaskRegistryError::NotOwned) => {
+                return Err(SubAgentJobError::NotFound(job_id.to_owned()));
+            }
+            Err(error) => return Err(registry_failure(error)),
         };
         tracing::debug!("{LOG_PREFIX} cancel_owned job_id={job_id}");
         control.cancellation_requested = true;
+        if control.status.borrow().status == SubAgentJobStatus::AwaitingInput {
+            let _ = self.tasks.release_cancellation_trusted(&task_id);
+            control.status.send_modify(|job| {
+                job.status = SubAgentJobStatus::Cancelled;
+                job.error = Some(TinyAgentsError::Cancelled.to_string());
+            });
+            self.steering.deregister(&task_id);
+            return Ok(control.status.borrow().clone());
+        }
         snapshot.error =
             Some("cancellation requested; job will be cancelled when the child unwinds".to_owned());
         Ok(snapshot)
     }
 
     /// Returns a snapshot for `job_id` when it belongs to `owner`.
-    pub(crate) fn get_owned(&self, job_id: &str, owner: u64) -> Option<SubAgentJob> {
+    pub fn get_owned(&self, job_id: &str, owner: impl ToString) -> Option<SubAgentJob> {
+        self.try_get_owned(job_id, owner).ok().flatten()
+    }
+
+    /// Returns a snapshot for `job_id` when it belongs to `owner`, preserving
+    /// registry failures separately from unknown or foreign identifiers.
+    pub fn try_get_owned(
+        &self,
+        job_id: &str,
+        owner: impl ToString,
+    ) -> Result<Option<SubAgentJob>, SubAgentJobError> {
         match self
             .tasks
             .snapshot(&TaskId::new(job_id), &owner.to_string())
         {
-            Ok(snapshot) => Some(snapshot.status),
-            Err(DetachedTaskRegistryError::Unknown | DetachedTaskRegistryError::NotOwned) => None,
-            Err(error) => {
-                tracing::warn!(
-                    "{LOG_PREFIX} get_owned.registry_error job_id={job_id} error={error}"
-                );
-                None
+            Ok(snapshot) => Ok(Some(snapshot.status)),
+            Err(DetachedTaskRegistryError::Unknown | DetachedTaskRegistryError::NotOwned) => {
+                Ok(None)
             }
+            Err(error) => Err(registry_failure(error)),
         }
     }
 
@@ -346,9 +635,43 @@ impl SubAgentJobRegistry {
         }
     }
 
-    /// Returns this run's jobs in stable id order.
-    fn list_owned(&self, owner: u64) -> Vec<SubAgentJob> {
-        Self::sorted(self.tasks.snapshots(Some(&owner.to_string())))
+    /// Returns this run's jobs while preserving detached-registry failures.
+    pub fn try_list_owned(
+        &self,
+        owner: impl ToString,
+    ) -> Result<Vec<SubAgentJob>, SubAgentJobError> {
+        let snapshots = self
+            .tasks
+            .snapshots(Some(&owner.to_string()))
+            .map_err(registry_failure)?;
+        Ok(Self::sorted(Ok(snapshots)))
+    }
+
+    pub async fn wait_owned(
+        &self,
+        job_id: &str,
+        owner: impl ToString,
+    ) -> Result<SubAgentJob, SubAgentJobError> {
+        self.try_get_owned(job_id, owner)?
+            .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
+        let mut status = {
+            let controls = self.controls();
+            controls
+                .get(&SubAgentJobId(job_id.to_owned()))
+                .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?
+                .status
+                .subscribe()
+        };
+        loop {
+            let snapshot = status.borrow().clone();
+            if snapshot.status.is_terminal() || snapshot.status == SubAgentJobStatus::AwaitingInput
+            {
+                return Ok(snapshot);
+            }
+            if status.changed().await.is_err() {
+                return Ok(status.borrow().clone());
+            }
+        }
     }
 
     /// Returns every job for trusted host-side supervision.
@@ -380,10 +703,10 @@ impl SubAgentJobRegistry {
     /// Queues a user message for delivery at the running child's next safe
     /// steering checkpoint.
     #[allow(dead_code)]
-    pub(crate) fn send_message_owned(
+    pub fn send_message_owned(
         &self,
         job_id: &str,
-        owner: u64,
+        owner: impl ToString,
         message: impl Into<String>,
     ) -> Result<(), SubAgentJobError> {
         self.send_message_with_request_id(job_id, owner, message, None)
@@ -393,14 +716,25 @@ impl SubAgentJobRegistry {
     /// Idempotent [`Self::send_message_owned`]: a `request_id` already applied
     /// to this job is acknowledged (`Ok(true)`, "duplicate") without queueing
     /// the message again. Only the last
-    /// [`RecentRequestIds::DEFAULT_CAPACITY`] ids per job are remembered, and a
+    /// `RecentRequestIds::DEFAULT_CAPACITY` ids per job are remembered, and a
     /// rejected send (unknown, foreign or terminal job) never consumes its id.
-    pub(crate) fn send_message_with_request_id(
+    pub fn send_message_with_request_id(
         &self,
         job_id: &str,
-        owner: u64,
+        owner: impl ToString,
         message: impl Into<String>,
         request_id: Option<&str>,
+    ) -> Result<bool, SubAgentJobError> {
+        self.send_message_with_lane_and_request_id(job_id, owner, message, request_id, None)
+    }
+
+    pub fn send_message_with_lane_and_request_id(
+        &self,
+        job_id: &str,
+        owner: impl ToString,
+        message: impl Into<String>,
+        request_id: Option<&str>,
+        lane: Option<QueueLane>,
     ) -> Result<bool, SubAgentJobError> {
         let id = SubAgentJobId(job_id.to_owned());
         let controls = self.controls();
@@ -408,11 +742,13 @@ impl SubAgentJobRegistry {
         let control = controls.get(&id).ok_or_else(not_found)?;
         let task_id = TaskId::new(job_id);
         let owner = owner.to_string();
-        let job = self
-            .tasks
-            .snapshot(&task_id, &owner)
-            .map_err(|_| not_found())?
-            .status;
+        let job = match self.tasks.snapshot(&task_id, &owner) {
+            Ok(snapshot) => snapshot.status,
+            Err(DetachedTaskRegistryError::Unknown | DetachedTaskRegistryError::NotOwned) => {
+                return Err(not_found());
+            }
+            Err(error) => return Err(registry_failure(error)),
+        };
         if job.status.is_terminal() {
             return Err(SubAgentJobError::Terminal {
                 job_id: job_id.to_owned(),
@@ -426,6 +762,16 @@ impl SubAgentJobRegistry {
             .tasks
             .steering_handle(&task_id, &owner)
             .map_err(|_| not_found())?;
+        let lane_queue = if lane.is_some() {
+            Some(
+                control
+                    .run_queue
+                    .clone()
+                    .ok_or_else(|| SubAgentJobError::LaneUnavailable(job_id.to_owned()))?,
+            )
+        } else {
+            None
+        };
         if let Some(request_id) = request_id {
             match self.tasks.claim_steer_request(&task_id, request_id) {
                 Ok(false) => {
@@ -439,9 +785,14 @@ impl SubAgentJobRegistry {
                 Err(_) => return Err(not_found()),
             }
         }
-        handle.send(SteeringCommand::InjectMessage(Message::user(
-            message.into(),
-        )));
+        let message = message.into();
+        if let Some(lane) = lane {
+            lane_queue
+                .expect("lane queue was validated before claiming the request id")
+                .push_now(lane, Message::user(message));
+        } else {
+            handle.send(SteeringCommand::InjectMessage(Message::user(message)));
+        }
         Ok(false)
     }
 
@@ -452,201 +803,4 @@ impl SubAgentJobRegistry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
-}
-
-/// Typed host tool that queries a job or lists jobs owned by the requesting run.
-#[derive(Clone)]
-pub struct SubAgentJobsTool {
-    jobs: SubAgentJobRegistry,
-}
-
-impl SubAgentJobsTool {
-    /// Creates the query tool over `jobs`.
-    pub fn new(jobs: SubAgentJobRegistry) -> Self {
-        Self { jobs }
-    }
-}
-
-#[async_trait]
-impl Tool for SubAgentJobsTool {
-    fn name(&self) -> &str {
-        "subagent_jobs"
-    }
-
-    fn description(&self) -> &str {
-        "Query an asynchronous subagent job by id, list all subagent jobs, or cancel one job with action \"cancel\"."
-    }
-
-    fn parameters_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "job_id": { "type": "string" },
-                "action": {
-                    "type": "string",
-                    "enum": ["query", "cancel"],
-                    "description": "`query` (default) reads a job or lists jobs; `cancel` stops the job named by job_id."
-                }
-            }
-        })
-    }
-
-    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        let _ = args;
-        anyhow::bail!("subagent_jobs requires typed-parent dispatch")
-    }
-}
-
-#[async_trait]
-impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgentJobsTool {
-    fn tool(&self) -> Arc<dyn Tool> {
-        Arc::new(self.clone())
-    }
-
-    async fn execute(
-        &self,
-        _state: &State,
-        _call_id: tinyagents_harness::ids::CallId,
-        args: Value,
-        _options: tinytools::ToolCallOptions,
-        parent: &RunContext<Ctx>,
-    ) -> anyhow::Result<ToolResult> {
-        let object = args
-            .as_object()
-            .ok_or_else(|| anyhow::anyhow!("arguments must be an object"))?;
-        match object
-            .get("action")
-            .filter(|value| !value.is_null())
-            .map(Value::as_str)
-        {
-            None | Some(Some("query")) => {}
-            Some(Some("cancel")) => {
-                let job_id = object
-                    .get("job_id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("job_id must be a string for action `cancel`")
-                    })?;
-                let job = self.jobs.cancel_owned(job_id, parent.instance_id())?;
-                return Ok(ToolResult::json(serde_json::to_value(job)?));
-            }
-            Some(_) => anyhow::bail!("action must be `query` or `cancel`"),
-        }
-        if let Some(value) = object.get("job_id") {
-            let job_id = value
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("job_id must be a string when provided"))?;
-            let job = self
-                .jobs
-                .get_owned(job_id, parent.instance_id())
-                .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
-            Ok(ToolResult::json(serde_json::to_value(job)?))
-        } else {
-            Ok(ToolResult::json(serde_json::to_value(
-                self.jobs.list_owned(parent.instance_id()),
-            )?))
-        }
-    }
-}
-
-/// Host tool that sends a message to a queued or running subagent job.
-#[derive(Clone)]
-pub struct SubAgentMessageTool {
-    jobs: SubAgentJobRegistry,
-}
-
-impl SubAgentMessageTool {
-    /// Creates the message tool over `jobs`.
-    pub fn new(jobs: SubAgentJobRegistry) -> Self {
-        Self { jobs }
-    }
-}
-
-#[async_trait]
-impl Tool for SubAgentMessageTool {
-    fn name(&self) -> &str {
-        "subagent_message"
-    }
-
-    fn description(&self) -> &str {
-        "Send a message to a queued or running asynchronous subagent job."
-    }
-
-    fn parameters_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "job_id": { "type": "string" },
-                "message": { "type": "string" },
-                "request_id": {
-                    "type": "string",
-                    "description": "Optional idempotency key: resending the same request_id to the same job does not queue the message again while it is among the most recent 64 request ids remembered for that job (older ids are evicted); ids over 128 bytes are rejected."
-                }
-            },
-            "required": ["job_id", "message"]
-        })
-    }
-
-    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        let _ = args;
-        anyhow::bail!("subagent_message requires typed-parent dispatch")
-    }
-}
-
-#[async_trait]
-impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgentMessageTool {
-    fn tool(&self) -> Arc<dyn Tool> {
-        Arc::new(self.clone())
-    }
-
-    async fn execute(
-        &self,
-        _state: &State,
-        _call_id: tinyagents_harness::ids::CallId,
-        args: Value,
-        _options: tinytools::ToolCallOptions,
-        parent: &RunContext<Ctx>,
-    ) -> anyhow::Result<ToolResult> {
-        let job_id = args
-            .get("job_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("job_id must be a string"))?;
-        let message = args
-            .get("message")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("message must be a string"))?;
-        let request_id = match args.get("request_id") {
-            None | Some(Value::Null) => None,
-            Some(value) => {
-                let id = value
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("request_id must be a string when provided"))?;
-                Some(id)
-            }
-        };
-        let duplicate = self.jobs.send_message_with_request_id(
-            job_id,
-            parent.instance_id(),
-            message,
-            request_id,
-        )?;
-        let mut payload = json!({
-            "job_id": job_id,
-            "status": "message_queued"
-        });
-        if duplicate {
-            payload["duplicate"] = Value::Bool(true);
-        }
-        Ok(ToolResult::json(payload))
-    }
-}
-
-/// Registers the standard run-scoped query and message tools in a harness registry.
-pub fn register_subagent_job_tools<State: Send + Sync, Ctx: Send + Sync>(
-    registry: &mut ToolRegistry<State, Ctx>,
-    jobs: SubAgentJobRegistry,
-) -> &mut ToolRegistry<State, Ctx> {
-    registry
-        .register_dispatch(Arc::new(SubAgentJobsTool::new(jobs.clone())))
-        .register_dispatch(Arc::new(SubAgentMessageTool::new(jobs)))
 }
