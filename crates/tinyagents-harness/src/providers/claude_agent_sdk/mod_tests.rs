@@ -511,6 +511,7 @@ async fn inspection_invocation_clamps_requested_output_cap_to_five_tokens() {
     let dir = tempfile::tempdir().expect("tempdir");
     let script = dir.path().join("claude-inspection");
     let cap_path = dir.path().join("cap.txt");
+    let request_path = dir.path().join("request.txt");
     let staging = dir.path().join("claude-inspection.staging");
     let source = format!(
         "#!/bin/sh\nprintf '%s' \"${{CLAUDE_CODE_MAX_OUTPUT_TOKENS-}}\" > '{}'\nprintf '%s\\n' '{{\"type\":\"result\",\"result\":\"OK\",\"is_error\":false}}'\n",
@@ -528,10 +529,11 @@ async fn inspection_invocation_clamps_requested_output_cap_to_five_tokens() {
     let auth = ClaudeAgentSdkInspectionAuth::new(Some("dummy-key".into()), None, None)
         .expect("explicit key is required");
     let provider = ClaudeAgentSdkProvider::for_inspection(config, "model", auth);
+    let request_text = "Reply OK ".repeat(512 * 1024);
     provider
         .invoke(
             &(),
-            ModelRequest::new(vec![Message::user("Reply OK")]).with_max_tokens(64),
+            ModelRequest::new(vec![Message::user(&request_text)]).with_max_tokens(64),
         )
         .await
         .expect("fake CLI response");
@@ -540,6 +542,11 @@ async fn inspection_invocation_clamps_requested_output_cap_to_five_tokens() {
         std::fs::read_to_string(cap_path).expect("captured cap"),
         "5",
         "caller-supplied limits cannot raise the inspection cap"
+    );
+    assert_eq!(
+        std::fs::read_to_string(request_path).expect("fake CLI consumed stdin"),
+        request_text,
+        "the full request must reach the CLI before its response is emitted"
     );
 }
 
