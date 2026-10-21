@@ -1489,7 +1489,8 @@ async fn driver_job_tracks_planner_replacement_custom_retry_and_nested_child_lin
             },
             |_| None,
         )
-        .with_job_registry(jobs.clone()),
+        .with_job_registry(jobs.clone())
+        .with_owner_scope(Arc::new(|_| "owner".to_owned())),
     );
     let driver = Arc::new(
         SubagentDriver::new(SubagentCapabilities {
@@ -1521,7 +1522,8 @@ async fn driver_job_tracks_planner_replacement_custom_retry_and_nested_child_lin
         },
         |_| None,
     )
-    .with_job_registry(jobs.clone());
+    .with_job_registry(jobs.clone())
+    .with_owner_scope(Arc::new(|_| "owner".to_owned()));
     let parent = RunContext::new(RunConfig::new("retry-nested-parent"), ());
     ToolDispatch::<(), ()>::execute(
         &tool,
@@ -1537,7 +1539,7 @@ async fn driver_job_tracks_planner_replacement_custom_retry_and_nested_child_lin
     let settled = jobs
         .settle_root_run_descendants(
             parent.run_id(),
-            parent.instance_id().to_string(),
+            "owner",
             tokio::time::Instant::now() + std::time::Duration::from_secs(30),
             &CancellationToken::new(),
         )
