@@ -1527,7 +1527,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             );
         }
 
-        self.middleware
+        if let Err(error) = self
+            .middleware
             .run_after_tool_output_screened(
                 ctx,
                 state,
@@ -1537,7 +1538,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 ),
                 &result,
             )
-            .await?;
+            .await
+        {
+            self.fail_tool_call(
+                ctx,
+                status,
+                &prepared.call_id,
+                &prepared.tool_name,
+                prepared.started_at_ms,
+                &error,
+            );
+            return Err(error);
+        }
 
         // A tool's own `ToolControl` (`return_direct`/`terminate`/`goto`/
         // `state_update`) is the tool-vocabulary half of A1: it is *data* the

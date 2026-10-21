@@ -305,10 +305,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         state: &State,
         request: &mut ModelRequest,
     ) -> Result<()> {
-        // Request-scoped state is restored after request rewrites. Run these
-        // hooks in reverse registration order so earlier registered state
-        // observers get the final say on the rewritten request.
-        for middleware in self.middlewares.iter().rev() {
+        // Restore request-scoped content in registration order. Dispatch
+        // observers are registered after request rewriters, so restored state
+        // remains the final request content.
+        for middleware in &self.middlewares {
             middleware.after_model_rewrite(ctx, state, request).await?;
         }
         Ok(())
