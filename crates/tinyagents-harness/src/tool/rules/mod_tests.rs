@@ -154,18 +154,15 @@ impl Tool for ArgumentPermission {
             tinytools::PermissionLevel::ReadOnly
         }
     }
-    async fn execute(
-        &self,
-        _args: serde_json::Value,
-    ) -> anyhow::Result<tinytools::ToolResult> {
+    async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<tinytools::ToolResult> {
         Ok(tinytools::ToolResult::success("ok"))
     }
 }
 
 #[tokio::test]
 async fn permission_ceiling_checks_argument_aware_dispatch_permissions() {
-    let policy = ToolRulePolicy::default()
-        .with_permission_ceiling(tinytools::PermissionLevel::ReadOnly);
+    let policy =
+        ToolRulePolicy::default().with_permission_ceiling(tinytools::PermissionLevel::ReadOnly);
     let gate = ToolGate::new(None, &policy, None);
     let tool = ArgumentPermission;
 

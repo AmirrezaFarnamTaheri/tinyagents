@@ -52,7 +52,6 @@ impl ToolRulePolicy {
         self
     }
 
-
     /// Whether the policy admits every tool, so the loop can skip it.
     #[must_use]
     pub fn is_permissive(&self) -> bool {
