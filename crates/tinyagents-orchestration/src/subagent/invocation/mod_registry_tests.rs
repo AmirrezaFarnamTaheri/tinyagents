@@ -232,8 +232,8 @@ async fn root_settlement_returns_empty_for_unlinked_jobs_and_empty_roots() {
         })
         .unwrap();
     jobs.mark_driver_result(&legacy, Err("legacy terminal".into()));
-    assert!(jobs
-        .settle_root_run_descendants(
+    assert!(
+        jobs.settle_root_run_descendants(
             &RunId::new("root"),
             "owner",
             tokio::time::Instant::now(),
@@ -241,9 +241,10 @@ async fn root_settlement_returns_empty_for_unlinked_jobs_and_empty_roots() {
         )
         .await
         .unwrap()
-        .is_empty());
-    assert!(jobs
-        .settle_root_run_descendants(
+        .is_empty()
+    );
+    assert!(
+        jobs.settle_root_run_descendants(
             &RunId::new("empty-root"),
             "owner",
             tokio::time::Instant::now(),
@@ -251,7 +252,8 @@ async fn root_settlement_returns_empty_for_unlinked_jobs_and_empty_roots() {
         )
         .await
         .unwrap()
-        .is_empty());
+        .is_empty()
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -310,7 +312,10 @@ async fn root_settlement_keeps_one_deadline_across_lifecycle_wakes() {
     jobs.set_attempt_run_id(&child, "deadline-child-another-observed-attempt");
     tokio::task::yield_now().await;
     tokio::time::advance(std::time::Duration::from_secs(1)).await;
-    assert_eq!(settle.await.unwrap(), Err(SubAgentJobError::SettlementTimedOut));
+    assert_eq!(
+        settle.await.unwrap(),
+        Err(SubAgentJobError::SettlementTimedOut)
+    );
 }
 
 #[tokio::test]
@@ -366,14 +371,20 @@ async fn root_settlement_cancellation_while_blocked_releases_waiter_pins() {
         tokio::task::yield_now().await;
     }
     cancellation.cancel();
-    assert_eq!(settle.await.unwrap(), Err(SubAgentJobError::SettlementCancelled));
+    assert_eq!(
+        settle.await.unwrap(),
+        Err(SubAgentJobError::SettlementCancelled)
+    );
     assert_eq!(
         jobs.controls()[&child]
             .waiters
             .load(std::sync::atomic::Ordering::Acquire),
         0
     );
-    assert_eq!(jobs.get(child.as_str()).unwrap().status, SubAgentJobStatus::Running);
+    assert_eq!(
+        jobs.get(child.as_str()).unwrap().status,
+        SubAgentJobStatus::Running
+    );
 }
 
 #[tokio::test]
