@@ -2,9 +2,9 @@
 //! these tests pin the shared-registry view and the lifecycle hand-offs.
 
 use super::*;
+use crate::subagent::{SubagentOutcome, SubagentOutcomeKind, SubagentPause, SubagentResume};
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::TaskId;
-use crate::subagent::{SubagentPause, SubagentResume, SubagentOutcome, SubagentOutcomeKind};
 
 fn register_driver_job(
     jobs: &SubAgentJobRegistry,
@@ -87,7 +87,12 @@ async fn root_settlement_includes_late_grandchildren_and_only_owned_root_jobs() 
         "child-run",
     );
     let unrelated = jobs
-        .register_driver_job(registration("unrelated", "other-root", "other-root", "owner"))
+        .register_driver_job(registration(
+            "unrelated",
+            "other-root",
+            "other-root",
+            "owner",
+        ))
         .unwrap()
         .0;
     let foreign = jobs
@@ -126,12 +131,19 @@ async fn root_settlement_includes_late_grandchildren_and_only_owned_root_jobs() 
     jobs.mark_driver_result(&grandchild, Err("grandchild failed".into()));
 
     let settled = settling.await.unwrap().unwrap();
-    let mut settled_ids = settled.iter().map(|job| job.id.as_str()).collect::<Vec<_>>();
+    let mut settled_ids = settled
+        .iter()
+        .map(|job| job.id.as_str())
+        .collect::<Vec<_>>();
     settled_ids.sort_unstable();
     let mut expected_ids = vec![child.as_str(), grandchild.as_str()];
     expected_ids.sort_unstable();
     assert_eq!(settled_ids, expected_ids);
-    assert!(settled.iter().all(|job| job.status == SubAgentJobStatus::Failed));
+    assert!(
+        settled
+            .iter()
+            .all(|job| job.status == SubAgentJobStatus::Failed)
+    );
 
     let repeated = jobs
         .settle_root_run_descendants(
@@ -304,13 +316,21 @@ async fn resumed_job_keeps_old_attempt_edges_without_importing_new_root_siblings
     let old_root_jobs = settle("old-root").await;
     assert_eq!(old_root_jobs.len(), 3);
     assert!(old_root_jobs.iter().any(|entry| entry.id == new_grandchild));
-    assert!(!old_root_jobs.iter().any(|entry| entry.id == new_root_sibling));
+    assert!(
+        !old_root_jobs
+            .iter()
+            .any(|entry| entry.id == new_root_sibling)
+    );
 
     let new_root_jobs = settle("new-root").await;
     assert_eq!(new_root_jobs.len(), 3);
     assert!(new_root_jobs.iter().any(|entry| entry.id == job));
     assert!(new_root_jobs.iter().any(|entry| entry.id == new_grandchild));
-    assert!(new_root_jobs.iter().any(|entry| entry.id == new_root_sibling));
+    assert!(
+        new_root_jobs
+            .iter()
+            .any(|entry| entry.id == new_root_sibling)
+    );
 }
 
 #[tokio::test]

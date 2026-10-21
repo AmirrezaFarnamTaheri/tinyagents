@@ -262,17 +262,20 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         let task_id = request.task_id().to_owned();
         let bridged_job = if let Some(jobs) = &self.jobs {
             let continuing = request.resume().is_some();
-            let (id, steering, run_queue, cancellation, created) =
-                jobs.register_driver_job_with_parent_run(DriverJobRegistration {
-                    key: request.task_key().clone(),
-                    agent: request.target().unwrap_or(&self.name).to_owned(),
-                    owner: owner.clone(),
-                    workspace: request.run_context().workspace.clone(),
-                    cancellation: request.run_context().cancellation.clone(),
-                    steering: request.run_context().steering.clone(),
-                    run_queue: request.run_context().run_queue.clone(),
-                    continuing,
-                }, parent_run_id.clone())?;
+            let (id, steering, run_queue, cancellation, created) = jobs
+                .register_driver_job_with_parent_run(
+                    DriverJobRegistration {
+                        key: request.task_key().clone(),
+                        agent: request.target().unwrap_or(&self.name).to_owned(),
+                        owner: owner.clone(),
+                        workspace: request.run_context().workspace.clone(),
+                        cancellation: request.run_context().cancellation.clone(),
+                        steering: request.run_context().steering.clone(),
+                        run_queue: request.run_context().run_queue.clone(),
+                        continuing,
+                    },
+                    parent_run_id.clone(),
+                )?;
             if created {
                 jobs.mark_running(&id);
             }
@@ -477,7 +480,7 @@ where
             (self.owner_scope)(parent.instance_id()),
             parent.run_id().clone(),
         )
-            .await
+        .await
     }
 }
 

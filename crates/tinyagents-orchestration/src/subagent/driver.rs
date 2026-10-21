@@ -212,7 +212,8 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         request: SubagentRequest<C, H>,
         cancellation: CancellationToken,
     ) -> Result<SubagentRunResult, SubagentError> {
-        self.run_with_attempt_observer(request, cancellation, |_| {}).await
+        self.run_with_attempt_observer(request, cancellation, |_| {})
+            .await
     }
 
     /// Runs a lifecycle and reports each actual native attempt run id before

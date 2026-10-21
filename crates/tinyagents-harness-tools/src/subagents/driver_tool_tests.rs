@@ -1353,7 +1353,14 @@ async fn driver_job_records_the_planners_actual_run_context_for_descendant_settl
             let child = parent
                 .child(RunConfig::new("worker-request-child"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
-            SubagentRequest::fresh_from_parent(parent, child, "planner-replaced-task", (), "input", None)
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "planner-replaced-task",
+                (),
+                "input",
+                None,
+            )
         },
         |_| None,
     )
@@ -1380,7 +1387,10 @@ async fn driver_job_records_the_planners_actual_run_context_for_descendant_settl
         .await
         .unwrap();
     assert_eq!(settled.len(), 1);
-    assert_eq!(settled[0].subagent_run_id.as_deref(), Some("planner-replaced-actual"));
+    assert_eq!(
+        settled[0].subagent_run_id.as_deref(),
+        Some("planner-replaced-actual")
+    );
 }
 
 #[tokio::test]

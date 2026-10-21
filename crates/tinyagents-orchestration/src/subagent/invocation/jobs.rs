@@ -167,10 +167,8 @@ impl SubAgentJobRegistry {
             parent_thread_id: link.parent_thread_id.clone(),
             workspace: link.workspace.clone(),
         };
-        let lineage = super::types::JobLineage::new(
-            link.parent_run_id.clone(),
-            link.child_run_id.clone(),
-        );
+        let lineage =
+            super::types::JobLineage::new(link.parent_run_id.clone(), link.child_run_id.clone());
         let task_id = TaskId::new(id.as_str());
         let job = SubAgentJob {
             id: id.clone(),
@@ -218,7 +216,8 @@ impl SubAgentJobRegistry {
                 lineage,
             },
         );
-        self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+        self.changes
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
         Ok(())
     }
 
@@ -312,13 +311,16 @@ impl SubAgentJobRegistry {
     pub fn register_driver_job(
         &self,
         registration: DriverJobRegistration,
-    ) -> Result<(
-        SubAgentJobId,
-        SteeringHandle,
-        tinyagents_harness::run_queue::RunQueueHandle,
-        CancellationToken,
-        bool,
-    ), SubAgentJobError> {
+    ) -> Result<
+        (
+            SubAgentJobId,
+            SteeringHandle,
+            tinyagents_harness::run_queue::RunQueueHandle,
+            CancellationToken,
+            bool,
+        ),
+        SubAgentJobError,
+    > {
         self.register_driver_job_inner(registration, None)
     }
 
@@ -330,13 +332,16 @@ impl SubAgentJobRegistry {
         &self,
         registration: DriverJobRegistration,
         parent_run_id: tinyagents_harness::ids::RunId,
-    ) -> Result<(
-        SubAgentJobId,
-        SteeringHandle,
-        tinyagents_harness::run_queue::RunQueueHandle,
-        CancellationToken,
-        bool,
-    ), SubAgentJobError> {
+    ) -> Result<
+        (
+            SubAgentJobId,
+            SteeringHandle,
+            tinyagents_harness::run_queue::RunQueueHandle,
+            CancellationToken,
+            bool,
+        ),
+        SubAgentJobError,
+    > {
         self.register_driver_job_inner(registration, Some(parent_run_id))
     }
 
@@ -394,7 +399,8 @@ impl SubAgentJobRegistry {
                     job.status = SubAgentJobStatus::Running;
                     job.error = None;
                 });
-                self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+                self.changes
+                    .send_modify(|generation| *generation = generation.wrapping_add(1));
                 return Ok((
                     id.clone(),
                     control.steering.clone(),
@@ -419,10 +425,10 @@ impl SubAgentJobRegistry {
             SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage))
         });
         let parent_run_id = parent_run_id.unwrap_or_else(|| {
-                // A legacy caller's durable key proves its historical parent,
-                // but does not prove the current child attempt's native RunId.
-                tinyagents_harness::ids::RunId::new(key.parent_run_id.clone())
-            });
+            // A legacy caller's durable key proves its historical parent,
+            // but does not prove the current child attempt's native RunId.
+            tinyagents_harness::ids::RunId::new(key.parent_run_id.clone())
+        });
         self.insert_job(
             id.clone(),
             &agent,
@@ -464,7 +470,8 @@ impl SubAgentJobRegistry {
                 }
             });
             if changed {
-                self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+                self.changes
+                    .send_modify(|generation| *generation = generation.wrapping_add(1));
             }
         }
     }
@@ -491,7 +498,8 @@ impl SubAgentJobRegistry {
                 .send_modify(|job| settle(job, cancellation_requested));
             if control.status.borrow().status.is_terminal() {
                 self.stamp_terminal_sequence(control);
-                self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+                self.changes
+                    .send_modify(|generation| *generation = generation.wrapping_add(1));
             }
             self.steering.deregister(&task_id);
             true
@@ -596,7 +604,8 @@ impl SubAgentJobRegistry {
                         job.status = SubAgentJobStatus::Cancelled;
                         job.error = Some(TinyAgentsError::Cancelled.to_string());
                     });
-                    self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+                    self.changes
+                        .send_modify(|generation| *generation = generation.wrapping_add(1));
                     self.stamp_terminal_sequence(control);
                     self.steering.deregister(&task_id);
                     drop(controls);
@@ -735,7 +744,8 @@ impl SubAgentJobRegistry {
                 changed
             });
             if new_edge || changed {
-                self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+                self.changes
+                    .send_modify(|generation| *generation = generation.wrapping_add(1));
             }
         }
     }
@@ -834,7 +844,8 @@ impl SubAgentJobRegistry {
                     job.status = SubAgentJobStatus::Cancelled;
                     job.error = Some(TinyAgentsError::Cancelled.to_string());
                 });
-                self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+                self.changes
+                    .send_modify(|generation| *generation = generation.wrapping_add(1));
                 self.stamp_terminal_sequence(control);
                 self.steering.deregister(&task_id);
                 let snapshot = control.status.borrow().clone();
@@ -867,7 +878,8 @@ impl SubAgentJobRegistry {
                 job.status = SubAgentJobStatus::Cancelled;
                 job.error = Some(TinyAgentsError::Cancelled.to_string());
             });
-            self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+            self.changes
+                .send_modify(|generation| *generation = generation.wrapping_add(1));
             self.stamp_terminal_sequence(control);
             self.steering.deregister(&task_id);
             let snapshot = control.status.borrow().clone();

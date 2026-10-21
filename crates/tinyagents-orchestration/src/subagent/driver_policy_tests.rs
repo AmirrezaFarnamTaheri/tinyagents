@@ -80,7 +80,11 @@ impl SubagentExecutor<String> for Executor {
         if let Some(observed) = self.observed_attempts.lock().unwrap().as_ref() {
             let run_id = execution.prepared.run_context.run_id().as_str();
             assert!(
-                observed.lock().unwrap().iter().any(|observed| observed == run_id),
+                observed
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|observed| observed == run_id),
                 "attempt {run_id} reached the executor before the observer recorded it"
             );
         }
