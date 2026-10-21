@@ -22,6 +22,9 @@ static PACKS: &[ToolPack] = &[ToolPack {
 
 const CATALOG: PackCatalog = PackCatalog::new(PACKS, "[missing]");
 
+type PackedTools = Arc<Vec<Box<dyn Tool>>>;
+type ToolFixture = (PackRegistryHandle, PackedTools, Arc<UseSkillTool>);
+
 struct CodeTool(&'static str);
 
 #[async_trait]
@@ -65,13 +68,9 @@ impl Tool for CodeTool {
     }
 }
 
-fn tools() -> (
-    PackRegistryHandle,
-    Arc<Vec<Box<dyn Tool>>>,
-    Arc<UseSkillTool>,
-) {
+fn tools() -> ToolFixture {
     let handle = PackRegistryHandle::default();
-    let tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![
+    let tools: PackedTools = Arc::new(vec![
         Box::new(CodeTool("preview_patch")),
         Box::new(CodeTool("delete_source")),
     ]);
