@@ -128,14 +128,8 @@ async fn a_settled_record_is_persisted_without_its_result() {
         });
         router.record(record).await.unwrap();
         let persisted = doc_of(task).await;
-        assert_eq!(
-            persisted["record"]["result"]["text"],
-            format!("result of {task}")
-        );
-        assert_eq!(
-            persisted["record"]["result"]["artifact"]["id"],
-            format!("art-{task}")
-        );
+        assert_eq!(persisted["result"]["text"], format!("result of {task}"));
+        assert_eq!(persisted["result"]["artifact"]["id"], format!("art-{task}"));
     }
     // Oldest first: the claim leases the first three; `cancelled` stays
     // unclaimed for `cancel_parent` to withdraw.
@@ -155,13 +149,12 @@ async fn a_settled_record_is_persisted_without_its_result() {
         assert_eq!(persisted["state"], state, "{task}");
         assert_eq!(persisted["taskId"], task, "{task}");
         assert_eq!(persisted["parentKey"], "p", "{task}");
-        assert_eq!(persisted["record"]["state"], state, "{task}");
-        assert_eq!(persisted["record"]["result"]["text"], "", "{task}");
-        assert_eq!(persisted["record"]["result"]["omitted_chars"], 0, "{task}");
+        assert_eq!(persisted["result"]["text"], "", "{task}");
+        assert_eq!(persisted["result"]["omitted_chars"], 0, "{task}");
         assert!(
-            persisted["record"]["result"].get("artifact").is_none(),
+            persisted["result"].get("artifact").is_none(),
             "{task}: {}",
-            persisted["record"]["result"]
+            persisted["result"]
         );
         let read = store.get(task).unwrap();
         assert_eq!(read.result, CompletionResult::default(), "{task}");
