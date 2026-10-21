@@ -22,6 +22,13 @@ use super::{
 };
 
 const LOG_PREFIX: &str = "[subagent-jobs]";
+type DriverJobControls = (
+    SubAgentJobId,
+    SteeringHandle,
+    tinyagents_harness::run_queue::RunQueueHandle,
+    CancellationToken,
+    bool,
+);
 
 fn registry_failure(error: DetachedTaskRegistryError) -> SubAgentJobError {
     SubAgentJobError::Registry(error.to_string())
@@ -159,8 +166,11 @@ impl SubAgentJobRegistry {
         let metadata = JobMeta {
             parent_thread_id: link.parent_thread_id.clone(),
             workspace: link.workspace.clone(),
-            root_run_id: link.root_run_id.clone(),
         };
+        let lineage = super::types::JobLineage::new(
+            link.parent_run_id.clone(),
+            link.child_run_id.clone(),
+        );
         let task_id = TaskId::new(id.as_str());
         let job = SubAgentJob {
             id: id.clone(),
@@ -205,6 +215,7 @@ impl SubAgentJobRegistry {
                 cancellation: execution.cancellation,
                 waiters: Arc::new(AtomicUsize::new(0)),
                 terminal_sequence: AtomicU64::new(0),
+                lineage,
             },
         );
         self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
@@ -301,16 +312,42 @@ impl SubAgentJobRegistry {
     pub fn register_driver_job(
         &self,
         registration: DriverJobRegistration,
-    ) -> Result<
-        (
-            SubAgentJobId,
-            SteeringHandle,
-            tinyagents_harness::run_queue::RunQueueHandle,
-            CancellationToken,
-            bool,
-        ),
-        SubAgentJobError,
-    > {
+    ) -> Result<(
+        SubAgentJobId,
+        SteeringHandle,
+        tinyagents_harness::run_queue::RunQueueHandle,
+        CancellationToken,
+        bool,
+    ), SubAgentJobError> {
+        self.register_driver_job_inner(registration, None)
+    }
+
+    /// Registers a driver job with native run edges from the actual live
+    /// caller to the child attempt created for this invocation. Resuming the
+    /// same durable task appends another edge and retains every earlier one.
+    pub fn register_driver_job_with_lineage(
+        &self,
+        registration: DriverJobRegistration,
+        parent_run_id: tinyagents_harness::ids::RunId,
+        child_run_id: tinyagents_harness::ids::RunId,
+    ) -> Result<(
+        SubAgentJobId,
+        SteeringHandle,
+        tinyagents_harness::run_queue::RunQueueHandle,
+        CancellationToken,
+        bool,
+    ), SubAgentJobError> {
+        self.register_driver_job_inner(registration, Some((parent_run_id, child_run_id)))
+    }
+
+    fn register_driver_job_inner(
+        &self,
+        registration: DriverJobRegistration,
+        lineage: Option<(
+            tinyagents_harness::ids::RunId,
+            tinyagents_harness::ids::RunId,
+        )>,
+    ) -> Result<DriverJobControls, SubAgentJobError> {
         let DriverJobRegistration {
             key,
             agent,
@@ -329,9 +366,9 @@ impl SubAgentJobRegistry {
             if self.get_owned(id.as_str(), &owner).is_none() {
                 return Err(SubAgentJobError::NotFound(id.as_str().to_owned()));
             }
-            let controls = self.controls();
+            let mut controls = self.controls();
             let control = controls
-                .get(id)
+                .get_mut(id)
                 .ok_or_else(|| SubAgentJobError::NotFound(id.as_str().to_owned()))?;
             let status = control.status.borrow().status;
             if status.is_terminal() {
@@ -353,10 +390,14 @@ impl SubAgentJobRegistry {
                 .clone()
                 .ok_or_else(|| SubAgentJobError::LaneUnavailable(id.as_str().to_owned()))?;
             if status == SubAgentJobStatus::AwaitingInput && continuing {
+                if let Some((parent_run_id, child_run_id)) = lineage {
+                    control.lineage.add(Some(parent_run_id), Some(child_run_id));
+                }
                 control.status.send_modify(|job| {
                     job.status = SubAgentJobStatus::Running;
                     job.error = None;
                 });
+                self.changes.send_modify(|generation| *generation = generation.wrapping_add(1));
                 return Ok((
                     id.clone(),
                     control.steering.clone(),
@@ -380,6 +421,13 @@ impl SubAgentJobRegistry {
         let steering = steering.unwrap_or_else(|| {
             SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage))
         });
+        let (parent_run_id, child_run_id) = lineage
+            .map(|(parent, child)| (Some(parent), Some(child)))
+            .unwrap_or_else(|| {
+                // A legacy caller's durable key proves its historical parent,
+                // but does not prove the current child attempt's native RunId.
+                (Some(tinyagents_harness::ids::RunId::new(key.parent_run_id.clone())), None)
+            });
         self.insert_job(
             id.clone(),
             &agent,
@@ -387,7 +435,8 @@ impl SubAgentJobRegistry {
             JobLink {
                 parent_thread_id: key.thread_id.clone(),
                 workspace,
-                root_run_id: Some(tinyagents_harness::ids::RunId::new(key.root_run_id.clone())),
+                parent_run_id,
+                child_run_id,
                 ..JobLink::default()
             },
             JobExecutionControls {
@@ -677,6 +726,10 @@ impl SubAgentJobRegistry {
     /// Points the job link at the attempt that is now running.
     pub(crate) fn set_attempt_run_id(&self, id: &SubAgentJobId, run_id: &str) {
         if let Some(control) = self.controls().get(id) {
+            control
+                .lineage
+                .children
+                .insert(tinyagents_harness::ids::RunId::new(run_id));
             let changed = control.status.send_if_modified(|job| {
                 if job.status.is_terminal() {
                     return false;
@@ -973,16 +1026,20 @@ impl SubAgentJobRegistry {
         }
     }
 
-    /// Waits for every registered driver job in `root_run_id`'s native run
-    /// tree to reach a terminal state and returns their final snapshots.
+    /// Waits for every registered driver job descended from `root_run_id` to
+    /// reach a terminal state and returns their final snapshots.
     ///
     /// The root run itself is not a registered driver job. Call this only
     /// after that root run has completed and can no longer admit direct child
     /// jobs. A live descendant remains an admission source until it becomes
     /// terminal, so grandchildren registered while settling are included.
     /// Paused (`AwaitingInput`) jobs are not terminal and keep settlement open.
-    /// Jobs without native driver lineage and jobs owned by another owner are
-    /// excluded. The deadline is absolute and shared by the whole operation.
+    /// Driver jobs retain native parent-to-attempt edges from live caller and
+    /// child contexts, including earlier retries and resumed invocations.
+    /// Jobs without native edges and jobs owned by another owner are excluded.
+    /// Legacy registrations may expose their durable key's parent but cannot
+    /// expose descendants until actual child attempt ids are supplied. The
+    /// deadline is absolute and shared by the whole operation.
     pub async fn settle_root_run_descendants(
         &self,
         root_run_id: &tinyagents_harness::ids::RunId,
@@ -1003,13 +1060,33 @@ impl SubAgentJobRegistry {
                     .tasks
                     .snapshots(Some(&owner))
                     .map_err(registry_failure)?;
-                let jobs: Vec<_> = snapshots
+                let mut reachable_runs = vec![root_run_id.clone()];
+                let mut seen_runs = std::collections::HashSet::new();
+                let mut reachable_jobs = std::collections::HashSet::new();
+                while let Some(run_id) = reachable_runs.pop() {
+                    if !seen_runs.insert(run_id.clone()) {
+                        continue;
+                    }
+                    for snapshot in &snapshots {
+                        if reachable_jobs.contains(&snapshot.status.id) {
+                            continue;
+                        }
+                        let Some(control) = _controls.get(&snapshot.status.id) else {
+                            continue;
+                        };
+                        if !control.lineage.parents.contains(&run_id) {
+                            continue;
+                        }
+                        reachable_jobs.insert(snapshot.status.id.clone());
+                        reachable_runs.extend(control.lineage.children.iter().cloned());
+                    }
+                }
+                let mut jobs: Vec<_> = snapshots
                     .into_iter()
-                    .filter(|snapshot| {
-                        snapshot.metadata.root_run_id.as_ref() == Some(root_run_id)
-                    })
+                    .filter(|snapshot| reachable_jobs.contains(&snapshot.status.id))
                     .map(|snapshot| snapshot.status)
                     .collect();
+                jobs.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
                 let pending = jobs.iter().any(|job| !job.status.is_terminal());
                 (jobs, pending)
             };

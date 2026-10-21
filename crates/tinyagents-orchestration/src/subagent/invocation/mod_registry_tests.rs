@@ -54,14 +54,14 @@ async fn root_settlement_includes_late_grandchildren_and_only_owned_root_jobs() 
     use tinyagents_harness::ids::RunId;
 
     let jobs = SubAgentJobRegistry::new();
-    let register = |task: &str, root: &str, parent: &str, owner: &str| {
+    let registration = |task: &str, root: &str, parent: &str, owner: &str| {
         let key = crate::subagent::SubagentTaskKey {
             root_run_id: root.into(),
             parent_run_id: parent.into(),
             thread_id: None,
             task_id: task.into(),
         };
-        jobs.register_driver_job(DriverJobRegistration {
+        DriverJobRegistration {
             key,
             agent: task.into(),
             owner: owner.into(),
@@ -70,14 +70,25 @@ async fn root_settlement_includes_late_grandchildren_and_only_owned_root_jobs() 
             steering: None,
             run_queue: None,
             continuing: false,
-        })
-        .unwrap()
-        .0
+        }
     };
 
-    let child = register("child", "root", "root", "owner");
-    let unrelated = register("unrelated", "other-root", "other-root", "owner");
-    let foreign = register("foreign", "root", "root", "other-owner");
+    let child = jobs
+        .register_driver_job_with_lineage(
+            registration("child", "root", "key-parent", "owner"),
+            RunId::new("root"),
+            RunId::new("child-run"),
+        )
+        .unwrap()
+        .0;
+    let unrelated = jobs
+        .register_driver_job(registration("unrelated", "other-root", "other-root", "owner"))
+        .unwrap()
+        .0;
+    let foreign = jobs
+        .register_driver_job(registration("foreign", "root", "root", "other-owner"))
+        .unwrap()
+        .0;
     jobs.mark_running(&child);
     jobs.mark_driver_result(&unrelated, Err("unrelated failure".into()));
     jobs.mark_driver_result(&foreign, Err("foreign failure".into()));
@@ -99,7 +110,14 @@ async fn root_settlement_includes_late_grandchildren_and_only_owned_root_jobs() 
     // A running descendant can still admit a grandchild. Its terminal
     // transition happens only after that registration, so settlement must
     // observe and wait for both jobs.
-    let grandchild = register("grandchild", "root", "child-run", "owner");
+    let grandchild = jobs
+        .register_driver_job_with_lineage(
+            registration("grandchild", "root", "durable-parent", "owner"),
+            RunId::new("child-run"),
+            RunId::new("grandchild-run"),
+        )
+        .unwrap()
+        .0;
     jobs.mark_running(&grandchild);
     jobs.mark_driver_result(&child, Err("child failed".into()));
     assert!(!settling.is_finished());
@@ -153,6 +171,111 @@ async fn root_settlement_uses_one_deadline_and_propagates_cancellation() {
         )
         .await;
     assert_eq!(cancelled_result, Err(SubAgentJobError::SettlementCancelled));
+}
+
+#[tokio::test]
+async fn resumed_job_keeps_old_attempt_edges_without_importing_new_root_siblings() {
+    use tinyagents_harness::cancel::CancellationToken;
+    use tinyagents_harness::ids::RunId;
+
+    let jobs = SubAgentJobRegistry::new();
+    let registration = |task: &str, key_parent: &str| DriverJobRegistration {
+        key: crate::subagent::SubagentTaskKey {
+            root_run_id: "durable-root".into(),
+            parent_run_id: key_parent.into(),
+            thread_id: None,
+            task_id: task.into(),
+        },
+        agent: task.into(),
+        owner: "owner".into(),
+        workspace: None,
+        cancellation: CancellationToken::new(),
+        steering: None,
+        run_queue: None,
+        continuing: false,
+    };
+
+    let (job, _, _, _, _) = jobs
+        .register_driver_job_with_lineage(
+            registration("resumed", "durable-parent"),
+            RunId::new("old-root"),
+            RunId::new("old-attempt"),
+        )
+        .unwrap();
+    jobs.set_attempt_run_id(&job, "old-retry-attempt");
+
+    let (old_grandchild, _, _, _, _) = jobs
+        .register_driver_job_with_lineage(
+            registration("old-grandchild", "durable-parent"),
+            RunId::new("old-retry-attempt"),
+            RunId::new("old-grandchild-run"),
+        )
+        .unwrap();
+    jobs.mark_running(&old_grandchild);
+
+    let mut paused = SubagentOutcome::completed(job.as_str(), "waiting");
+    paused.status = SubagentOutcomeKind::AwaitingInput(SubagentPause {
+        reason: "resume later".into(),
+        resume: SubagentResume::default(),
+    });
+    jobs.mark_driver_result(&job, Ok(paused));
+    let mut resumed = registration("resumed", "durable-parent");
+    resumed.continuing = true;
+    let (resumed_id, _, _, _, continued) = jobs
+        .register_driver_job_with_lineage(
+            resumed,
+            RunId::new("new-root"),
+            RunId::new("new-attempt"),
+        )
+        .unwrap();
+    assert_eq!(resumed_id, job);
+    assert!(continued);
+
+    let (new_grandchild, _, _, _, _) = jobs
+        .register_driver_job_with_lineage(
+            registration("new-grandchild", "durable-parent"),
+            RunId::new("new-attempt"),
+            RunId::new("new-grandchild-run"),
+        )
+        .unwrap();
+    jobs.mark_running(&new_grandchild);
+    let (new_root_sibling, _, _, _, _) = jobs
+        .register_driver_job_with_lineage(
+            registration("new-root-sibling", "new-root"),
+            RunId::new("new-root"),
+            RunId::new("sibling-run"),
+        )
+        .unwrap();
+    jobs.mark_running(&new_root_sibling);
+
+    jobs.mark_driver_result(&old_grandchild, Err("old attempt finished".into()));
+    jobs.mark_driver_result(&job, Err("resumed job finished".into()));
+    jobs.mark_driver_result(&new_grandchild, Err("new attempt finished".into()));
+    jobs.mark_driver_result(&new_root_sibling, Err("sibling finished".into()));
+
+    let settle = |root: &'static str| {
+        let jobs = jobs.clone();
+        async move {
+            jobs.settle_root_run_descendants(
+                &RunId::new(root),
+                "owner",
+                tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let old_root_jobs = settle("old-root").await;
+    assert_eq!(old_root_jobs.len(), 3);
+    assert!(old_root_jobs.iter().any(|entry| entry.id == new_grandchild));
+    assert!(!old_root_jobs.iter().any(|entry| entry.id == new_root_sibling));
+
+    let new_root_jobs = settle("new-root").await;
+    assert_eq!(new_root_jobs.len(), 3);
+    assert!(new_root_jobs.iter().any(|entry| entry.id == job));
+    assert!(new_root_jobs.iter().any(|entry| entry.id == new_grandchild));
+    assert!(new_root_jobs.iter().any(|entry| entry.id == new_root_sibling));
 }
 
 #[tokio::test]

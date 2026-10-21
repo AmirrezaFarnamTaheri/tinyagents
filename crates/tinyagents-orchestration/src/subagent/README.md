@@ -25,6 +25,22 @@ are never cap-pruned, so the latter remain available for reuse by their scoped
 task key. A completed result remains queryable until retention pressure
 removes it.
 
+Hosts that need to settle a completed top-level run can call
+`SubAgentJobRegistry::settle_root_run_descendants`. Driver jobs retain the
+native root `RunId` from their validated `SubagentTaskKey`; ordinary
+`SubAgentTool` jobs retain it from the live parent context. Settlement filters
+by both this root identity and the caller's existing job owner, then waits for
+all matching jobs to become terminal and returns their final snapshots,
+including failures and cancellations. The call has one absolute deadline and
+observes caller cancellation. A root is not itself a registry job, so hosts
+must call it after that root run can no longer admit direct children. Paused
+`AwaitingInput` jobs remain nonterminal and keep settlement open.
+
+Durable continuations keep their original `SubagentTaskKey` and therefore
+remain associated with its original root identity even when executed with a
+fresh run context. Hosts should use the same root scope when settling that
+durable lifecycle.
+
 The durable lifecycle surface coordinates a host-resolved subagent lifecycle
 without making product-policy decisions. Its dependency direction is:
 

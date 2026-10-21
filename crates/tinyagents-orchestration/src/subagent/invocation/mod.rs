@@ -914,7 +914,8 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
             child.cancellation.clone(),
             JobLink {
                 subagent_run_id: Some(subagent_run_id.clone()),
-                root_run_id: Some(parent.lineage().root_run_id.clone()),
+                parent_run_id: Some(parent.run_id().clone()),
+                child_run_id: Some(child.run_id().clone()),
                 parent_tool_call_id: tool_call_id.clone(),
                 parent_thread_id: parent.thread_id().map(|thread| thread.as_str().to_owned()),
                 workspace: parent.workspace.clone(),

@@ -301,7 +301,8 @@ pub struct SubAgentJob {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct JobLink {
     pub(crate) subagent_run_id: Option<String>,
-    pub(crate) root_run_id: Option<tinyagents_harness::ids::RunId>,
+    pub(crate) parent_run_id: Option<tinyagents_harness::ids::RunId>,
+    pub(crate) child_run_id: Option<tinyagents_harness::ids::RunId>,
     pub(crate) parent_tool_call_id: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
     pub(crate) workspace: Option<tinytools::WorkspaceDescriptor>,
@@ -362,7 +363,6 @@ pub(super) const SUBAGENT_JOB_SOFT_CAP: usize = 128;
 pub(crate) struct JobMeta {
     pub(crate) parent_thread_id: Option<String>,
     pub(crate) workspace: Option<tinytools::WorkspaceDescriptor>,
-    pub(crate) root_run_id: Option<tinyagents_harness::ids::RunId>,
 }
 
 impl Clone for JobMeta {
@@ -374,7 +374,6 @@ impl Clone for JobMeta {
         Self {
             parent_thread_id: self.parent_thread_id.clone(),
             workspace: self.workspace.clone(),
-            root_run_id: self.root_run_id.clone(),
         }
     }
 }
@@ -419,6 +418,38 @@ pub(crate) struct JobControl {
     pub(crate) waiters: Arc<AtomicUsize>,
     /// Settlement order used to evict the oldest unpinned terminal record.
     pub(crate) terminal_sequence: AtomicU64,
+    /// Native parent-to-attempt edges, including every resumed attempt.
+    pub(crate) lineage: JobLineage,
+}
+
+#[derive(Default)]
+pub(crate) struct JobLineage {
+    pub(crate) parents: std::collections::HashSet<tinyagents_harness::ids::RunId>,
+    pub(crate) children: std::collections::HashSet<tinyagents_harness::ids::RunId>,
+}
+
+impl JobLineage {
+    pub(crate) fn new(
+        parent: Option<tinyagents_harness::ids::RunId>,
+        child: Option<tinyagents_harness::ids::RunId>,
+    ) -> Self {
+        let mut lineage = Self::default();
+        lineage.add(parent, child);
+        lineage
+    }
+
+    pub(crate) fn add(
+        &mut self,
+        parent: Option<tinyagents_harness::ids::RunId>,
+        child: Option<tinyagents_harness::ids::RunId>,
+    ) {
+        if let Some(parent) = parent {
+            self.parents.insert(parent);
+        }
+        if let Some(child) = child {
+            self.children.insert(child);
+        }
+    }
 }
 
 pub struct DriverJobRegistration {
