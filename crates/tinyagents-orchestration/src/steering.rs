@@ -139,17 +139,18 @@ where
     };
     match result {
         Ok(handle) => Ok(Some(handle)),
-        Err(DetachedTaskRegistryError::NoSteeringHandle) => Ok(None),
-        Err(DetachedTaskRegistryError::AlreadyDone) => Err(SteerError::Unknown),
+        Err(
+            DetachedTaskRegistryError::NoSteeringHandle | DetachedTaskRegistryError::AlreadyDone,
+        ) => Ok(None),
         Err(error) => Err(error.into()),
     }
 }
 
 /// Inject `text` into the running subagent `task_id`.
 ///
-/// Rejects an unsupported lane or unknown, unowned, or terminal task, then
-/// prefers the live steering handle and falls back to the host when a live
-/// child has no handle. The text is never logged here.
+/// Rejects an unsupported lane or unknown or unowned task, then prefers the
+/// live steering handle and falls back to the host when the handle is absent
+/// or the retained task has finished. The text is never logged here.
 pub async fn steer_detached<M, F>(
     registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
     task_id: &str,
@@ -173,8 +174,9 @@ where
 /// Idempotent [`steer_detached`]: when `request_id` was already applied to
 /// `task_id`, returns a [`SteerReceipt`] with `duplicate: true` and delivers
 /// nothing. The last [`tinyagents_harness::steering::RecentRequestIds::DEFAULT_CAPACITY`] ids per task are
-/// remembered. Lane, ownership, and terminal validation runs first, so a
-/// rejected steer never consumes its id and can be retried. A `request_id`
+/// remembered. Lane and ownership validation runs first, so a rejected steer
+/// never consumes its id and can be retried. A terminal task with retained
+/// metadata is delivered through the host fallback. A `request_id`
 /// longer than [`RecentRequestIds::MAX_REQUEST_ID_BYTES`] is rejected with
 /// [`SteerError::RequestIdTooLong`].
 ///
@@ -206,9 +208,6 @@ where
         SteerAccess::Owner(owner) => registry.snapshot(&key, owner)?,
         SteerAccess::Trusted => registry.snapshot_trusted(&key)?,
     };
-    if snapshot.status.is_terminal() {
-        return Err(SteerError::Unknown);
-    }
     if request_id.is_some_and(|id| id.len() > RecentRequestIds::MAX_REQUEST_ID_BYTES) {
         return Err(SteerError::RequestIdTooLong);
     }
