@@ -22,7 +22,7 @@ and the hard facts at the tail of every request.
 | Plan | `todos::store` for the run's thread | Every step with its mark (`[x]` `[>]` `[ ]` `[-]`), the step in progress and the tool rounds it has run. At most 20 steps. |
 | Recent failures | `after_tool` results with `is_error` | The last 3, each with its age, tool, command (or argument summary) and the exit code plus first `[stderr]` line. Dropped after 4 rounds, or when the same command later succeeds. Exit codes 1, 2 or 141 with no `[stderr]` line from a search or compound command (including pipelines and multi-line scripts) are treated as exploration misses and omitted. |
 | Reported not found | Shell wording in error output (`X: command not found`, `sh: 1: X: not found`, `command not found: X`) | Cleared when a later successful command runs `X`. |
-| Files written this run | Path argument of tools whose name contains write/edit/patch/create/replace | The last 6, distinct. |
+| Files written this run | Paths extracted from filesystem tool calls, patch envelopes and unified-diff headers | The last 6, distinct. |
 
 No section is ever a model's interpretation, so nothing in the block can be
 wrong in a way the tool results are not. With no goal, plan or fact, no block
@@ -32,10 +32,9 @@ is added.
 
 The block is added in `before_model_dispatch` through
 `push_ephemeral_instruction`, and re-added in `after_model_rewrite` if a
-request rewrite removed it. It therefore follows the model profile's
+request rewrite removed it or later guidance followed it. It therefore follows the model profile's
 placement rules (a tail system message, or a `[harness note]` on the last tool
-result or user turn for providers that hoist system messages), stays out of the
-admission estimate, and is never persisted. `after_model_rewrite` also moves it back to the
+result or user turn for providers that hoist system messages), and is never persisted. It is included in the admission estimate when `BudgetMiddleware` runs after dispatch staging. `after_model_rewrite` also moves it back to the
 end when a middleware pushed its own note after it in `before_model` (which runs after
 `before_model_dispatch`), so the block is always the last thing the model reads: the next request is rebuilt from
 the transcript, so the previous block is simply absent and the provider's
