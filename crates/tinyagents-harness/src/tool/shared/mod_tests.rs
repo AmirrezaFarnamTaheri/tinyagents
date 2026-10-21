@@ -226,6 +226,46 @@ fn canonical_adapter_forwards_injected_argument_declarations() {
 
 struct BehaviorTool;
 
+struct HostExtension;
+
+static HOST_EXTENSION: HostExtension = HostExtension;
+
+struct ExtensionTool;
+
+#[async_trait]
+impl Tool for ExtensionTool {
+    fn name(&self) -> &str {
+        "extension"
+    }
+
+    fn description(&self) -> &str {
+        "Exposes host-specific admission metadata."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        Some(&HOST_EXTENSION)
+    }
+
+    async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::default())
+    }
+}
+
+#[test]
+fn canonical_adapter_forwards_host_extension_from_the_resolved_tool() {
+    let sets: Vec<Arc<Vec<Box<dyn Tool>>>> = vec![Arc::new(vec![Box::new(ExtensionTool)])];
+    let adapter = CanonicalSharedToolAdapter::for_name(sets, "extension")
+        .expect("registered tool");
+
+    assert!(adapter
+        .host_extension()
+        .is_some_and(|extension| extension.is::<HostExtension>()));
+}
+
 #[async_trait]
 impl Tool for BehaviorTool {
     fn name(&self) -> &str {
