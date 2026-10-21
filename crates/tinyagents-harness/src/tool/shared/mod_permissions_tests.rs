@@ -17,6 +17,10 @@ struct MetadataTool {
     external: bool,
 }
 
+struct PackExtension(&'static str);
+
+static PACK_EXTENSION: PackExtension = PackExtension("packed");
+
 #[async_trait]
 impl Tool for MetadataTool {
     fn name(&self) -> &str {
@@ -51,6 +55,10 @@ impl Tool for MetadataTool {
 
     fn external_effect_with_args(&self, args: &Value) -> bool {
         self.external && args.get("dry_run") != Some(&Value::Bool(true))
+    }
+
+    fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        Some(&PACK_EXTENSION)
     }
 
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
@@ -93,6 +101,17 @@ fn shared_adapter_forwards_argument_aware_permission_and_external_effect() {
         );
         assert!(adapter.external_effect_with_args(&args));
     }
+}
+
+#[test]
+fn shared_adapter_forwards_host_extension_for_packed_admission() {
+    let adapter = metadata_adapter(PermissionLevel::ReadOnly, false);
+    let extension = adapter
+        .host_extension()
+        .and_then(|extension| extension.downcast_ref::<PackExtension>())
+        .expect("packed host extension is available to admission dispatch");
+
+    assert_eq!(extension.0, "packed");
 }
 
 #[test]
