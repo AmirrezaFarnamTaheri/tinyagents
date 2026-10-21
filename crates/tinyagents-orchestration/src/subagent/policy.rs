@@ -1,10 +1,9 @@
 //! One timeout/retry/budget policy for every subagent path.
 //!
-//! [`SubAgentPolicy`] and [`SubAgentBudget`] are defined beside the graph
-//! `SubAgentNode` (`tinyagents-graph`, which this crate depends on, so the
-//! types cannot live here without a cycle) and re-exported so a host names
-//! them from either place. [`SubagentDriver`](super::SubagentDriver) and
-//! [`SubAgentTool`](super::SubAgentTool) apply them like the graph node does:
+//! [`SubAgentPolicy`], [`SubAgentBudget`], and [`SubAgentOutput`] live here so
+//! orchestration owns the policy used by the async driver. The graph crate
+//! temporarily re-exports these types while its deprecated subagent node is
+//! removed. [`SubagentDriver`](super::SubagentDriver) applies the policy:
 //!
 //! - **timeout** cancels the child and ends the run `Incomplete(Timeout)`;
 //!   a timed-out attempt is never retried (it may have run for the whole
@@ -16,7 +15,192 @@
 //!   run); token caps are checked against the reported usage afterwards;
 //!   `max_cost` is carried but not enforced (see [`SubAgentBudget`]).
 
-pub use tinyagents_graph::{SubAgentBudget, SubAgentPolicy};
+use std::time::Duration;
+
+use serde_json::Value;
+use tinyagents_harness::context::RunConfig;
+use tinyagents_harness::middleware::BudgetLimits;
+use tinyagents_harness::retry::RetryPolicy;
+use tinyinference_llm::usage::UsageTotals;
+
+/// Structured output and accounting returned by an agent invocation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SubAgentOutput {
+    /// The final assistant text.
+    pub text: String,
+    /// Parsed structured output, when present.
+    pub structured: Option<Value>,
+    /// Cumulative token usage across model calls.
+    pub usage: UsageTotals,
+    /// Number of dispatched model calls.
+    pub model_calls: usize,
+    /// Number of executed tool invocations.
+    pub tool_calls: usize,
+}
+
+/// Optional work caps for one subagent invocation.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SubAgentBudget {
+    /// Maximum model calls (`None` means unbounded).
+    pub max_model_calls: Option<usize>,
+    /// Maximum tool calls (`None` means unbounded).
+    pub max_tool_calls: Option<usize>,
+    /// Maximum cumulative input tokens (`None` means unbounded).
+    pub max_input_tokens: Option<u64>,
+    /// Maximum cumulative output tokens (`None` means unbounded).
+    pub max_output_tokens: Option<u64>,
+    /// Maximum estimated cost (`None` means unbounded); carried, not enforced
+    /// here because enforcement requires a pricing table.
+    pub max_cost: Option<f64>,
+}
+
+impl SubAgentBudget {
+    /// A budget that imposes no cap.
+    pub fn unlimited() -> Self {
+        Self::default()
+    }
+
+    /// Caps model calls, returning `self` for chaining.
+    pub fn with_max_model_calls(mut self, max: usize) -> Self {
+        self.max_model_calls = Some(max);
+        self
+    }
+
+    /// Caps tool calls, returning `self` for chaining.
+    pub fn with_max_tool_calls(mut self, max: usize) -> Self {
+        self.max_tool_calls = Some(max);
+        self
+    }
+
+    /// Caps cumulative input tokens, returning `self` for chaining.
+    pub fn with_max_input_tokens(mut self, max: u64) -> Self {
+        self.max_input_tokens = Some(max);
+        self
+    }
+
+    /// Caps cumulative output tokens, returning `self` for chaining.
+    pub fn with_max_output_tokens(mut self, max: u64) -> Self {
+        self.max_output_tokens = Some(max);
+        self
+    }
+
+    /// Caps cumulative estimated cost, returning `self` for chaining.
+    pub fn with_max_cost(mut self, max: f64) -> Self {
+        self.max_cost = Some(max);
+        self
+    }
+
+    /// Tightens `config`'s call caps without widening existing restrictions.
+    pub fn apply_call_caps(&self, config: &mut RunConfig) {
+        if let Some(max) = self.max_model_calls {
+            config.max_model_calls = Some(config.max_model_calls.map_or(max, |set| set.min(max)));
+        }
+        if let Some(max) = self.max_tool_calls {
+            config.max_tool_calls = Some(config.max_tool_calls.map_or(max, |set| set.min(max)));
+        }
+    }
+
+    /// Converts token and cost limits to harness middleware limits.
+    pub fn to_budget_limits(&self) -> BudgetLimits {
+        BudgetLimits {
+            max_input_tokens: self.max_input_tokens,
+            max_output_tokens: self.max_output_tokens,
+            max_cost: self.max_cost,
+            ..BudgetLimits::default()
+        }
+    }
+
+    /// Returns an error when the measured output exceeds a configured cap.
+    pub fn check(
+        &self,
+        output: &SubAgentOutput,
+        agent: &str,
+    ) -> Result<(), tinyagents_harness::error::TinyAgentsError> {
+        if let Some(max) = self.max_model_calls
+            && output.model_calls > max
+        {
+            return Err(tinyagents_harness::error::TinyAgentsError::LimitExceeded(format!(
+                "sub-agent `{agent}` exceeded model-call budget: {} > {max}",
+                output.model_calls
+            )));
+        }
+        if let Some(max) = self.max_tool_calls
+            && output.tool_calls > max
+        {
+            return Err(tinyagents_harness::error::TinyAgentsError::LimitExceeded(format!(
+                "sub-agent `{agent}` exceeded tool-call budget: {} > {max}",
+                output.tool_calls
+            )));
+        }
+        if let Some(max) = self.max_input_tokens
+            && output.usage.usage.input_tokens > max
+        {
+            return Err(tinyagents_harness::error::TinyAgentsError::LimitExceeded(format!(
+                "sub-agent `{agent}` exceeded input-token budget: {} > {max}",
+                output.usage.usage.input_tokens
+            )));
+        }
+        if let Some(max) = self.max_output_tokens
+            && output.usage.usage.output_tokens > max
+        {
+            return Err(tinyagents_harness::error::TinyAgentsError::LimitExceeded(format!(
+                "sub-agent `{agent}` exceeded output-token budget: {} > {max}",
+                output.usage.usage.output_tokens
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Timeout, retry, and budget policy for an async subagent invocation.
+#[derive(Clone, Debug)]
+pub struct SubAgentPolicy {
+    /// Optional wall-clock timeout for each attempt.
+    pub timeout: Option<Duration>,
+    /// Retry and backoff policy.
+    pub retry: RetryPolicy,
+    /// Optional work caps.
+    pub budget: SubAgentBudget,
+    /// Whether a failed attempt may be retried after tools ran.
+    pub retry_after_tool_calls: bool,
+}
+
+impl Default for SubAgentPolicy {
+    fn default() -> Self {
+        Self {
+            timeout: None,
+            retry: RetryPolicy::default().with_max_attempts(1),
+            budget: SubAgentBudget::unlimited(),
+            retry_after_tool_calls: false,
+        }
+    }
+}
+
+impl SubAgentPolicy {
+    /// Sets the per-attempt timeout.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Sets the retry policy.
+    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
+        self.retry = retry;
+        self
+    }
+
+    /// Sets the work budget.
+    pub fn with_budget(mut self, budget: SubAgentBudget) -> Self {
+        self.budget = budget;
+        self
+    }
+
+    /// Allows retries after tools have run, for idempotent tool sets.
+    pub fn with_retry_after_tool_calls(mut self, allow: bool) -> Self {
+        self.retry_after_tool_calls = allow;
+        self
+    }
+}
 
 use tinyagents_harness::CancellationToken;
 use tinyagents_harness::context::RunContext;
