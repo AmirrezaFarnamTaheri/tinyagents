@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::error::TinyAgentsError;
-use tinyagents_harness::ids::{TaskId, next_seq};
+use tinyagents_harness::ids::TaskId;
 use tinyagents_harness::run_queue::QueueLane;
 use tinyagents_harness::steering::{
     SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy,
@@ -17,9 +17,7 @@ use tokio::sync::watch;
 use crate::subagent::{AppliedResult, IncompleteKind};
 
 use super::types::{DriverJobRegistration, JobControl, JobMeta, ParentJobScope};
-use super::{
-    JobLink, SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus,
-};
+use super::{SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus};
 
 const LOG_PREFIX: &str = "[subagent-jobs]";
 type DriverJobControls = (
@@ -61,16 +59,16 @@ impl Drop for JobWaitGuard {
     }
 }
 
-/// Settles an inline job if its tool future is dropped (tool timeout, parent
-/// stream drop) or unwinds from a panic before the result is recorded.
+/// Settles a driver-backed job if its future is dropped or unwinds before its
+/// result is recorded.
 /// Call [`Self::disarm`] once the result has been written.
-pub struct InlineJobGuard {
+pub struct JobSettleGuard {
     jobs: SubAgentJobRegistry,
     id: SubAgentJobId,
     armed: bool,
 }
 
-impl InlineJobGuard {
+impl JobSettleGuard {
     pub fn new(jobs: SubAgentJobRegistry, id: SubAgentJobId) -> Self {
         Self {
             jobs,
@@ -84,7 +82,7 @@ impl InlineJobGuard {
     }
 }
 
-impl Drop for InlineJobGuard {
+impl Drop for JobSettleGuard {
     fn drop(&mut self) {
         if self.armed {
             self.jobs.mark_aborted(&self.id, std::thread::panicking());
@@ -104,69 +102,14 @@ impl SubAgentJobRegistry {
         &self.tasks
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn create(&self, agent: &str, owner: u64) -> (SubAgentJobId, SteeringHandle) {
-        self.create_with_cancellation(agent, owner, CancellationToken::new(), JobLink::default())
-    }
-
-    /// Registers a job whose child run observes `cancellation`, so
-    /// [`Self::cancel_owned`] can stop exactly this job.
-    pub(crate) fn create_with_cancellation(
-        &self,
-        agent: &str,
-        owner: u64,
-        cancellation: CancellationToken,
-        link: JobLink,
-    ) -> (SubAgentJobId, SteeringHandle) {
-        self.create_with_cancellation_and_queue(agent, owner, cancellation, link, None)
-    }
-
-    /// Registers a job with an optional loop-consumed queue for content
-    /// messages routed to a specific lane.
-    pub(crate) fn create_with_cancellation_and_queue(
-        &self,
-        agent: &str,
-        owner: u64,
-        cancellation: CancellationToken,
-        link: JobLink,
-        run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
-    ) -> (SubAgentJobId, SteeringHandle) {
-        let id = SubAgentJobId(format!("subagent-job-{}", next_seq()));
-        let steering =
-            SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage));
-        let mut driver_jobs = self
-            .driver_jobs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Root leases serialize with lineage insertion and pruning. Lock order:
-        // driver_jobs -> root_leases -> controls -> detached task registry.
-        let mut root_leases = self.root_leases();
-        if let Err(error) = self.insert_job(
-            id.clone(),
-            agent,
-            owner.to_string(),
-            link,
-            JobExecutionControls {
-                cancellation,
-                steering: steering.clone(),
-                run_queue,
-            },
-            &mut driver_jobs,
-        ) {
-            tracing::error!("{LOG_PREFIX} register.failed job_id={id} error={error}");
-        } else {
-            let mut controls = self.controls();
-            self.refresh_root_leases_locked(&mut root_leases, &mut controls);
-        }
-        (id, steering)
-    }
-
     fn insert_job(
         &self,
         id: SubAgentJobId,
         agent: &str,
         owner: String,
-        link: JobLink,
+        parent_run_id: tinyagents_harness::ids::RunId,
+        parent_thread_id: String,
+        workspace: Option<tinytools::WorkspaceDescriptor>,
         execution: JobExecutionControls,
         driver_jobs: &mut std::collections::HashMap<
             crate::subagent::SubagentTaskKey,
@@ -177,11 +120,10 @@ impl SubAgentJobRegistry {
             return Err(SubAgentJobError::Registry("empty job id".into()));
         }
         let metadata = JobMeta {
-            parent_thread_id: link.parent_thread_id.clone(),
-            workspace: link.workspace.clone(),
+            parent_thread_id: Some(parent_thread_id),
+            workspace,
         };
-        let lineage =
-            super::types::JobLineage::new(link.parent_run_id.clone(), link.child_run_id.clone());
+        let lineage = super::types::JobLineage::new(Some(parent_run_id), None);
         let task_id = TaskId::new(id.as_str());
         let job = SubAgentJob {
             id: id.clone(),
@@ -189,10 +131,10 @@ impl SubAgentJobRegistry {
             status: SubAgentJobStatus::Queued,
             output: None,
             error: None,
-            subagent_run_id: link.subagent_run_id,
+            subagent_run_id: None,
             worker_thread_id: None,
             extensions: std::collections::BTreeMap::new(),
-            parent_tool_call_id: link.parent_tool_call_id,
+            parent_tool_call_id: None,
             incomplete_kind: None,
             artifacts: Vec::new(),
             schema_error: None,
@@ -451,12 +393,9 @@ impl SubAgentJobRegistry {
             id.clone(),
             &agent,
             owner,
-            JobLink {
-                parent_thread_id: key.thread_id.clone(),
-                workspace,
-                parent_run_id: Some(parent_run_id),
-                ..JobLink::default()
-            },
+            parent_run_id,
+            key.thread_id.clone(),
+            workspace,
             JobExecutionControls {
                 cancellation,
                 steering: steering.clone(),

@@ -107,17 +107,6 @@ pub struct SubAgentJob {
     pub artifact_error: Option<String>,
 }
 
-/// Explicit link from a spawned job back to the parent call and child run.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct JobLink {
-    pub(crate) subagent_run_id: Option<String>,
-    pub(crate) parent_run_id: Option<tinyagents_harness::ids::RunId>,
-    pub(crate) child_run_id: Option<tinyagents_harness::ids::RunId>,
-    pub(crate) parent_tool_call_id: Option<String>,
-    pub(crate) parent_thread_id: Option<String>,
-    pub(crate) workspace: Option<tinytools::WorkspaceDescriptor>,
-}
-
 /// Shared registry behind asynchronous subagent spawning and host controls.
 ///
 /// This is a thin adapter over [`tinyagents_tasks::DetachedTaskRegistry`], the
