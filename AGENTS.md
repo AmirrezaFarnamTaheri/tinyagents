@@ -12,6 +12,9 @@ capability catalog), `crates/tinyagents-session/` (durable session data),
 task stores and orchestration controls), and
 `crates/tinyagents-orchestration/` (direct and durable subagent invocation,
 tools, sessions, lifecycle logic, and focused tests).
+`crates/tinyagents-harness-tools/` owns reusable harness tool implementations
+and their stateful support: goals, todos, skills, time, clarification, plan
+exit, per-call binding, thread locks, and feature-gated subagent tool shells.
 `crates/tinyagents-integration-tests/` owns cross-crate tests and examples.
 The workspace also has `crates/tinyagents-runtime/`, `crates/tinyagents-definition/`
 and `crates/tinyagents-live/`.
@@ -24,8 +27,9 @@ dedicated `types.rs` file and keep module-local unit tests in a sibling
 smallest useful API.
 
 Cargo features are package-local. `tinyagents-harness` exposes `sqlite`,
-`builtin-tools` (`tools` is a deprecated alias), `multimodal`, `png-optimize`,
-`media`, `claude-code`, `langfuse`, `storage-drivers`, and `tracing`; `tinyagents-graph`
+`multimodal`, `png-optimize`, `media`, `claude-code`, `langfuse`,
+`storage-drivers`, and `tracing`; `tinyagents-harness-tools` exposes default
+`todos`, `goals`, and `skills`, plus opt-in `subagents`; `tinyagents-graph`
 exposes `sqlite`, `storage-drivers`, and `tracing`; session exposes
 `storage-drivers` and `tracing`; registry exposes `tracing`. The
 `storage-drivers` features put each store on `tinystoragedrivers` ports. The harness's own

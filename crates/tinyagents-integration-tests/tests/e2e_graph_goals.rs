@@ -1,86 +1,43 @@
-//! End-to-end coverage for the per-thread goal (`graph::goals`) exercised
-//! through the public crate surface: a self-driving graph loop wired with
-//! `goal_gate_node` keeps re-running a work node while the thread's goal is
-//! active, and stops when the work node marks the goal complete.
+//! Public integration coverage for harness goal preparation and lifecycle.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
-use tinyagents_graph::END;
-use tinyagents_graph::command::NodeResult;
-use tinyagents_graph::*;
-use tinyagents_graph::{NodeContext, NodeFuture};
 use tinyagents_harness::store::{InMemoryStore, Store};
-use tinyagents_harness::*;
-use tinyagents_registry::*;
-
-/// State overwritten by each work iteration.
-#[derive(Clone, Debug, Default, PartialEq)]
-struct LoopState {
-    iters: usize,
-}
+use tinyagents_harness_tools::goals::{GoalStore, ThreadGoalStatus};
 
 #[tokio::test]
-async fn self_driving_goal_loop_runs_until_complete() {
+async fn prepared_goal_exposes_context_and_budget_for_a_host_turn() {
     let store: Arc<dyn Store> = Arc::new(InMemoryStore::default());
-    goal_store::set(&store, "thread-goal", "process every item", None)
+    let goals = GoalStore::new(store);
+    let goal = goals
+        .set("thread-goal", "process every item", Some(1_000))
         .await
         .expect("set goal");
+    goals.pause("thread-goal").await.expect("pause goal");
 
-    // The work node advances a counter and, on the third iteration, marks the
-    // goal complete (the graph analogue of a model calling `goal_complete`).
-    let counter = Arc::new(AtomicUsize::new(0));
-    let work_store = store.clone();
-    let work_node = move |_state: LoopState, _ctx: NodeContext| {
-        let counter = counter.clone();
-        let work_store = work_store.clone();
-        Box::pin(async move {
-            let n = counter.fetch_add(1, Ordering::SeqCst) + 1;
-            if n >= 3 {
-                goal_store::complete(&work_store, "thread-goal")
-                    .await
-                    .expect("complete goal");
-            }
-            Ok(NodeResult::Update(LoopState { iters: n }))
-        }) as NodeFuture<LoopState>
-    };
-
-    // The gate accounts a fixed cost per iteration and reports progress so the
-    // loop is only stopped by the goal reaching `Complete`.
-    let gate = goal_gate_node::<LoopState, LoopState>(store.clone(), "work", |_s: &LoopState| {
-        GoalProgress {
-            tokens_used: 10,
-            elapsed_secs: 1,
-            made_progress: true,
-        }
-    });
-
-    let graph = GraphBuilder::<LoopState, LoopState>::overwrite()
-        .with_recursion_limit(64)
-        .add_node("work", work_node)
-        .add_node("gate", gate)
-        .set_entry("work")
-        .add_edge("work", "gate")
-        .with_command_destinations("gate", ["work", tinyagents_graph::END])
-        .compile()
-        .expect("graph compiles");
-
-    let exec = graph
-        .run_with_thread("thread-goal", LoopState::default())
-        .await
-        .expect("graph runs to completion");
-
-    assert_eq!(exec.state.iters, 3, "loops until the goal is completed");
-
-    let goal = goal_store::get(&store, "thread-goal")
-        .await
-        .expect("load goal")
-        .expect("goal exists");
-    assert_eq!(goal.status, ThreadGoalStatus::Complete);
-    // Usage was accounted across the iterations that ran through the gate.
+    let prepared = goals.prepare_turn("thread-goal").await.expect("prepare");
+    assert_eq!(prepared.goal.as_ref().unwrap().goal_id, goal.goal_id);
+    assert_eq!(
+        prepared.goal.as_ref().unwrap().status,
+        ThreadGoalStatus::Active
+    );
     assert!(
-        goal.tokens_used >= 20,
-        "usage accrued: {}",
-        goal.tokens_used
+        prepared
+            .context_block
+            .as_deref()
+            .unwrap()
+            .contains("process every item")
+    );
+    assert!(prepared.budget_guard.is_some());
+
+    goals
+        .account_turn("thread-goal", 10, 5, Duration::from_millis(500))
+        .await
+        .unwrap();
+    goals.complete("thread-goal").await.expect("complete");
+    assert_eq!(
+        goals.get("thread-goal").await.unwrap().unwrap().status,
+        ThreadGoalStatus::Complete
     );
 }

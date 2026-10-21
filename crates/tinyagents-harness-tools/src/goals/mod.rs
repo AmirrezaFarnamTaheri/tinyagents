@@ -1,0 +1,37 @@
+//! Per-thread durable **goal**: one objective per thread, carried across
+//! supersteps, interrupts, and resumes.
+//!
+//! A thread goal is a single "completion contract" — a durable objective a
+//! harness keeps pursuing until the model marks it [`Complete`](ThreadGoalStatus::Complete), a token budget
+//! is exhausted, or a host pauses it. This module owns the data model
+//! (`types`), harness-[`Store`](tinyagents_harness::store::Store)-backed
+//! persistence ([`store`]), the model-facing controls exposed as harness tools
+//! (`tool`), observed runtime operations (`runtime`), and budget enforcement ([`budget`]) — charging a finished turn against the goal
+//! and stopping an in-flight one that would overrun its ceiling.
+//!
+//! It is the harness-level counterpart of OpenHuman's `thread_goals`, minus the
+//! app-specific coupling (event bus, RPC envelopes, heartbeat scheduler): the
+//! primitive is provider-neutral and drives off the graph runtime.
+
+pub mod budget;
+mod observer;
+mod prompt;
+mod runtime;
+pub mod store;
+mod tool;
+mod types;
+
+pub use budget::{BudgetVerdict, GoalBudgetGuard, account_turn, accrues_usage, turn_tokens};
+pub use observer::{GoalObserver, GoalUpdateThrottle};
+pub use prompt::active_goal_context_block;
+pub use runtime::{GoalStore, GoalTurnPreparation};
+pub use tool::{GoalTool, GoalToolKind};
+pub use types::{ThreadGoal, ThreadGoalStatus};
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod test;
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod runtime_tests;
