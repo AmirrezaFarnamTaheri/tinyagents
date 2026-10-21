@@ -72,7 +72,10 @@ impl RegistryTestHelpers for SubAgentJobRegistry {
             let _ = self.cancel_owned(id.as_str(), owner);
             self.mark_driver_result(id, Err(TinyAgentsError::Cancelled.to_string()));
         } else {
-            self.mark_driver_result(id, result.map_err(|error| error.to_string()));
+            let result = result
+                .map(|()| SubagentOutcome::completed(id.as_str(), "fixture complete"))
+                .map_err(|error| error.to_string());
+            self.mark_driver_result(id, result);
         }
     }
 
