@@ -707,9 +707,13 @@ fn no_such_pack_tool_renders_each_shape() {
 }
 
 #[test]
-fn route_sentence_prefers_a_callable_tool_and_falls_back_to_owners() {
+fn route_sentence_keeps_owner_identity_when_a_delegate_tool_is_callable() {
     assert_eq!(
         route_sentence(&["a".to_string(), "b".to_string()], &["o"]),
+        "Call `a` or `b` to delegate; these tools are owned by `o`. The delegate runs them directly. Do not retry this skill."
+    );
+    assert_eq!(
+        route_sentence(&["a".to_string(), "b".to_string()], &[]),
         "Call `a` or `b` instead — that agent owns these tools and runs them directly. Do not retry this skill."
     );
     assert_eq!(
