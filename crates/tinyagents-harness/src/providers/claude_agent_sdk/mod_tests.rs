@@ -462,46 +462,6 @@ fn inspection_child_environment_is_isolated_from_platform_profiles() {
 }
 
 #[test]
-fn inspection_child_environment_is_isolated_from_platform_profiles() {
-    let home = tempfile::tempdir().expect("private inspection home");
-    let private_home = home.path().to_string_lossy().into_owned();
-    let auth = ClaudeAgentSdkInspectionAuth::new(
-        Some("dummy-inspection-key".into()),
-        None,
-        Some("https://anthropic.example.test".into()),
-    )
-    .expect("explicit inspection key");
-    let mut command = std::process::Command::new("claude");
-    configure_inspection_child(&mut command, &auth, home.path(), 5);
-
-    let environment = command
-        .get_envs()
-        .filter_map(|(name, value)| {
-            value.map(|value| {
-                (
-                    name.to_string_lossy().into_owned(),
-                    value.to_string_lossy().into_owned(),
-                )
-            })
-        })
-        .collect::<std::collections::HashMap<_, _>>();
-    assert_eq!(environment.get("HOME"), Some(&private_home));
-    assert_eq!(environment.get("TMPDIR"), Some(&private_home));
-    assert_eq!(environment.get("ANTHROPIC_API_KEY"), Some(&"dummy-inspection-key".into()));
-    assert_eq!(environment.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS"), Some(&"5".into()));
-    assert!(environment.contains_key("PATH"), "the configured CLI remains launchable");
-
-    #[cfg(not(windows))]
-    for key in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] {
-        assert_eq!(environment.get(key), Some(&private_home), "{key} must be private");
-    }
-    #[cfg(windows)]
-    for key in ["USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"] {
-        assert_eq!(environment.get(key), Some(&private_home), "{key} must be private");
-    }
-}
-
-#[test]
 fn inspection_binary_path_is_resolved_before_switching_to_private_home() {
     let caller_dir = std::env::current_dir().expect("current directory");
     assert_eq!(
