@@ -75,10 +75,10 @@ fn lane_names_and_commands_are_literal() {
 }
 
 #[tokio::test]
-async fn steer_rejects_followup_unknown_unowned_and_terminal_without_consuming_request_id() {
+async fn steer_rejects_followup_unknown_and_unowned() {
     let steering = SteeringRegistry::default();
     let reg = registry(steering.clone());
-    let tx = add(&reg, "t1", "p1", None);
+    let _tx = add(&reg, "t1", "p1", None);
 
     let (calls, fb) = counting();
     assert_eq!(
@@ -177,7 +177,7 @@ async fn terminal_child_uses_fallback_with_metadata_and_does_not_drain_stale_han
 }
 
 #[tokio::test]
-async fn terminal_transition_after_snapshot_is_rejected_by_live_handle_check() {
+async fn terminal_transition_after_snapshot_selects_fallback() {
     let steering = SteeringRegistry::default();
     let reg = registry(steering);
     let tx = add(&reg, "t1", "p1", None);
@@ -190,7 +190,7 @@ async fn terminal_transition_after_snapshot_is_rejected_by_live_handle_check() {
 
     assert!(matches!(
         live_handle_or_fallback(&reg, &task_id, SteerAccess::Owner("p1")),
-        Err(SteerError::Unknown)
+        Ok(None)
     ));
 }
 
