@@ -5,8 +5,9 @@
 //! persistence action. Hosts still resolve policy, agent definitions,
 //! prompts, tool allowlists, and persistence implementations.
 //!
-//! Dependency direction remains `orchestration -> {harness, runtime}`. Lower
-//! TinyAgents layers must not depend on this module.
+//! Dependency direction remains `orchestration -> {harness, session, tasks}`.
+//! Graph compatibility code may depend on this crate, while orchestration does
+//! not depend on graph.
 
 mod admission;
 mod awaiting_user;

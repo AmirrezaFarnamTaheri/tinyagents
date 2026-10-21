@@ -133,11 +133,10 @@ pub type OutputMapper<Update> = Arc<dyn Fn(SubAgentOutput) -> Update + Send + Sy
 /// [`SubAgentPolicy`]. Lower it into a graph node handler with
 /// [`subagent_node`](super::subagent_node).
 ///
-/// Deprecated: `tinyagents-graph` cannot depend on `tinyagents-orchestration`
-/// (the dependency runs the other way), so this node cannot be an adapter over
-/// `SubagentDriver`. Run agent steps through `SubagentDriver` instead; it owns
-/// spawn admission, result policy, role and the typed outcome. The type keeps
-/// its behaviour unchanged.
+/// Deprecated compatibility node. Run new agent steps through
+/// `SubagentDriver` instead; it owns spawn admission, result policy, role, and
+/// the typed outcome. This graph-owned node keeps its behavior unchanged until
+/// its removal in the follow-up migration.
 #[deprecated(note = "use tinyagents_orchestration SubagentDriver")]
 pub struct SubAgentNode<State, Update> {
     /// The registered agent name to resolve and delegate to.
