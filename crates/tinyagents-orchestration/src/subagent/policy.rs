@@ -119,34 +119,42 @@ impl SubAgentBudget {
         if let Some(max) = self.max_model_calls
             && output.model_calls > max
         {
-            return Err(tinyagents_harness::error::TinyAgentsError::LimitExceeded(format!(
-                "sub-agent `{agent}` exceeded model-call budget: {} > {max}",
-                output.model_calls
-            )));
+            return Err(tinyagents_harness::error::TinyAgentsError::LimitExceeded(
+                format!(
+                    "sub-agent `{agent}` exceeded model-call budget: {} > {max}",
+                    output.model_calls
+                ),
+            ));
         }
         if let Some(max) = self.max_tool_calls
             && output.tool_calls > max
         {
-            return Err(tinyagents_harness::error::TinyAgentsError::LimitExceeded(format!(
-                "sub-agent `{agent}` exceeded tool-call budget: {} > {max}",
-                output.tool_calls
-            )));
+            return Err(tinyagents_harness::error::TinyAgentsError::LimitExceeded(
+                format!(
+                    "sub-agent `{agent}` exceeded tool-call budget: {} > {max}",
+                    output.tool_calls
+                ),
+            ));
         }
         if let Some(max) = self.max_input_tokens
             && output.usage.usage.input_tokens > max
         {
-            return Err(tinyagents_harness::error::TinyAgentsError::LimitExceeded(format!(
-                "sub-agent `{agent}` exceeded input-token budget: {} > {max}",
-                output.usage.usage.input_tokens
-            )));
+            return Err(tinyagents_harness::error::TinyAgentsError::LimitExceeded(
+                format!(
+                    "sub-agent `{agent}` exceeded input-token budget: {} > {max}",
+                    output.usage.usage.input_tokens
+                ),
+            ));
         }
         if let Some(max) = self.max_output_tokens
             && output.usage.usage.output_tokens > max
         {
-            return Err(tinyagents_harness::error::TinyAgentsError::LimitExceeded(format!(
-                "sub-agent `{agent}` exceeded output-token budget: {} > {max}",
-                output.usage.usage.output_tokens
-            )));
+            return Err(tinyagents_harness::error::TinyAgentsError::LimitExceeded(
+                format!(
+                    "sub-agent `{agent}` exceeded output-token budget: {} > {max}",
+                    output.usage.usage.output_tokens
+                ),
+            ));
         }
         Ok(())
     }

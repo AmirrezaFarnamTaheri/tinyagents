@@ -15,7 +15,11 @@ struct RegistryFixtureMetadata {
 }
 
 trait RegistryTestHelpers {
-    fn create_fixture_job(&self, agent: &str, owner: impl ToString) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle);
+    fn create_fixture_job(
+        &self,
+        agent: &str,
+        owner: impl ToString,
+    ) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle);
     fn register_fixture_job(
         &self,
         agent: &str,
@@ -28,7 +32,11 @@ trait RegistryTestHelpers {
 }
 
 impl RegistryTestHelpers for SubAgentJobRegistry {
-    fn create_fixture_job(&self, agent: &str, owner: impl ToString) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle) {
+    fn create_fixture_job(
+        &self,
+        agent: &str,
+        owner: impl ToString,
+    ) -> (SubAgentJobId, tinyagents_harness::steering::SteeringHandle) {
         self.register_fixture_job(
             agent,
             owner,
@@ -52,16 +60,18 @@ impl RegistryTestHelpers for SubAgentJobRegistry {
             thread_id: link.parent_thread_id,
             task_id: task,
         };
-        let (id, steering, _, _, created) = self.register_driver_job(DriverJobRegistration {
-            key,
-            agent: agent.to_owned(),
-            owner: owner.to_string(),
-            workspace: link.workspace,
-            cancellation,
-            steering: None,
-            run_queue: None,
-            continuing: false,
-        }).expect("driver fixture registration");
+        let (id, steering, _, _, created) = self
+            .register_driver_job(DriverJobRegistration {
+                key,
+                agent: agent.to_owned(),
+                owner: owner.to_string(),
+                workspace: link.workspace,
+                cancellation,
+                steering: None,
+                run_queue: None,
+                continuing: false,
+            })
+            .expect("driver fixture registration");
         assert!(created);
         (id, steering)
     }
@@ -81,8 +91,10 @@ impl RegistryTestHelpers for SubAgentJobRegistry {
 
     fn finish_budget_overrun(&self, id: &SubAgentJobId) {
         let mut outcome = SubagentOutcome::completed(id.as_str(), "late");
-        outcome.status = SubagentOutcomeKind::Incomplete(crate::subagent::SubagentIncomplete::new("over budget")
-            .with_kind(crate::subagent::IncompleteKind::BudgetExceeded));
+        outcome.status = SubagentOutcomeKind::Incomplete(
+            crate::subagent::SubagentIncomplete::new("over budget")
+                .with_kind(crate::subagent::IncompleteKind::BudgetExceeded),
+        );
         self.mark_driver_result(id, Ok(outcome));
     }
 }

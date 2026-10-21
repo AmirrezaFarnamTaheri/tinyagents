@@ -17,4 +17,3 @@ pub use types::*;
 #[cfg(test)]
 #[path = "mod_registry_tests.rs"]
 mod registry_tests;
-

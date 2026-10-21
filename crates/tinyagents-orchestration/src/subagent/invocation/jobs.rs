@@ -14,7 +14,6 @@ use tinyagents_tasks::DetachedTaskRegistryError;
 use tinyinference_llm::message::Message;
 use tokio::sync::watch;
 
-
 use super::types::{DriverJobRegistration, JobControl, JobMeta, ParentJobScope};
 use super::{SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus};
 

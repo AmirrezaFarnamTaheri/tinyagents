@@ -161,14 +161,11 @@ impl SubagentPlanner<(), ()> for TimeoutPlanner {
         &self,
         request: SubagentRequest<(), ()>,
     ) -> Result<PreparedSubagent<()>, SubagentError> {
-        Planner
-            .prepare(request)
-            .await
-            .map(|prepared| {
-                prepared.with_policy(SubAgentPolicy::default().with_timeout(
-                    std::time::Duration::from_millis(10),
-                ))
-            })
+        Planner.prepare(request).await.map(|prepared| {
+            prepared.with_policy(
+                SubAgentPolicy::default().with_timeout(std::time::Duration::from_millis(10)),
+            )
+        })
     }
 }
 
@@ -1149,7 +1146,10 @@ async fn detached_driver_timeout_is_recorded_as_incomplete_job_status() {
     started.notified().await;
     tokio::time::advance(std::time::Duration::from_millis(11)).await;
     let job = jobs
-        .wait_owned(value["task_id"].as_str().unwrap(), parent.instance_id().to_string())
+        .wait_owned(
+            value["task_id"].as_str().unwrap(),
+            parent.instance_id().to_string(),
+        )
         .await
         .unwrap();
     assert_eq!(job.status, SubAgentJobStatus::Incomplete);
@@ -1196,7 +1196,10 @@ async fn background_request_without_delivery_target_spawns_and_can_be_waited_sep
     let value: Value = serde_json::from_str(&result.output()).unwrap();
     assert_eq!(value["status"], "running");
     let job = jobs
-        .wait_owned(value["task_id"].as_str().unwrap(), &parent.instance_id().to_string())
+        .wait_owned(
+            value["task_id"].as_str().unwrap(),
+            &parent.instance_id().to_string(),
+        )
         .await
         .unwrap();
     assert_eq!(job.status, SubAgentJobStatus::Completed);
@@ -2394,7 +2397,11 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
     let key = SubagentTaskKey::from_context(&parent, "cancel-task", None);
     let request_key = key.clone();
     let owner_scope: Arc<dyn Fn(u64) -> String + Send + Sync> = Arc::new(|_| "parent-a".into());
-    let tool = DriverSubAgentTool::new("spawn_subagent", "worker description", driver, move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+    let tool = DriverSubAgentTool::new(
+        "spawn_subagent",
+        "worker description",
+        driver,
+        move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("child-run"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
@@ -2407,11 +2414,16 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
                 None,
             )
             .map(|request| request.with_target("worker"))
-        }, |_| Some("thread-a".into())).with_parameters(json!({
+        },
+        |_| Some("thread-a".into()),
+    )
+    .with_parameters(json!({
         "type":"object",
         "required":["agent_id","prompt"],
         "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"}}
-    })).with_job_registry(jobs.clone()).with_owner_scope(owner_scope);
+    }))
+    .with_job_registry(jobs.clone())
+    .with_owner_scope(owner_scope);
     let spawned = ToolDispatch::<(), ()>::execute(
         &tool,
         &(),
@@ -2680,7 +2692,10 @@ async fn concurrent_async_driver_aliases_coalesce_without_waiting_for_completion
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     release.add_permits(1);
     let settled = jobs
-        .wait_owned(leader_value["task_id"].as_str().unwrap(), &parent.instance_id().to_string())
+        .wait_owned(
+            leader_value["task_id"].as_str().unwrap(),
+            &parent.instance_id().to_string(),
+        )
         .await
         .unwrap();
     assert_eq!(settled.status, SubAgentJobStatus::Completed);
@@ -2761,7 +2776,9 @@ async fn immediate_async_replay_returns_job_snapshot_and_emits_one_completion() 
         json!({"prompt":"same request"}),
         tinytools::ToolCallOptions::default(),
         &parent,
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
     let replay_value: Value = serde_json::from_str(&replay.output()).unwrap();
     assert_eq!(replay_value["status"], "running");
     assert_eq!(replay_value["task_id"], task_id);
@@ -2793,13 +2810,19 @@ async fn dropping_caller_does_not_cancel_async_job_but_owner_can_cancel_it() {
         json!({"prompt":"async"}),
         tinytools::ToolCallOptions::default(),
         &parent,
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
     let value: Value = serde_json::from_str(&result.output()).unwrap();
     started.notified().await;
     let job_id = value["task_id"].as_str().unwrap();
     assert_eq!(jobs.get(job_id).unwrap().status, SubAgentJobStatus::Running);
-    jobs.cancel_owned(job_id, parent.instance_id().to_string()).unwrap();
-    let job = jobs.wait_owned(job_id, parent.instance_id().to_string()).await.unwrap();
+    jobs.cancel_owned(job_id, parent.instance_id().to_string())
+        .unwrap();
+    let job = jobs
+        .wait_owned(job_id, parent.instance_id().to_string())
+        .await
+        .unwrap();
     assert_eq!(job.status, SubAgentJobStatus::Cancelled);
 }
 

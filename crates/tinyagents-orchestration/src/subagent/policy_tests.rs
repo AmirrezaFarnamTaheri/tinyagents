@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tinyagents_harness::retry::RetryPolicy;
 use super::*;
+use tinyagents_harness::retry::RetryPolicy;
 
 fn transient() -> TinyAgentsError {
     TinyAgentsError::Tool("flaky".into())

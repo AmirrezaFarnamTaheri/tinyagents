@@ -277,13 +277,20 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             let status = match job.status {
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Queued => "queued",
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Running => "running",
-                tinyagents_orchestration::subagent::SubAgentJobStatus::AwaitingInput => "awaiting_input",
+                tinyagents_orchestration::subagent::SubAgentJobStatus::AwaitingInput => {
+                    "awaiting_input"
+                }
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Completed => "completed",
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Failed => "failed",
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Incomplete => "incomplete",
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Cancelled => "cancelled",
             };
-            return Ok(status_tool_result(public_task_id, status, job.output, job.error));
+            return Ok(status_tool_result(
+                public_task_id,
+                status,
+                job.output,
+                job.error,
+            ));
         }
 
         let cancellation = request.run_context().cancellation.clone();
