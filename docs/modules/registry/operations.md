@@ -107,11 +107,10 @@ Examples:
 - tool-call timeline transformer
 - subagent tree transformer
 - model-token text transformer
-- graph-state diff transformer
 - cost/usage accumulator
 
 Transformers should be registry extensions. They should not be hardcoded into
-every tool, graph, or model implementation.
+tool or model implementations.
 
 ## Redaction And Safety
 

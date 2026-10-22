@@ -78,10 +78,9 @@ were all merged into `runtime-comparison`.
 - **Lease renewal loop**: exists at the orchestration layer only.
   `WorkflowEngine` has a real heartbeat that renews a short lease while a
   child run is in flight (`crates/tinyagents-orchestration/src/workflow/
-  tests.rs::heartbeat_renews_a_short_lease_while_a_child_is_running`), but
-  the compiled-graph executor's per-thread lease (`ThreadLockMap` +
-  `Checkpointer::try_claim`) is claim-once with a fixed TTL and release-at-
-  end — no periodic renewal during a long-running graph execution.
+  tests.rs::heartbeat_renews_a_short_lease_while_a_child_is_running`). The
+  comparison with a compiled-graph executor described the pre-#61 runtime and
+  is no longer applicable.
 - **`ToolProgress` still unwired**: `docs/sdk-gaps/streaming.md` states
   verbatim that "`run_on_tool_delta`/`ToolProgress` still have no real
   caller; that needs a tinytools progress seam" — confirmed by grep: no

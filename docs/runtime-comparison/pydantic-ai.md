@@ -272,8 +272,8 @@ sanitisation belong to the host (§5).
 
 - **Typed deps.** Both inject a typed context; Pydantic passes `RunContext[Deps]`
   into tools, instructions, validators, `prepare`, and toolset factories with
-  one signature. TinyAgents splits `&State` (graph state) from `Ctx`
-  (runtime deps), which is the right split for a workflow runtime but means
+  one signature. TinyAgents separates application `State` from `Ctx`
+  (runtime deps), which is useful for nested calls but means
   tools receive `ToolRunContext` (tinytools) rather than the harness
   `RunContext`; the injected-argument mechanism (`tool/injected.rs`) is a
   workaround Pydantic does not need. Worse in Pydantic: no separate durable
