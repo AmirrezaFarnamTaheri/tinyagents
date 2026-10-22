@@ -315,6 +315,7 @@ async fn custom_queue_item_shares_runner_queue_and_preserves_complete_request() 
 
     let mut primary = request(QueueDisposition::Interrupt, false);
     primary.request_id = "primary".into();
+    primary.scope.profile_id = Some("profile-x".into());
     let scope = primary.scope.clone();
     let primary_run = {
         let runner = runner.clone();
@@ -323,8 +324,8 @@ async fn custom_queue_item_shares_runner_queue_and_preserves_complete_request() 
     started.notified().await;
 
     let mut runner_queued = request(QueueDisposition::Followup, false);
-    runner_queued.scope.profile_id = Some("profile-x".into());
-    runner_queued.thread_id = "thread-from-runner".into();
+    runner_queued.scope = scope.clone();
+    runner_queued.thread_id = "thread-a".into();
     runner_queued.request_id = "runner-queued-id".into();
     runner_queued.text = "runner text".into();
     runner_queued.payload = serde_json::json!({"client":"runner","attachment":[1,2]});
@@ -361,6 +362,7 @@ async fn custom_queue_item_shares_runner_queue_and_preserves_complete_request() 
     );
 
     let mut host_queued = request(QueueDisposition::Steer, false);
+    host_queued.scope = scope.clone();
     host_queued.request_id = "host-queued-id".into();
     host_queued.text = "host text".into();
     host_queued.payload = serde_json::json!({"client":"host","locale":"en"});
