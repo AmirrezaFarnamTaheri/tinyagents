@@ -134,6 +134,30 @@ async fn reservations_coordinate_for_same_handle_but_not_different_scopes() {
 }
 
 #[tokio::test]
+async fn reservations_coordinate_across_handles_for_the_same_scope() {
+    let backend = MemoryBackend::new();
+    let scope = Scope::new("claude-code-shared-scope").unwrap();
+    let storage_a = backend.for_scope(&scope).unwrap();
+    let storage_b = backend.for_scope(&scope).unwrap();
+    assert!(!Arc::ptr_eq(storage_a.documents(), storage_b.documents()));
+    let a = Arc::new(SessionStore::new(storage_a.documents()).unwrap());
+    let b = Arc::new(SessionStore::new(storage_b.documents()).unwrap());
+    let fingerprints = ["same-fingerprint".to_owned()];
+
+    let (first_already, first_claim) = a
+        .claim_delivered("thread", &fingerprints)
+        .await
+        .unwrap();
+    assert!(first_already.is_empty());
+    let (second_already, _) = b
+        .claim_delivered("thread", &fingerprints)
+        .await
+        .unwrap();
+    assert!(second_already.contains(&fingerprints[0]));
+    drop(first_claim);
+}
+
+#[tokio::test]
 async fn failed_session_removal_keeps_the_mapping_and_delivered_turns() {
     let storage = MemoryBackend::new()
         .for_scope(&Scope::new("claude-code-remove-failure").unwrap())
