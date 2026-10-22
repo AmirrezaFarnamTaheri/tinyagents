@@ -77,7 +77,6 @@ pub mod runtime;
 pub mod steering;
 pub mod storage;
 pub mod store;
-pub mod stream;
 pub mod structured;
 pub mod summarization;
 pub mod terminal;
