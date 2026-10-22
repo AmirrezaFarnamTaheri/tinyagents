@@ -141,6 +141,56 @@ async fn session_history_import_preserves_explicit_ids_times_and_is_idempotent()
     );
 }
 
+#[tokio::test]
+async fn collided_native_session_does_not_receive_legacy_child_rows() {
+    let backend = MemoryStorage::new();
+    let ledger = ledger_on(&backend, "history-import-collision");
+    let native = ledger
+        .record_session_start(start("shared-id", "native-agent", "Native"))
+        .await
+        .unwrap();
+    let mut legacy = native.clone();
+    legacy.agent_definition_id = "legacy-agent".into();
+    legacy.agent_definition_name = "Legacy".into();
+    let imported_at = Utc::now();
+    let report = ledger
+        .import_session_history(SessionHistoryImport {
+            sessions: vec![legacy],
+            messages: vec![SessionMessage {
+                id: 73,
+                session_id: "shared-id".into(),
+                role: "assistant".into(),
+                content: "legacy child".into(),
+                reasoning_content: None,
+                model: None,
+                input_tokens: None,
+                output_tokens: None,
+                cost_usd: None,
+                created_at: imported_at,
+            }],
+            tool_calls: vec![SessionToolCall {
+                id: 74,
+                session_id: "shared-id".into(),
+                message_id: Some(73),
+                tool_name: "legacy tool".into(),
+                tool_input: None,
+                tool_output: None,
+                status: "completed".into(),
+                duration_ms: None,
+                created_at: imported_at,
+            }],
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(report.sessions.already_present, 1);
+    assert_eq!(report.messages.imported, 0);
+    assert_eq!(report.tool_calls.imported, 0);
+    assert_eq!(ledger.get_session("shared-id").await.unwrap(), Some(native));
+    assert!(ledger.list_messages("shared-id", None).await.unwrap().is_empty());
+    assert!(ledger.list_tool_calls("shared-id", None).await.unwrap().is_empty());
+}
+
 async fn say(ledger: &DriverRunLedger, session: &str, content: &str) -> i64 {
     ledger
         .record_message(NewSessionMessage {
