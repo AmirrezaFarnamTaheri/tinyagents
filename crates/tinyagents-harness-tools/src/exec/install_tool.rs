@@ -154,17 +154,14 @@ async fn execute_install(
             "Invalid package name '{package}': only letters, digits and ._+-@/: are allowed"
         )));
     }
-    let (manager, program, prefix) =
-        match resolve_manager(args.get("manager").and_then(Value::as_str), on_path) {
-            Ok(resolved) => resolved,
-            Err(error) => return Ok(ToolResult::error(error)),
-        };
-    let operation = ExecOperation::Install {
+    let requested_manager = args.get("manager").and_then(Value::as_str);
+    let authorization_operation = ExecOperation::Install {
         package: package.to_owned(),
-        manager: manager.clone(),
+        // Keep automatic selection opaque until the gate authorizes the install.
+        manager: requested_manager.unwrap_or("auto").to_owned(),
     };
     let authorization = ExecAuthorizationRequest {
-        operation: operation.clone(),
+        operation: authorization_operation.clone(),
         timeout: Some(INSTALL_TIMEOUT),
     };
     let started = Instant::now();
@@ -173,7 +170,7 @@ async fn execute_install(
         Ok(permit) => permit,
         Err(denied) => {
             tool.gate.record(ExecAuditEvent {
-                operation,
+                operation: authorization_operation,
                 approval_required,
                 authorized: false,
                 allowed: false,
@@ -184,6 +181,14 @@ async fn execute_install(
             });
             return Ok(ToolResult::error(denied.0));
         }
+    };
+    let (manager, program, prefix) = match resolve_manager(requested_manager, on_path) {
+        Ok(resolved) => resolved,
+        Err(error) => return Ok(ToolResult::error(error)),
+    };
+    let operation = ExecOperation::Install {
+        package: package.to_owned(),
+        manager: manager.clone(),
     };
     let backend_selection = permit.backend_selection.clone();
     let mut argv = prefix.iter().map(OsString::from).collect::<Vec<_>>();
