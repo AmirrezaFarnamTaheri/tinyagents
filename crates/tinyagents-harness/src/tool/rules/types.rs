@@ -107,10 +107,18 @@ impl ToolGate {
         }
     }
 
-    /// Adds exact exclusions without freezing a dynamic wildcard catalogue.
+    /// Adds definition exclusions without freezing a dynamic wildcard
+    /// catalogue. Each is a [`tinytools::glob_matches`] pattern, as a Named
+    /// scope's are; a plain name matches itself.
     pub(crate) fn with_denied_names(mut self, names: impl IntoIterator<Item = String>) -> Self {
         self.denied.extend(names);
         self
+    }
+
+    fn is_denied(&self, name: &str) -> bool {
+        self.denied
+            .iter()
+            .any(|pattern| tinytools::glob_matches(pattern, name))
     }
 
     /// Defers these names for this invocation without widening hidden registrations.
@@ -129,7 +137,7 @@ impl ToolGate {
 
     /// Whether the exact allowlist admits `name`. Rules are not consulted.
     pub(crate) fn allows_name(&self, name: &str) -> bool {
-        !self.denied.contains(name)
+        !self.is_denied(name)
             && self
                 .allowed
                 .as_ref()
@@ -178,7 +186,7 @@ impl ToolGate {
     /// (which names registered tools) does not apply; the rules do, so a
     /// host can withhold discovery itself.
     pub(crate) fn admits_intrinsic(&self, name: &str, surface: Surface) -> CallGate {
-        if self.denied.contains(name) {
+        if self.is_denied(name) {
             return CallGate::Refuse(format!("tool '{name}' is denied by the definition"));
         }
         let Some(rules) = &self.rules else {

@@ -10,7 +10,7 @@ credentials, authorization, and runtime installation remain with the host.
 `ModelSpec` represents inherit, exact model, or routing hint. `pin()` returns
 only a concrete exact model; `hint()` returns a separate routing hint.
 `ToolScope::Named([])` explicitly denies all tools. Extra and deferred names
-join the declared scope before exact exclusions; deferred tools enter discovery
+join the declared scope before glob exclusions; deferred tools enter discovery
 instead of the initial wire catalogue. A hosted explicit wildcard policy
 covers live toolsets as well as static registrations. Bare wildcard fallback
 still belongs to the host. Hidden registrations cannot be promoted by deferral.
