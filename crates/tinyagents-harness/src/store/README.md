@@ -22,9 +22,8 @@ separate from graph checkpointing (which belongs to `tinyagents-graph`'s
 The original get/put/delete/list trait over a flat `&str` namespace.
 
 - [`InMemoryStore`] — thread-safe, non-durable, for tests and prototyping.
-- [`FileStore`] — one file per key under `<root>/<namespace>/<key>.json`, with
-  name sanitization (path-traversal guard) and atomic writes (write-to-temp +
-  rename).
+- [`DriverStore`] — durable store over a driver `DocumentStore`; the host's
+  backend holds the data. The file-per-key `FileStore` was removed.
 - [`StoreRegistry`] — a named bag of `Arc<dyn Store>` backends, always
   carrying a built-in default in-memory store, injected into `RunContext`.
 
@@ -36,13 +35,10 @@ Where `Store` answers "what is the current value?", an `AppendStore` answers
 - [`InMemoryAppendStore`] — thread-safe, non-durable, with an optional
   per-stream retention cap (`with_max_entries_per_stream`); offsets stay
   monotonic across eviction.
-- [`JsonlAppendStore`] — one `<stream>.jsonl` file per stream, one JSON line
-  per entry. Derives the next offset from the tail of the file (not a
-  remembered counter), so it stays correct across multiple instances/process
-  restarts addressing the same directory, and tolerates a write torn
-  mid-character or mid-line.
-- [`StoreRecord`] — a decoded entry (`offset`, `value`, `created_at_ms`)
-  returned by `JsonlAppendStore` internals and available as a convenience type.
+- [`DriverAppendStore`] — durable streams over a driver `StreamStore`. Offsets
+  are allocated by the backend, so several instances over one database keep
+  handing out fresh offsets. The JSONL file store was removed.
+- [`StoreRecord`] — a decoded entry (`offset`, `value`, `created_at_ms`).
 
 ### Hierarchical store: [`namespaced`]
 
@@ -55,23 +51,55 @@ The richer, TTL-aware, batch-oriented sibling trait — see its own README.
 | `mod.rs` | Implementations of `Store` and `AppendStore` for every backend, plus `StoreRegistry`. |
 | `types.rs` | The `Store`/`AppendStore` traits and every backend struct/field. |
 | `namespaced/` | `NamespacedStore` — hierarchical namespaces, TTL, filtering, pagination, batching. See `namespaced/README.md`. |
-| `test.rs` | Coverage for every backend: round-tripping, namespace isolation, sanitization, atomicity, offset monotonicity/tailing, retention eviction, and JSONL crash-recovery edge cases. |
+| `mod_tests.rs` | Coverage for every backend: round-tripping, namespace isolation, sanitization, atomicity, offset monotonicity/tailing, retention eviction, and driver round-trips. |
 
 ## Operational constraints
 
-- `FileStore` and `JsonlAppendStore` validate namespace/key/stream names
-  (ASCII alphanumerics, `-`, `_`, `.` only; no all-dot names) to block path
-  traversal — untrusted names must go through these backends, never be
-  interpolated into a path directly.
-- `FileStore::put` writes to a uniquely named temp file in the same directory
-  and renames over the destination, so a reader never observes a partial write
-  and a crash mid-write leaves the previous value intact.
-- `JsonlAppendStore::append` runs its blocking I/O via `spawn_blocking` when a
-  tokio runtime is present (inline otherwise), and holds a per-instance guard
-  across the tail-read-then-write so concurrent appends through *one*
-  instance get distinct offsets. Across separate processes writing the same
-  directory, duplicate offsets are unlikely but not impossible — a real
-  server backend is the right answer for genuinely concurrent multi-process
-  writers.
+- The driver stores take any name: ids are hashed or length-prefixed by the
+  driver layer, so a hostile namespace, key or stream name cannot reach a path.
+- Backends that lack native TTL are served by the read-side expiry check; see
+  `namespaced/README.md`.
 - None of the in-memory backends are durable: data is lost when the value is
   dropped.
+
+## Storage-driver backends (`storage-drivers` feature)
+
+`DriverStore` and `DriverAppendStore` adapt the harness `Store` and
+`AppendStore` traits onto [tinystoragedrivers](https://github.com/tinyhumansai/tinystoragedrivers)
+ports. A host opens one storage backend (SQLite on desktop, MongoDB in the cloud,
+memory in tests), takes a scoped `DocumentStore` / `StreamStore` for the tenant,
+and wraps it:
+
+```rust,ignore
+let scoped = backend.for_scope(&Scope::new(agent_id)?)?;
+let kv = DriverStore::new(scoped.documents().clone());
+let journal = DriverAppendStore::journal(scoped.streams().clone()); // harness.journal/<run id>
+```
+
+- `DriverStore` is a view of the shared `tsd.kv` primitive: each namespace is a
+  `Kv` namespace of the store's owner (`harness` by default, `with_owner` for
+  another). Entries are `{owner, ns, key, value}` documents under
+  `Key::of([owner, ns, key])`, so namespaces and keys may hold any characters,
+  and `list` is an indexed query. The `namespaced:` and `cache:` namespaces of
+  the `harness` owner are reserved for `DriverNamespacedStore` and
+  `DriverResponseCache`. A v1 `harness_store` moves over with
+  `storage::import_legacy_kv`.
+- `DriverAppendStore` maps each stream to the driver stream `<prefix><stream>`
+  (no prefix by default; `journal` uses `harness.journal/`, the run journal's
+  stream family). Pick prefixes that end in a separator so two stores never
+  address one stream. Driver offsets are already dense and zero-based, matching
+  the `AppendStore` contract. `AppendStore::seal` closes a finished stream;
+  reads, offsets and `len` are unchanged, later appends are refused, and the
+  driver stores the entries compactly.
+- Driver `InvalidInput` errors surface as `TinyAgentsError::Validation`. Every
+  other driver error surfaces as `TinyAgentsError::Storage`.
+
+## Prepared document schemas
+
+With `storage-drivers`, `SchemaAdmission::Declare` keeps native collection
+creation as the default. `DriverStore::with_owner_and_schema_admission`
+can instead select `ValidateOnly` at construction. Both policies use the exact
+`DriverStore::collection_spec`; validation calls the native persisted-schema
+validator and never falls back to declaration or repair. Missing, incompatible,
+unsupported or retired native handles refuse the operation. This policy does
+not grant tenant or lease authority, which remains the host's responsibility.

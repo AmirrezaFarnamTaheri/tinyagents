@@ -43,19 +43,40 @@ scrub) lives in `tinytools-agent`, reached through
   the portable methods still cover only workspace/thread/output cap. A tool
   that needs a real child `RunContext` goes through the explicit dispatch
   seam instead (B1; see `docs/modules/harness/tool-context.md`).
+  `progress` is the per-call `tinytools::ProgressSink` behind
+  `ToolRunContext::report_progress`; it is `None` for a context built outside
+  a loop, where reporting is a no-op.
 
-### Injected arguments (`injected.rs`)
+### Nested calls (`nested.rs`)
 
-- `strip_injected_arguments` — removes host-only keys from model-supplied
-  arguments before validation, logging any that were actually present (a
-  forgery attempt).
-- `project_injected_arguments` — removes injected keys from a schema's
-  `properties` **and** `required` so a model is never told to supply an
-  argument it cannot see.
+- `NestedToolRunner` — the type-erased seam behind
+  `ToolExecutionContext::call_tool`; `nested` is `None` outside the agent loop,
+  where `call_tool` returns a clear error. The loop installs the runner in a
+  task-local scoped to the executing call (`agent_loop/nested.rs`); see
+  `docs/modules/harness/nested-tool-calls.md`.
 
-The security-critical ordering (strip → validate → inject → invoke) is
-documented on the module and enforced by the agent loop's tool-execution
-path, not by this module itself.
+### Progress (`progress/mod.rs`)
+
+- `ToolProgressGate` (crate-private) — the per-call destination for a tool's
+  `report_progress` updates. Emits `AgentEvent::ToolProgressDetail` live, queues a
+  `ToolDelta` per event for the loop to replay to `on_tool_delta`, closes when
+  the call settles so late updates are dropped, and coalesces floods. The loop
+  scopes it in a task-local around the dispatch future and
+  `ToolExecutionContext::from_run_context` picks it up for the matching call
+  id, so `ToolDispatch` implementors need no change.
+- `ToolProgressLimits` (crate-private) — events admitted per window before
+  coalescing (fixed at 32 per second). The gate closes on settle **or when the
+  scoped future is dropped**; the replay queue is bounded (64 deltas, 4 KiB
+  content each) and skipped when the run has no middleware. A `ToolDispatch`
+  must build its `ToolExecutionContext` inside `execute`'s future.
+
+### Injected arguments
+
+Strip, projection and host-value injection live in `tinytools`
+(`prepare_tool_arguments`, `project_injected_arguments`); the registry applies
+the projection to the schemas it sends to the model. The security-critical
+ordering (strip → validate → inject → invoke) is enforced by the agent loop's
+tool-execution path.
 
 ### Schema cleaning (`schema.rs`)
 
@@ -115,19 +136,20 @@ the model. Re-exported here as `pub mod select` and via `pub use select::*`.
 | File | Role |
 | --- | --- |
 | `mod.rs` | `ToolRegistry`, `ToolDispatch`, `provider_schema`; wires the submodules together. |
-| `types.rs` | `ToolExecutionContext` (tests in `context_test.rs`). |
-| `injected.rs` | Injected (host-only) argument stripping and schema projection. |
+| `types.rs` | `ToolExecutionContext` (tests in `context_tests.rs`). |
 | `schema.rs` | `SchemaCleanr`, `CleaningStrategy`; low-level JSON Schema cleaning. |
 | `schema_prepare.rs` | Provider projection seam built on `schema.rs`; strict-mode sanitizer. |
+| `schema_walk.rs` | Vendor-neutral schema/value walkers: primary array path, response fields, missing and unsupported argument names. |
+| `shared/` | `CanonicalSharedToolAdapter` (a `tinytools::Tool` over shared, non-cloneable registries) and `EarlyExitHook` (pause the run when a designated tool succeeds). |
 | `timeout.rs` | `ToolTimeoutSettings`, `ResolvedToolTimeout`. |
 | `select/` | Prompt-driven tool ranking (own submodule; see its README/module doc). |
-| `*_test.rs`, `test.rs` | Unit tests colocated by concern, listed via `#[path = "..."]` or `mod ..._test;`. |
+| `*_tests.rs` | Unit tests colocated by concern, wired in with `#[path = "..."]`. |
 
 ## Operational constraints
 
 - **Injected-argument ordering is security-critical.** Strip must run before
   validation, which must run before injection, which must run before
-  invocation — see `injected.rs`'s module doc for why the order cannot be
+  invocation — see `tinytools::prepare_tool_arguments` for why the order cannot be
   relaxed.
 - **Schema cleaning must run before strict-mode sanitization**
   (`prepare_parameters`), so `required` is computed from the resolved

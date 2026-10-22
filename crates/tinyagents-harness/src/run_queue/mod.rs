@@ -32,13 +32,28 @@
 //! `RunQueue<T>` itself stays generic: hosts may keep using it with any `T`
 //! for their own bookkeeping; only a `RunQueue<Message>` is loop-consumable.
 
+mod forwarder;
 mod types;
 
-use tokio::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
-pub use types::{QueueLane, QueueMode, QueueStatus, RunQueueHandle};
+pub use forwarder::{
+    COLLECT_PREFIX, ForwardEvent, ForwardEventSink, ForwarderCleanup,
+    MessageSteeringForwarderGuard, QueuedMessage, STEER_PREFIX, SteeringForwarderGuard,
+    forward_collects, forward_message_collects, forward_message_steers, forward_steers,
+};
+
+pub use types::{
+    QueueAdmission, QueueAdmissionError, QueueAdmissionPermit, QueueLane, QueueMode, QueueStatus,
+    RunQueueHandle,
+};
 
 /// Thread-safe FIFO queue split into steer, follow-up, and collect lanes.
+///
+/// The lock guards only in-memory vector operations and is never held across
+/// an `.await`, so every operation also has a synchronous form
+/// ([`Self::push_now`], [`Self::drain_now`]) usable from `Drop` or other
+/// non-async code without spawning a task.
 #[derive(Debug)]
 pub struct RunQueue<T> {
     inner: Mutex<RunQueueInner<T>>,
@@ -50,11 +65,51 @@ pub struct RunQueue<T> {
 struct RunQueueInner<T> {
     /// Immediate steering messages, consumed as soon as the loop reaches a
     /// safe iteration boundary.
-    steers: Vec<T>,
+    steers: Vec<Queued<T>>,
     /// Deferred follow-up work, consumed once the current run settles.
-    followups: Vec<T>,
+    followups: Vec<Queued<T>>,
     /// Collected context (e.g. observations) accumulated for later use.
-    collects: Vec<T>,
+    collects: Vec<Queued<T>>,
+}
+
+#[derive(Debug)]
+struct Queued<T> {
+    value: T,
+    admission: Option<std::sync::Arc<dyn QueueAdmission>>,
+}
+
+enum AdmissionDecision<T> {
+    Accepted(AdmittedQueueItem<T>),
+    Retry(Queued<T>),
+    Rejected,
+}
+
+impl<T> Queued<T> {
+    fn admitted(value: T) -> Self {
+        Self {
+            value,
+            admission: None,
+        }
+    }
+
+    fn guarded(value: T, admission: std::sync::Arc<dyn QueueAdmission>) -> Self {
+        Self {
+            value,
+            admission: Some(admission),
+        }
+    }
+
+    fn is_guarded(&self) -> bool {
+        self.admission.is_some()
+    }
+}
+
+/// One item transferred from a run queue with its lifecycle permit retained
+/// until the caller completes the queue-to-turn handoff.
+pub struct AdmittedQueueItem<T> {
+    /// The queued payload.
+    pub value: T,
+    _permit: Option<std::sync::Arc<dyn types::QueueAdmissionPermit>>,
 }
 
 impl<T> RunQueue<T> {
@@ -69,9 +124,176 @@ impl<T> RunQueue<T> {
         }
     }
 
+    /// Locks the lanes. A panic while the lock was held cannot leave a lane
+    /// half-updated (every operation is a single vector call), so a poisoned
+    /// lock is recovered rather than propagated.
+    fn lock(&self) -> MutexGuard<'_, RunQueueInner<T>> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Appends `item` to `lane`.
     pub async fn push(&self, lane: QueueLane, item: T) {
-        let mut inner = self.inner.lock().await;
+        self.push_now(lane, item);
+    }
+
+    /// Appends `item` to `lane` without awaiting: the synchronous form of
+    /// [`Self::push`], for `Drop` impls and other non-async callers.
+    pub fn push_now(&self, lane: QueueLane, item: T) {
+        self.push_entry_now(lane, Queued::admitted(item));
+    }
+
+    /// Appends `item` with a retained capability checked when the agent loop
+    /// consumes it. Rejected items are discarded without entering the model
+    /// transcript.
+    pub async fn push_guarded(
+        &self,
+        lane: QueueLane,
+        item: T,
+        admission: std::sync::Arc<dyn QueueAdmission>,
+    ) {
+        self.push_guarded_now(lane, item, admission);
+    }
+
+    /// Synchronous form of [`Self::push_guarded`].
+    pub fn push_guarded_now(
+        &self,
+        lane: QueueLane,
+        item: T,
+        admission: std::sync::Arc<dyn QueueAdmission>,
+    ) {
+        self.push_entry_now(lane, Queued::guarded(item, admission));
+    }
+
+    /// Takes items with their lifecycle permits. The permits are acquired
+    /// after releasing the queue mutex, so durable admission never blocks
+    /// queue producers while performing storage I/O.
+    pub async fn take_admitted(
+        &self,
+        lane: QueueLane,
+        mode: QueueMode,
+    ) -> Vec<AdmittedQueueItem<T>> {
+        if mode == QueueMode::OneAtATime {
+            let mut permits = std::collections::HashMap::new();
+            let count = {
+                let inner = self.lock();
+                match lane {
+                    QueueLane::Steer => inner.steers.len(),
+                    QueueLane::Followup => inner.followups.len(),
+                    QueueLane::Collect => inner.collects.len(),
+                }
+            };
+            let mut deferred = Vec::new();
+            for _ in 0..count {
+                let item = {
+                    let mut inner = self.lock();
+                    let items = match lane {
+                        QueueLane::Steer => &mut inner.steers,
+                        QueueLane::Followup => &mut inner.followups,
+                        QueueLane::Collect => &mut inner.collects,
+                    };
+                    if items.is_empty() {
+                        break;
+                    }
+                    items.remove(0)
+                };
+                match Self::admit_item(item, &mut permits) {
+                    AdmissionDecision::Accepted(item) => {
+                        self.requeue_front_now(lane, deferred);
+                        return vec![item];
+                    }
+                    AdmissionDecision::Retry(item) => deferred.push(item),
+                    AdmissionDecision::Rejected => {}
+                }
+            }
+            self.requeue_front_now(lane, deferred);
+            return Vec::new();
+        }
+        let queued = {
+            let mut inner = self.lock();
+            let items = match lane {
+                QueueLane::Steer => &mut inner.steers,
+                QueueLane::Followup => &mut inner.followups,
+                QueueLane::Collect => &mut inner.collects,
+            };
+            std::mem::take(items)
+        };
+        let mut permits = std::collections::HashMap::new();
+        let mut admitted = Vec::new();
+        let mut deferred = Vec::new();
+        for item in queued {
+            match Self::admit_item(item, &mut permits) {
+                AdmissionDecision::Accepted(item) => admitted.push(item),
+                AdmissionDecision::Retry(item) => deferred.push(item),
+                AdmissionDecision::Rejected => {}
+            }
+        }
+        self.requeue_front_now(lane, deferred);
+        admitted
+    }
+
+    fn admit_item(
+        item: Queued<T>,
+        permits: &mut std::collections::HashMap<
+            String,
+            std::sync::Arc<dyn types::QueueAdmissionPermit>,
+        >,
+    ) -> AdmissionDecision<T> {
+        let Queued { value, admission } = item;
+        let permit = match admission.as_ref() {
+            Some(capability) => {
+                let key = capability.batch_key();
+                if let Some(key) = key.as_ref() {
+                    match permits.get(key) {
+                        Some(permit) => Some(std::sync::Arc::clone(permit)),
+                        None => {
+                            let permit = match capability.acquire_for(Some(key)) {
+                                Ok(permit) => permit,
+                                Err(types::QueueAdmissionError::Retry) => {
+                                    return AdmissionDecision::Retry(Queued { value, admission });
+                                }
+                                Err(types::QueueAdmissionError::Rejected) => {
+                                    return AdmissionDecision::Rejected;
+                                }
+                            };
+                            permits.insert(key.clone(), std::sync::Arc::clone(&permit));
+                            Some(permit)
+                        }
+                    }
+                } else {
+                    match capability.acquire_for(None) {
+                        Ok(permit) => Some(permit),
+                        Err(types::QueueAdmissionError::Retry) => {
+                            return AdmissionDecision::Retry(Queued { value, admission });
+                        }
+                        Err(types::QueueAdmissionError::Rejected) => {
+                            return AdmissionDecision::Rejected;
+                        }
+                    }
+                }
+            }
+            None => None,
+        };
+        AdmissionDecision::Accepted(AdmittedQueueItem {
+            value,
+            _permit: permit,
+        })
+    }
+
+    fn requeue_front_now(&self, lane: QueueLane, items: Vec<Queued<T>>) {
+        if items.is_empty() {
+            return;
+        }
+        let mut inner = self.lock();
+        let target = match lane {
+            QueueLane::Steer => &mut inner.steers,
+            QueueLane::Followup => &mut inner.followups,
+            QueueLane::Collect => &mut inner.collects,
+        };
+        target.splice(0..0, items);
+    }
+
+    fn push_entry_now(&self, lane: QueueLane, item: Queued<T>) {
+        let mut inner = self.lock();
         match lane {
             QueueLane::Steer => inner.steers.push(item),
             QueueLane::Followup => inner.followups.push(item),
@@ -79,14 +301,73 @@ impl<T> RunQueue<T> {
         }
     }
 
+    /// Puts `items` back at the **front** of `lane`, in their given order, as
+    /// one atomic step. Used to return items that were drained but never
+    /// delivered, so they stay ahead of anything queued after them.
+    pub async fn requeue_front(&self, lane: QueueLane, items: Vec<T>) {
+        if items.is_empty() {
+            return;
+        }
+        let mut inner = self.lock();
+        let target = match lane {
+            QueueLane::Steer => &mut inner.steers,
+            QueueLane::Followup => &mut inner.followups,
+            QueueLane::Collect => &mut inner.collects,
+        };
+        target.splice(0..0, items.into_iter().map(Queued::admitted));
+    }
+
     /// Drains one lane in FIFO order.
     pub async fn drain(&self, lane: QueueLane) -> Vec<T> {
-        let mut inner = self.inner.lock().await;
-        match lane {
+        self.drain_now(lane)
+    }
+
+    /// Drains one lane in FIFO order without awaiting: the synchronous form
+    /// of [`Self::drain`].
+    pub fn drain_now(&self, lane: QueueLane) -> Vec<T> {
+        let mut inner = self.lock();
+        let items = match lane {
             QueueLane::Steer => std::mem::take(&mut inner.steers),
             QueueLane::Followup => std::mem::take(&mut inner.followups),
             QueueLane::Collect => std::mem::take(&mut inner.collects),
+        };
+        let (unguarded, guarded): (Vec<_>, Vec<_>) =
+            items.into_iter().partition(|item| !item.is_guarded());
+        let target = match lane {
+            QueueLane::Steer => &mut inner.steers,
+            QueueLane::Followup => &mut inner.followups,
+            QueueLane::Collect => &mut inner.collects,
+        };
+        *target = guarded;
+        unguarded.into_iter().map(|item| item.value).collect()
+    }
+
+    /// Drains matching items from one lane in FIFO order and leaves all other
+    /// items in place. This is useful for typed host adapters that can consume
+    /// only a subset of a heterogeneous queue without discarding unsupported
+    /// payloads.
+    pub fn drain_where_now(&self, lane: QueueLane, mut pred: impl FnMut(&T) -> bool) -> Vec<T> {
+        let mut inner = self.lock();
+        let items = match lane {
+            QueueLane::Steer => &mut inner.steers,
+            QueueLane::Followup => &mut inner.followups,
+            QueueLane::Collect => &mut inner.collects,
+        };
+        let mut drained = Vec::new();
+        let mut remaining = Vec::with_capacity(items.len());
+        for item in std::mem::take(items) {
+            if item.is_guarded() {
+                remaining.push(item);
+                continue;
+            }
+            if pred(&item.value) {
+                drained.push(item.value);
+            } else {
+                remaining.push(item);
+            }
         }
+        *items = remaining;
+        drained
     }
 
     /// Takes items from `lane` in FIFO order according to `mode`: the oldest
@@ -96,24 +377,23 @@ impl<T> RunQueue<T> {
         match mode {
             QueueMode::All => self.drain(lane).await,
             QueueMode::OneAtATime => {
-                let mut inner = self.inner.lock().await;
+                let mut inner = self.lock();
                 let items = match lane {
                     QueueLane::Steer => &mut inner.steers,
                     QueueLane::Followup => &mut inner.followups,
                     QueueLane::Collect => &mut inner.collects,
                 };
-                if items.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![items.remove(0)]
-                }
+                let Some(index) = items.iter().position(|item| !item.is_guarded()) else {
+                    return Vec::new();
+                };
+                vec![items.remove(index).value]
             }
         }
     }
 
     /// Returns the current queue depth per lane.
     pub async fn status(&self) -> QueueStatus {
-        let inner = self.inner.lock().await;
+        let inner = self.lock();
         let steers = inner.steers.len();
         let followups = inner.followups.len();
         let collects = inner.collects.len();
@@ -127,7 +407,7 @@ impl<T> RunQueue<T> {
 
     /// Clears every lane and returns the number of dropped items.
     pub async fn clear(&self) -> usize {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock();
         let total = inner.steers.len() + inner.followups.len() + inner.collects.len();
         inner.steers.clear();
         inner.followups.clear();
@@ -146,29 +426,26 @@ impl<T> RunQueue<T> {
     where
         T: Clone,
     {
-        let inner = self.inner.lock().await;
+        let inner = self.lock();
         let mut items =
             Vec::with_capacity(inner.steers.len() + inner.followups.len() + inner.collects.len());
         items.extend(
             inner
                 .steers
                 .iter()
-                .cloned()
-                .map(|item| (QueueLane::Steer, item)),
+                .map(|item| (QueueLane::Steer, item.value.clone())),
         );
         items.extend(
             inner
                 .followups
                 .iter()
-                .cloned()
-                .map(|item| (QueueLane::Followup, item)),
+                .map(|item| (QueueLane::Followup, item.value.clone())),
         );
         items.extend(
             inner
                 .collects
                 .iter()
-                .cloned()
-                .map(|item| (QueueLane::Collect, item)),
+                .map(|item| (QueueLane::Collect, item.value.clone())),
         );
         items
     }
@@ -180,11 +457,11 @@ impl<T> RunQueue<T> {
     /// Use to retract a specific queued item (e.g. one the host decided not
     /// to apply after all) without clearing the rest of the queue.
     pub async fn remove_where(&self, pred: impl Fn(&T) -> bool) -> usize {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock();
         let before = inner.steers.len() + inner.followups.len() + inner.collects.len();
-        inner.steers.retain(|item| !pred(item));
-        inner.followups.retain(|item| !pred(item));
-        inner.collects.retain(|item| !pred(item));
+        inner.steers.retain(|item| !pred(&item.value));
+        inner.followups.retain(|item| !pred(&item.value));
+        inner.collects.retain(|item| !pred(&item.value));
         let after = inner.steers.len() + inner.followups.len() + inner.collects.len();
         before - after
     }
@@ -197,4 +474,5 @@ impl<T> Default for RunQueue<T> {
 }
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;

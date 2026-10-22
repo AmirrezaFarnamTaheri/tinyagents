@@ -1,0 +1,603 @@
+//! Unit tests for the thread-goal domain types.
+
+use super::prompt::*;
+use super::types::*;
+
+fn goal(status: ThreadGoalStatus, token_budget: Option<u64>, tokens_used: u64) -> ThreadGoal {
+    ThreadGoal {
+        thread_id: "t".into(),
+        goal_id: "goal-0".into(),
+        objective: "ship the release".into(),
+        status,
+        token_budget,
+        tokens_used,
+        time_used_seconds: 0,
+        time_used_subsec_nanos: 0,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+    }
+}
+
+#[test]
+fn status_strings_match_serialized() {
+    assert_eq!(ThreadGoalStatus::Active.as_str(), "active");
+    assert_eq!(ThreadGoalStatus::Paused.as_str(), "paused");
+    assert_eq!(ThreadGoalStatus::BudgetLimited.as_str(), "budget_limited");
+    assert_eq!(ThreadGoalStatus::Complete.as_str(), "complete");
+}
+
+#[test]
+fn active_and_terminal_predicates() {
+    assert!(ThreadGoalStatus::Active.is_active());
+    assert!(!ThreadGoalStatus::Paused.is_active());
+    assert!(ThreadGoalStatus::Complete.is_terminal());
+    assert!(ThreadGoalStatus::BudgetLimited.is_terminal());
+    assert!(!ThreadGoalStatus::Active.is_terminal());
+    assert!(!ThreadGoalStatus::Paused.is_terminal());
+}
+
+#[test]
+fn budget_helpers() {
+    let mut g = goal(ThreadGoalStatus::Active, Some(100), 40);
+    assert_eq!(g.budget_remaining(), Some(60));
+    assert!(!g.over_budget());
+    g.tokens_used = 120;
+    assert_eq!(g.budget_remaining(), Some(0));
+    assert!(g.over_budget());
+    g.token_budget = None;
+    assert_eq!(g.budget_remaining(), None);
+    assert!(!g.over_budget());
+}
+
+#[test]
+fn context_block_present_only_for_active_and_budget_limited() {
+    let active = goal(ThreadGoalStatus::Active, Some(500), 100);
+    let block = active_goal_context_block(&active).expect("active goal has a context block");
+    assert!(block.contains("ship the release"));
+    assert!(block.contains("goal_complete"));
+    assert!(block.contains("400"), "should name remaining budget");
+
+    let limited = goal(ThreadGoalStatus::BudgetLimited, Some(100), 100);
+    let block = active_goal_context_block(&limited).expect("budget-limited has a stop block");
+    assert!(block.contains("budget"));
+
+    assert!(active_goal_context_block(&goal(ThreadGoalStatus::Paused, None, 0)).is_none());
+    assert!(active_goal_context_block(&goal(ThreadGoalStatus::Complete, None, 0)).is_none());
+}
+
+#[test]
+fn thread_goal_round_trips_through_json() {
+    let g = goal(ThreadGoalStatus::Active, Some(1000), 250);
+    let json = serde_json::to_value(&g).unwrap();
+    // camelCase field names on the wire.
+    assert_eq!(json["threadId"], "t");
+    assert_eq!(json["goalId"], "goal-0");
+    assert_eq!(json["tokenBudget"], 1000);
+    let back: ThreadGoal = serde_json::from_value(json).unwrap();
+    assert_eq!(back, g);
+}
+
+mod store_tests {
+    use std::sync::Arc;
+
+    use super::super::ThreadGoalStatus;
+    use super::super::store;
+    use tinyagents_harness::store::{InMemoryStore, Store};
+
+    fn store() -> Arc<dyn Store> {
+        Arc::new(InMemoryStore::default())
+    }
+
+    #[tokio::test]
+    async fn set_get_clear_round_trip() {
+        let s = store();
+        assert!(store::get(&s, "t1").await.unwrap().is_none());
+
+        let g = store::set(&s, "t1", "ship the feature", None)
+            .await
+            .unwrap();
+        assert_eq!(g.objective, "ship the feature");
+        assert_eq!(g.status, ThreadGoalStatus::Active);
+        assert_eq!(g.tokens_used, 0);
+
+        let loaded = store::get(&s, "t1").await.unwrap().unwrap();
+        assert_eq!(loaded.goal_id, g.goal_id);
+
+        assert!(store::clear(&s, "t1").await.unwrap());
+        assert!(store::get(&s, "t1").await.unwrap().is_none());
+        assert!(!store::clear(&s, "t1").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn set_same_objective_preserves_goal_id_and_counters() {
+        let s = store();
+        let g1 = store::set(&s, "t", "objective A", Some(100)).await.unwrap();
+        store::account_usage(&s, "t", &g1.goal_id, 30, std::time::Duration::from_secs(5))
+            .await
+            .unwrap()
+            .unwrap();
+        let g2 = store::set(&s, "t", "objective A", Some(200)).await.unwrap();
+        assert_eq!(g1.goal_id, g2.goal_id, "same objective keeps goal_id");
+        assert_eq!(g2.tokens_used, 30, "counters preserved");
+        assert_eq!(g2.token_budget, Some(200), "budget refreshed");
+    }
+
+    #[tokio::test]
+    async fn set_same_objective_stays_budget_limited_when_over_budget() {
+        let s = store();
+        let g = store::set(&s, "t", "obj", Some(100)).await.unwrap();
+        let limited = store::account_usage(&s, "t", &g.goal_id, 120, std::time::Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(limited.status, ThreadGoalStatus::BudgetLimited);
+        let resed = store::set(&s, "t", "obj", Some(100)).await.unwrap();
+        assert_eq!(resed.tokens_used, 120, "same-objective preserves counters");
+        assert_eq!(
+            resed.status,
+            ThreadGoalStatus::BudgetLimited,
+            "still over budget → must stay budget_limited, not active"
+        );
+        let raised = store::set(&s, "t", "obj", Some(1000)).await.unwrap();
+        assert_eq!(raised.status, ThreadGoalStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn set_changed_objective_mints_new_goal_id_and_resets() {
+        let s = store();
+        let g1 = store::set(&s, "t", "objective A", None).await.unwrap();
+        store::account_usage(&s, "t", &g1.goal_id, 30, std::time::Duration::from_secs(5))
+            .await
+            .unwrap()
+            .unwrap();
+        let g2 = store::set(&s, "t", "objective B", None).await.unwrap();
+        assert_ne!(g1.goal_id, g2.goal_id);
+        assert_eq!(g2.tokens_used, 0, "counters reset on new objective");
+        assert_eq!(g2.created_at_ms, g1.created_at_ms, "created_at preserved");
+    }
+
+    #[tokio::test]
+    async fn set_if_absent_only_bootstraps_when_empty() {
+        let s = store();
+        let created = store::set_if_absent(&s, "t", "scout goal", None)
+            .await
+            .unwrap();
+        assert!(created.is_some());
+        let again = store::set_if_absent(&s, "t", "different goal", None)
+            .await
+            .unwrap();
+        assert!(again.is_none());
+        assert_eq!(
+            store::get(&s, "t").await.unwrap().unwrap().objective,
+            "scout goal"
+        );
+    }
+
+    #[tokio::test]
+    async fn account_usage_ignores_stale_goal_id() {
+        let s = store();
+        let g = store::set(&s, "t", "obj", None).await.unwrap();
+        let after = store::account_usage(
+            &s,
+            "t",
+            "not-the-goal-id",
+            50,
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(after.tokens_used, 0);
+        let after =
+            store::account_usage(&s, "t", &g.goal_id, 50, std::time::Duration::from_secs(1))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(after.tokens_used, 50);
+    }
+
+    #[tokio::test]
+    async fn account_usage_trips_budget_limited() {
+        let s = store();
+        let g = store::set(&s, "t", "obj", Some(100)).await.unwrap();
+        let after =
+            store::account_usage(&s, "t", &g.goal_id, 120, std::time::Duration::from_secs(2))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(after.status, ThreadGoalStatus::BudgetLimited);
+        assert_eq!(after.budget_remaining(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn pause_resume_complete_transitions() {
+        let s = store();
+        store::set(&s, "t", "obj", None).await.unwrap();
+        assert_eq!(
+            store::pause(&s, "t").await.unwrap().status,
+            ThreadGoalStatus::Paused
+        );
+        assert_eq!(
+            store::resume(&s, "t").await.unwrap().status,
+            ThreadGoalStatus::Active
+        );
+        let done = store::complete(&s, "t").await.unwrap();
+        assert_eq!(done.status, ThreadGoalStatus::Complete);
+        // Resume does not reactivate a completed goal.
+        assert_eq!(
+            store::resume(&s, "t").await.unwrap().status,
+            ThreadGoalStatus::Complete
+        );
+    }
+
+    #[tokio::test]
+    async fn mutators_error_without_a_goal() {
+        let s = store();
+        assert!(store::complete(&s, "missing").await.is_err());
+        assert!(store::pause(&s, "missing").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn empty_objective_and_blank_thread_id_rejected() {
+        let s = store();
+        assert!(store::set(&s, "t", "   ", None).await.is_err());
+        assert!(store::set(&s, "  ", "obj", None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_all_returns_every_thread_goal() {
+        let s = store();
+        store::set(&s, "alpha", "a", None).await.unwrap();
+        store::set(&s, "beta", "b", None).await.unwrap();
+        let mut ids: Vec<String> = store::list_all(&s)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|g| g.thread_id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec!["alpha".to_string(), "beta".to_string()]);
+    }
+}
+
+mod tool_tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::super::runtime::GoalStore;
+    use super::super::tool::{GoalTool, GoalToolKind};
+    use super::super::{GoalObserver, ThreadGoal};
+    use tinyagents_harness::store::{InMemoryStore, Store};
+    use tinytools::{Tool, ToolResult, ToolRunContext};
+
+    fn store() -> Arc<GoalStore> {
+        Arc::new(GoalStore::new(Arc::new(InMemoryStore::default())))
+    }
+
+    struct ThreadContext(Option<String>);
+
+    impl ToolRunContext for ThreadContext {
+        fn thread_id(&self) -> Option<&str> {
+            self.0.as_deref()
+        }
+    }
+
+    async fn run(tool: &GoalTool, thread: Option<&str>, args: serde_json::Value) -> ToolResult {
+        let context = ThreadContext(thread.map(str::to_owned));
+        tool.execute_with_context(args, Default::default(), Some(&context))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn set_get_complete_via_tools_in_thread_scope() {
+        let s = store();
+        let set = GoalTool::new(GoalToolKind::Set, s.clone());
+        let res = run(
+            &set,
+            Some("thread-tools"),
+            json!({ "objective": "land the PR", "token_budget": 5000 }),
+        )
+        .await;
+        assert!(!res.is_error, "{res:?}");
+        assert!(
+            res.output_for_llm(set.supports_markdown())
+                .contains("land the PR")
+        );
+
+        let get = GoalTool::new(GoalToolKind::Get, s.clone());
+        let res = run(&get, Some("thread-tools"), json!({})).await;
+        assert!(
+            res.output_for_llm(get.supports_markdown())
+                .contains("status: active")
+        );
+
+        let done = GoalTool::new(GoalToolKind::Complete, s.clone());
+        let res = run(&done, Some("thread-tools"), json!({})).await;
+        assert!(
+            res.output_for_llm(done.supports_markdown())
+                .contains("status: complete")
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_error_without_thread_scope() {
+        let s = store();
+        let set = GoalTool::new(GoalToolKind::Set, s);
+        // Bare call (no context) errors.
+        let res = set.execute(json!({ "objective": "x" })).await.unwrap();
+        assert!(res.is_error);
+        assert!(res.output().contains("active chat thread"));
+        // Context with no thread id also errors.
+        let set = GoalTool::new(GoalToolKind::Set, store());
+        let res = run(&set, None, json!({ "objective": "x" })).await;
+        assert!(res.is_error);
+    }
+
+    #[tokio::test]
+    async fn get_reports_absent_goal() {
+        let get = GoalTool::new(GoalToolKind::Get, store());
+        let res = run(&get, Some("empty-thread"), json!({})).await;
+        assert!(res.output().contains("no goal set"));
+    }
+
+    #[tokio::test]
+    async fn set_missing_objective_is_an_error_result() {
+        let set = GoalTool::new(GoalToolKind::Set, store());
+        let res = run(&set, Some("t"), json!({})).await;
+        assert!(res.is_error);
+        assert!(res.output().contains("Missing 'objective'"));
+    }
+
+    #[tokio::test]
+    async fn tools_answer_with_goal_and_text_payload() {
+        let s = store();
+        let context = Some("thread-payload");
+
+        let get = GoalTool::new(GoalToolKind::Get, s.clone());
+        let res = run(&get, context, json!({})).await;
+        let empty = match &res.content[0] {
+            tinytools::ToolContent::Json { data } => data,
+            other => panic!("expected structured JSON content, got {other:?}"),
+        };
+        assert!(empty["goal"].is_null());
+        assert_eq!(empty["text"], "no goal set for this thread");
+
+        let set = GoalTool::new(GoalToolKind::Set, s.clone());
+        let res = run(
+            &set,
+            context,
+            json!({ "objective": "land the PR", "token_budget": 5000 }),
+        )
+        .await;
+        assert!(!res.is_error, "{res:?}");
+        let payload = match &res.content[0] {
+            tinytools::ToolContent::Json { data } => data,
+            other => panic!("expected structured JSON content, got {other:?}"),
+        };
+        assert_eq!(payload["goal"]["objective"], "land the PR");
+        assert_eq!(payload["goal"]["status"], "active");
+        assert_eq!(payload["goal"]["tokenBudget"], 5000);
+        assert_eq!(payload["goal"]["tokensUsed"], 0);
+        let text = payload["text"].as_str().unwrap();
+        assert!(text.starts_with("Goal set."), "{text}");
+        assert!(text.contains("objective: land the PR"), "{text}");
+        assert_eq!(res.markdown_formatted.as_deref(), Some(text));
+    }
+
+    struct TestObserver(Arc<std::sync::Mutex<Vec<String>>>);
+
+    impl GoalObserver for TestObserver {
+        fn on_updated(&self, goal: &ThreadGoal) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(goal.status.as_str().to_string());
+        }
+        fn on_cleared(&self, _: &str) {}
+    }
+
+    #[tokio::test]
+    async fn tool_writes_use_the_goal_store_observer() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let raw: Arc<dyn Store> = Arc::new(InMemoryStore::default());
+        let s = Arc::new(GoalStore::with_observer(
+            raw,
+            Arc::new(TestObserver(seen.clone())),
+        ));
+        let tool = |kind| GoalTool::new(kind, s.clone());
+
+        run(&tool(GoalToolKind::Get), Some("t"), json!({})).await;
+        assert!(seen.lock().unwrap().is_empty());
+        run(
+            &tool(GoalToolKind::Set),
+            Some("t"),
+            json!({"objective":"ship"}),
+        )
+        .await;
+        run(&tool(GoalToolKind::Get), Some("t"), json!({})).await;
+        run(&tool(GoalToolKind::Complete), Some("t"), json!({})).await;
+        assert_eq!(*seen.lock().unwrap(), vec!["active", "complete"]);
+    }
+
+    #[test]
+    fn permission_levels_follow_read_only() {
+        use tinytools::PermissionLevel;
+
+        for kind in GoalToolKind::ALL {
+            let tool = GoalTool::new(kind, store());
+            let expected = if kind == GoalToolKind::Get {
+                PermissionLevel::ReadOnly
+            } else {
+                PermissionLevel::Write
+            };
+            assert_eq!(tool.permission_level(), expected, "{}", kind.name());
+        }
+    }
+}
+
+mod budget_tests {
+    use std::sync::Arc;
+
+    use super::super::budget::{
+        BudgetVerdict, GoalBudgetGuard, account_turn, accrues_usage, turn_tokens,
+    };
+    use super::super::store;
+    use super::{ThreadGoalStatus, goal};
+    use tinyagents_harness::store::{InMemoryStore, Store};
+
+    fn kv() -> Arc<dyn Store> {
+        Arc::new(InMemoryStore::default())
+    }
+
+    #[test]
+    fn a_turns_charge_is_its_input_plus_output() {
+        assert_eq!(turn_tokens(120, 80), 200);
+        // Saturating, so an absurd provider report cannot wrap to a tiny charge.
+        assert_eq!(turn_tokens(u64::MAX, 1), u64::MAX);
+    }
+
+    #[test]
+    fn only_an_active_goal_accrues_usage() {
+        assert!(accrues_usage(ThreadGoalStatus::Active));
+        assert!(!accrues_usage(ThreadGoalStatus::Paused));
+        assert!(!accrues_usage(ThreadGoalStatus::BudgetLimited));
+        assert!(!accrues_usage(ThreadGoalStatus::Complete));
+    }
+
+    #[tokio::test]
+    async fn a_turn_is_charged_against_the_active_goal() {
+        let kv = kv();
+        store::set(&kv, "t1", "ship it", Some(1_000)).await.unwrap();
+
+        let updated = account_turn(&kv, "t1", 100, 50, std::time::Duration::from_secs(12))
+            .await
+            .unwrap()
+            .expect("goal charged");
+        assert_eq!(updated.tokens_used, 150);
+        assert_eq!(updated.time_used_seconds, 12);
+        assert_eq!(updated.status, ThreadGoalStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn crossing_the_budget_flips_the_goal_to_budget_limited() {
+        let kv = kv();
+        store::set(&kv, "t1", "ship it", Some(100)).await.unwrap();
+
+        let updated = account_turn(&kv, "t1", 60, 60, std::time::Duration::from_secs(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.status, ThreadGoalStatus::BudgetLimited);
+        assert!(updated.over_budget());
+
+        // A limited goal stops accruing: incidental chat afterwards is free.
+        assert!(
+            account_turn(&kv, "t1", 500, 500, std::time::Duration::from_secs(5))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let after = store::get(&kv, "t1").await.unwrap().unwrap();
+        assert_eq!(after.tokens_used, 120);
+    }
+
+    #[tokio::test]
+    async fn a_thread_with_no_goal_or_an_idle_turn_changes_nothing() {
+        let kv = kv();
+        assert!(
+            account_turn(&kv, "missing", 10, 10, std::time::Duration::from_secs(1))
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        store::set(&kv, "t1", "ship it", None).await.unwrap();
+        let unchanged = account_turn(&kv, "t1", 0, 0, std::time::Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.tokens_used, 0);
+    }
+
+    #[test]
+    fn a_guard_is_only_armed_for_an_active_goal_with_a_budget() {
+        assert!(GoalBudgetGuard::for_goal(&goal(ThreadGoalStatus::Active, Some(100), 0)).is_some());
+        assert!(GoalBudgetGuard::for_goal(&goal(ThreadGoalStatus::Active, None, 0)).is_none());
+        assert!(GoalBudgetGuard::for_goal(&goal(ThreadGoalStatus::Paused, Some(100), 0)).is_none());
+        assert!(
+            GoalBudgetGuard::for_goal(&goal(ThreadGoalStatus::Complete, Some(100), 0)).is_none()
+        );
+    }
+
+    #[test]
+    fn the_verdict_counts_in_flight_spend_against_the_ceiling() {
+        let guard =
+            GoalBudgetGuard::for_goal(&goal(ThreadGoalStatus::Active, Some(1_000), 0)).unwrap();
+        assert_eq!(guard.budget(), 1_000);
+        assert_eq!(guard.goal_id(), "goal-0");
+        assert_eq!(guard.thread_id(), "t");
+
+        assert_eq!(guard.verdict_for(400, 300), BudgetVerdict::Continue);
+        // Reaching the budget stops the turn — it does not have to exceed it.
+        let verdict = guard.verdict_for(400, 600);
+        assert!(verdict.is_stop());
+        match verdict {
+            BudgetVerdict::Stop { reason } => {
+                assert!(reason.contains("1000 tokens >= 1000 budget"), "{reason}")
+            }
+            BudgetVerdict::Continue => unreachable!(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_guard_stops_a_turn_that_would_overrun() {
+        let kv = kv();
+        let stored = store::set(&kv, "t1", "ship it", Some(500)).await.unwrap();
+        let guard = GoalBudgetGuard::for_goal(&stored).unwrap();
+        account_turn(&kv, "t1", 200, 100, std::time::Duration::from_secs(1))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            guard.check(&kv, 100).await.unwrap(),
+            BudgetVerdict::Continue
+        );
+        assert!(guard.check(&kv, 200).await.unwrap().is_stop());
+    }
+
+    #[tokio::test]
+    async fn a_guard_stands_down_when_its_goal_is_replaced_or_gone() {
+        let kv = kv();
+        let stored = store::set(&kv, "t1", "ship it", Some(10)).await.unwrap();
+        let guard = GoalBudgetGuard::for_goal(&stored).unwrap();
+        // Armed and biting on the goal it was built for.
+        assert!(guard.check(&kv, 50).await.unwrap().is_stop());
+
+        // A fresh objective mints a new goal id: the old guard no longer applies.
+        store::set(&kv, "t1", "a different objective", Some(10))
+            .await
+            .unwrap();
+        assert_eq!(guard.check(&kv, 50).await.unwrap(), BudgetVerdict::Continue);
+
+        // And a cleared goal leaves nothing to enforce.
+        store::clear(&kv, "t1").await.unwrap();
+        assert_eq!(guard.check(&kv, 50).await.unwrap(), BudgetVerdict::Continue);
+    }
+
+    #[tokio::test]
+    async fn a_guard_stands_down_once_its_goal_is_no_longer_active() {
+        let kv = kv();
+        let stored = store::set(&kv, "t1", "ship it", Some(10)).await.unwrap();
+        let guard = GoalBudgetGuard::for_goal(&stored).unwrap();
+        store::pause(&kv, "t1").await.unwrap();
+
+        // A paused goal is not burning a live budget, so a user-present turn is
+        // never hard-stopped by it.
+        assert_eq!(
+            guard.check(&kv, 1_000).await.unwrap(),
+            BudgetVerdict::Continue
+        );
+    }
+}

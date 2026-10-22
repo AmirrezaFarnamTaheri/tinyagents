@@ -71,7 +71,7 @@ caller-supplied adapter — can be certified by running the same assertions:
   ordering/limit/cycle-termination, `copy_thread` semantics (including
   rejecting a non-empty target), and per-namespace `prune`.
 - `taskstore_contract(store)` — basic CRUD/lifecycle contract for a
-  `graph::orchestration::TaskStore` implementation.
+  `tinyagents_tasks::TaskStore` implementation.
 - `taskstore_concurrent_contract(store: Arc<S>)` — concurrent-access contract
   (no lost updates, no corrupted records under concurrent writers).
 - `taskstore_replay_contract(reopen)` — durability contract: a store reopened
@@ -88,7 +88,7 @@ backend.
 | `types.rs` | `GraphEventRecorder`, `StreamCollector`, `GraphRun`, `GraphAssertions`, `RetryCountingNode`. |
 | `mod.rs` | Node doubles, `run_recorded`, `assert_graph`. |
 | `conformance.rs` | `checkpointer_contract`, `checkpointer_concurrent_contract`, `checkpointer_writes_contract`, `checkpointer_lineage_contract`, `taskstore_contract`, `taskstore_concurrent_contract`, `taskstore_replay_contract`. |
-| `test.rs` | Unit tests for the testkit itself (each double, recorder, assertion). |
+| `mod_tests.rs` | Unit tests for the testkit itself (each double, recorder, assertion). |
 
 ## Operational constraints
 

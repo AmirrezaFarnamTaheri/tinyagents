@@ -35,8 +35,15 @@ KV-cache/prompt-cache keeps hitting.
   truncated. Independent of `PromptBuilder`/cache segments; used for context
   composition (e.g. retrieved-document catalogues) rather than the top-level
   model request.
-- Free rendering helpers: `render_heading`, `render_optional_section`,
-  `render_tool_catalogue`, `render_retrieved_documents`.
+- `PromptTier`, `DynamicPromptSection<C>`, `PromptComposer<C>`, and
+  `TieredPrompt` — context-generic rendering for sections that return stable,
+  session-context, or volatile slices. The composer renders each section once,
+  groups output by tier while keeping declaration order within each tier, and
+  reports byte offsets for reusable prefix boundaries. Pass the result to
+  `PromptBuilder::push_tiered_system_prompt` to mark stable/context segments
+  cacheable and the volatile tail non-cacheable.
+- Free rendering helpers: `render_heading`, `render_optional_section`, and
+  `render_tool_catalogue`.
 - Model-guidance helpers: `needs_execution_discipline`,
   `execution_discipline_for`, and `execution_discipline_for_profile` select the
   exported `EXECUTION_DISCIPLINE` block by model family, falling back from an
@@ -50,10 +57,10 @@ KV-cache/prompt-cache keeps hitting.
 
 | File | Role |
 | --- | --- |
-| `types.rs` | Every public type: `TemplateRole`, `PromptTemplate`, `MessagesTemplate`, `PromptBuilder` (and its private `BuiltSegment`), `PromptSection`, `PromptTruncation`, `PromptAssembly`, `PromptBudget`. |
+| `types.rs` | Every public type: templates, `PromptBuilder` (and its private `BuiltSegment`), section assembly, and tiered dynamic prompt composition. |
 | `model_guidance.rs` | Model-family matching and the optional execution-discipline prompt block. |
 | `mod.rs` | Behavioral code: the `{name}` template renderer, `PromptBuilder` methods (segment pushes, `build`, `fingerprint`), and the section-assembly free functions. |
-| `test.rs` | Unit tests for placeholder substitution/escaping, error cases, per-role rendering, `MessagesTemplate` ordering, and `PromptBuilder` segment cacheability/fingerprinting. |
+| `mod_tests.rs` | Unit tests for placeholder substitution/escaping, error cases, per-role rendering, `MessagesTemplate` ordering, and `PromptBuilder` segment cacheability/fingerprinting. |
 
 ## Key invariants
 
@@ -63,6 +70,10 @@ KV-cache/prompt-cache keeps hitting.
   and providers can apply KV-cache reuse. `PromptBuilder` does not enforce
   this ordering itself — it is a convention the push methods are named to
   encourage.
+- **Prompt tiers are ordered metadata.** `PromptComposer` emits the stable
+  prefix first, then context, then volatile content. `push_tiered_system_prompt`
+  preserves each tier as a distinct system segment with a `prompt-tier:*` ID;
+  context remains cacheable and volatile content is marked non-cacheable.
 - **Tiered system IDs are canonical and append-safe.**
   `push_system_messages` assigns one cacheable segment per message and
   continues numbering across repeated calls. Recognition rejects zero and
@@ -87,6 +98,3 @@ KV-cache/prompt-cache keeps hitting.
   with `cache_segments` populated; downstream, `crate::cache` and
   `crate::middleware`'s `PromptCacheGuardMiddleware` read those segments to
   detect prefix invalidation across calls.
-- `render_retrieved_documents` accepts `crate::retriever::RetrievedDocument`,
-  connecting this module to the harness's retrieval surface without a hard
-  dependency in the other direction.

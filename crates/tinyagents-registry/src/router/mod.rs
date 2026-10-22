@@ -4,9 +4,9 @@
 //!
 //! # Why this exists
 //!
-//! [`CapabilityRegistry`](crate::CapabilityRegistry) and the harness
-//! [`ModelRegistry`](tinyagents_harness::ModelRegistry) resolve a model *by
-//! name* and the agent loop can fail over across a
+//! [`CapabilityRegistry`](crate::CapabilityRegistry) stores models by name and
+//! the harness model resolver adapts execution through its host port; the agent
+//! loop can fail over across a
 //! [`FallbackPolicy`] — but neither owns
 //! the *policy* that maps a host's **workload tiers** (`chat-v1`, `reasoning-v1`,
 //! `vision-v1`, …) onto concrete models, nor the per-tier capability gates and
@@ -60,6 +60,7 @@
 mod types;
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;
 
 pub use types::WorkloadRoute;
@@ -90,6 +91,28 @@ impl WorkloadRouter {
     /// An empty router with no routes and no default.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Projects TinyInference's workload table into registry routing policy.
+    ///
+    /// `vision_hint` is supplied by the host so this shared layer does not
+    /// encode a product's hint spelling. The image capability remains gated
+    /// only for the designated route when the inference table marks it as
+    /// requiring image input.
+    pub fn from_workload_routes(vision_hint: &str) -> Self {
+        tinyinference_llm::model::workload::WORKLOAD_ROUTES
+            .iter()
+            .fold(Self::new(), |router, spec| {
+                let mut route = WorkloadRoute::new(spec.name, spec.name)
+                    .with_fallbacks(spec.fallbacks.iter().copied());
+                if spec.requires_image_in && spec.name == vision_hint {
+                    route = route.requiring(CapabilitySet {
+                        image_in: true,
+                        ..CapabilitySet::default()
+                    });
+                }
+                router.with_route(route)
+            })
     }
 
     /// Adds a route, returning `self` for chaining (builder style).

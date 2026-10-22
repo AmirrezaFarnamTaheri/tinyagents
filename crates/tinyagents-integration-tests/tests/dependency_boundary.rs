@@ -43,11 +43,27 @@ const KNOWN_GENERIC_CLAUDE_CODE_CHAT_MESSAGE_DEBT: &[(&str, usize)] = &[
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/driver.rs",
-        71,
+        145,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/driver.rs",
-        237,
+        314,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/driver_tests.rs",
+        46,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/driver_tests.rs",
+        457,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/driver_tests.rs",
+        628,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/driver_tests.rs",
+        696,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
@@ -55,19 +71,31 @@ const KNOWN_GENERIC_CLAUDE_CODE_CHAT_MESSAGE_DEBT: &[(&str, usize)] = &[
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
-        25,
+        32,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
-        35,
+        40,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
-        93,
+        53,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
-        116,
+        134,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
+        181,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
+        182,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
+        202,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
@@ -138,6 +166,102 @@ const KNOWN_GENERIC_CLAUDE_CODE_CHAT_MESSAGE_DEBT: &[(&str, usize)] = &[
         242,
     ),
     (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        268,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        278,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        280,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        289,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        292,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        293,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        294,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        305,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        306,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        307,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        310,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        311,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        312,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        313,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        314,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        324,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        325,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        334,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        340,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        342,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        343,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        344,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        351,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+        359,
+    ),
+    (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
         51,
     ),
@@ -147,27 +271,27 @@ const KNOWN_GENERIC_CLAUDE_CODE_CHAT_MESSAGE_DEBT: &[(&str, usize)] = &[
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        291,
+        293,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        340,
+        360,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        374,
+        394,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-        52,
+        75,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-        53,
+        76,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-        54,
+        77,
     ),
 ];
 
@@ -546,6 +670,36 @@ fn host_independent_crates_do_not_depend_on_or_name_openhuman_types() {
     {
         panic!("{diff}");
     }
+}
+
+#[test]
+fn harness_tools_dependencies_stay_within_the_harness_boundary() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("integration crate is nested under the TinyAgents workspace");
+    let manifest = fs::read_to_string(workspace.join("crates/tinyagents-harness-tools/Cargo.toml"))
+        .expect("harness-tools manifest is readable");
+    let dependencies = manifest
+        .split("[dependencies]")
+        .nth(1)
+        .and_then(|section| section.split("[features]").next())
+        .expect("harness-tools has a dependencies section");
+    assert!(dependencies.contains("tinyagents-harness ="));
+    assert!(dependencies.contains("tinytools ="));
+    assert!(!dependencies.contains("tinyagents-graph ="));
+    assert!(!dependencies.contains("tinyagents-runtime ="));
+    let inference_dep = dependencies
+        .lines()
+        .find(|line| line.trim_start().starts_with("tinyinference-llm ="))
+        .expect("subagent inference dependency is declared");
+    assert!(inference_dep.contains("optional = true"));
+    let tasks_dep = dependencies
+        .lines()
+        .find(|line| line.trim_start().starts_with("tinyagents-tasks ="))
+        .expect("subagent task dependency is declared");
+    assert!(tasks_dep.contains("optional = true"));
+    assert!(manifest.contains("subagents = [\"dep:tinyagents-orchestration\", \"dep:tinyagents-tasks\", \"dep:tinyinference-llm\"]"));
 }
 
 #[test]

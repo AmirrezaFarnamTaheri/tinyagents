@@ -1,8 +1,12 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
+use tinyagents_harness::tool::ToolSnapshot;
 use tinyagents_harness::{CancellationToken, context::RunContext};
-use tinyagents_runtime::ToolSnapshot;
+use tinyagents_tasks::{DeliveryFence, NotifyMode};
 use tinyinference_llm::{message::Message, usage::UsageTotals};
+
+use super::{ResultPolicy, SubAgentPolicy, SubagentRole};
 
 /// A host-provided request to run a task through a subagent.
 ///
@@ -12,11 +16,13 @@ use tinyinference_llm::{message::Message, usage::UsageTotals};
 /// continuation can use a fresh execution context without changing its
 /// original persistence key.
 pub struct SubagentRequest<C = (), H = ()> {
+    target: Option<String>,
     task_key: SubagentTaskKey,
     run_context: RunContext<C>,
     host_request: H,
     input: String,
     resume: Option<SubagentResume>,
+    turn_fence: Option<Arc<dyn DeliveryFence>>,
 }
 
 /// One-way planner view of a validated request.
@@ -53,6 +59,33 @@ pub struct SubagentTaskKey {
     pub thread_id: Option<String>,
     /// Host-local task id within the scoped recursive run.
     pub task_id: String,
+}
+
+/// Target used to continue a durable subagent lifecycle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubagentContinuationTarget {
+    /// The original lifecycle key.
+    TaskKey(SubagentTaskKey),
+    /// Public reusable-session id resolved through the durable session store.
+    SessionId(String),
+}
+
+impl From<SubagentTaskKey> for SubagentContinuationTarget {
+    fn from(value: SubagentTaskKey) -> Self {
+        Self::TaskKey(value)
+    }
+}
+
+impl From<String> for SubagentContinuationTarget {
+    fn from(value: String) -> Self {
+        Self::SessionId(value)
+    }
+}
+
+impl From<&str> for SubagentContinuationTarget {
+    fn from(value: &str) -> Self {
+        Self::SessionId(value.to_owned())
+    }
 }
 
 impl SubagentTaskKey {
@@ -101,34 +134,129 @@ impl<C, H> SubagentRequest<C, H> {
         }
         Self::validate_thread(&task_key, &owned_child)?;
         Ok(Self {
+            target: None,
             task_key,
             run_context: owned_child,
             host_request,
             input: input.into(),
             resume,
+            turn_fence: None,
         })
     }
 
     /// Continues an authorized durable lifecycle with a fresh owned context.
     ///
-    /// Hosts must authorize and recover `original_key` from their own durable
-    /// record; do not derive a replacement key from the fresh context.
-    pub fn continue_with_key(
-        original_key: SubagentTaskKey,
+    /// Pass the original [`SubagentTaskKey`] or a durable session id. Session
+    /// ids are resolved through `sessions`; hosts must authorize them before
+    /// calling. Never derive a replacement key from the fresh context.
+    pub async fn continue_with_key(
+        target: impl Into<SubagentContinuationTarget>,
         fresh_owned_context: RunContext<C>,
         host_request: H,
         input: impl Into<String>,
         resume: Option<SubagentResume>,
+        sessions: Option<&dyn super::SubagentSessionStore>,
     ) -> Result<Self, SubagentError> {
+        let original_key = match target.into() {
+            SubagentContinuationTarget::TaskKey(key) => key,
+            SubagentContinuationTarget::SessionId(session_id) => {
+                let sessions = sessions.ok_or_else(|| {
+                    SubagentError::InvalidRequest(
+                        "continuing by session id requires a durable session store".into(),
+                    )
+                })?;
+                sessions
+                    .get(&session_id)
+                    .await?
+                    .ok_or_else(|| {
+                        SubagentError::InvalidRequest(format!(
+                            "unknown subagent session `{session_id}`"
+                        ))
+                    })?
+                    .lifecycle_key
+                    .ok_or_else(|| {
+                        SubagentError::InvalidRequest(format!(
+                            "subagent session `{session_id}` has no validated lifecycle key"
+                        ))
+                    })?
+            }
+        };
         Self::validate_key(&original_key)?;
         Self::validate_thread(&original_key, &fresh_owned_context)?;
         Ok(Self {
+            target: None,
             task_key: original_key,
             run_context: fresh_owned_context,
             host_request,
             input: input.into(),
             resume,
+            turn_fence: None,
         })
+    }
+
+    /// Continues a host-authorized lifecycle when the durable task key has
+    /// already been resolved by the host adapter.
+    ///
+    /// This synchronous constructor is suitable for request factories. Hosts
+    /// must authorize the key before calling it; it never derives a replacement
+    /// identity from the fresh execution context.
+    pub fn continue_with_task_key(
+        task_key: SubagentTaskKey,
+        fresh_owned_context: RunContext<C>,
+        host_request: H,
+        input: impl Into<String>,
+        resume: Option<SubagentResume>,
+    ) -> Result<Self, SubagentError> {
+        Self::validate_key(&task_key)?;
+        Self::validate_thread(&task_key, &fresh_owned_context)?;
+        Ok(Self {
+            target: None,
+            task_key,
+            run_context: fresh_owned_context,
+            host_request,
+            input: input.into(),
+            resume,
+            turn_fence: None,
+        })
+    }
+
+    /// Continues an authorized durable session by its public session id.
+    ///
+    /// The store resolves the id to the original lifecycle key; the request
+    /// never derives a replacement key from its fresh execution context.
+    pub async fn continue_with_session_id(
+        sessions: &dyn super::SubagentSessionStore,
+        session_id: &str,
+        fresh_owned_context: RunContext<C>,
+        host_request: H,
+        input: impl Into<String>,
+        resume: Option<SubagentResume>,
+    ) -> Result<Self, SubagentError> {
+        Self::continue_with_key(
+            session_id,
+            fresh_owned_context,
+            host_request,
+            input,
+            resume,
+            Some(sessions),
+        )
+        .await
+    }
+
+    /// Names the sub-agent this lifecycle runs, for spawn-policy
+    /// [`allowed_targets`](super::SpawnPolicy::allowed_targets) checks.
+    ///
+    /// The neutral request carries no agent identity (hosts resolve it in their
+    /// planner), so a host that configures an allowlist must set it here; a
+    /// request without a target is refused when an allowlist is configured.
+    pub fn with_target(mut self, target: impl Into<String>) -> Self {
+        self.target = Some(target.into());
+        self
+    }
+
+    /// The target named by [`Self::with_target`], if any.
+    pub fn target(&self) -> Option<&str> {
+        self.target.as_deref()
     }
 
     /// Returns the sole durable identity for this lifecycle.
@@ -146,8 +274,36 @@ impl<C, H> SubagentRequest<C, H> {
         &self.run_context
     }
 
-    pub(crate) fn resume(&self) -> Option<&SubagentResume> {
+    /// Attaches the live control channels registered for this lifecycle.
+    /// Hosts normally construct a child context without these channels; the
+    /// driver-backed tool uses this after admission so its generic job and
+    /// message tools control the exact request being executed.
+    pub fn with_job_controls(
+        mut self,
+        steering: tinyagents_harness::steering::SteeringHandle,
+        run_queue: tinyagents_harness::run_queue::RunQueueHandle,
+        cancellation: CancellationToken,
+    ) -> Self {
+        self.run_context.steering = Some(steering);
+        self.run_context.run_queue = Some(run_queue);
+        self.run_context.cancellation = cancellation;
+        self
+    }
+
+    pub fn resume(&self) -> Option<&SubagentResume> {
         self.resume.as_ref()
+    }
+
+    /// Supplies a host-owned durable turn fence for this child lifecycle. The
+    /// generic driver keeps the guard alive and cancels execution on loss; the
+    /// executor uses the same authority to bind its transcript writer.
+    pub fn with_turn_fence(mut self, fence: Arc<dyn DeliveryFence>) -> Self {
+        self.turn_fence = Some(fence);
+        self
+    }
+
+    pub(crate) fn turn_fence(&self) -> Option<Arc<dyn DeliveryFence>> {
+        self.turn_fence.clone()
     }
 
     pub(crate) fn set_resume(&mut self, resume: Option<SubagentResume>) {
@@ -214,14 +370,145 @@ pub struct PreparedSubagent<C = ()> {
     pub tools: ToolSnapshot,
     /// Explicit child run context, including lineage and host context data.
     pub run_context: RunContext<C>,
+    /// Whether the child may delegate. [`SubagentRole::Leaf`] makes the driver
+    /// strip the delegation tools from [`Self::tools`].
+    pub role: SubagentRole,
+    /// The tool set the child inherited. When set, the driver intersects
+    /// [`Self::tools`] with it so a child can never widen what it inherited.
+    pub tool_ceiling: Option<ToolSnapshot>,
+    /// Names of the host's own spawn tools, which a leaf must not keep (the
+    /// crate cannot know custom tool names).
+    pub delegation_tools: Vec<String>,
+    /// Authored capability scope to intersect with the supplied declarations.
+    pub tool_scope: Option<tinyagents_definition::ToolScope>,
+    /// Optional skill prefix (`{skill}__`) to intersect with the scope.
+    pub skill_filter: Option<String>,
+    /// Timeout, retry and budget the driver applies around the execution.
+    pub policy: SubAgentPolicy,
+    /// How the driver trims and checks the child's final output.
+    pub result_policy: ResultPolicy,
+    /// Mints a fresh run context for each retry attempt (a context is consumed
+    /// by its run). Without it the driver cannot retry and runs one attempt.
+    pub retry_context: Option<AttemptContextFactory<C>>,
+    /// How the parent hears about this child's completion when the driver has a
+    /// [`CompletionRouter`](tinyagents_tasks::CompletionRouter). `None` (the
+    /// default) records nothing, so a foreground child whose result already
+    /// returns to the parent is never pushed a second time. A detached spawn
+    /// sets `Some(NotifyMode::default())` (follow-up) or another mode.
+    pub notify_mode: Option<NotifyMode>,
+    /// The parent key completions are routed under; defaults to the request's
+    /// thread id, else the parent run id. Set it when the host's parent
+    /// identity is neither (a session key, say).
+    pub completion_parent: Option<String>,
+}
+
+/// Builds the run context for retry attempt `n` (`1` is the first retry).
+pub type AttemptContextFactory<C> =
+    Arc<dyn Fn(u32) -> Result<RunContext<C>, SubagentError> + Send + Sync>;
+
+impl<C> PreparedSubagent<C> {
+    /// A plan with the default (unchanged-behaviour) role and policies.
+    pub fn new(
+        task_id: impl Into<String>,
+        agent_key: impl Into<String>,
+        input: Vec<Message>,
+        tools: ToolSnapshot,
+        run_context: RunContext<C>,
+    ) -> Self {
+        Self {
+            task_id: task_id.into(),
+            agent_key: agent_key.into(),
+            input,
+            tools,
+            run_context,
+            role: SubagentRole::default(),
+            tool_ceiling: None,
+            delegation_tools: Vec::new(),
+            tool_scope: None,
+            skill_filter: None,
+            policy: SubAgentPolicy::default(),
+            result_policy: ResultPolicy::default(),
+            retry_context: None,
+            notify_mode: None,
+            completion_parent: None,
+        }
+    }
+
+    /// Sets how the parent is told when this child finishes.
+    pub fn with_notify_mode(mut self, mode: NotifyMode) -> Self {
+        self.notify_mode = Some(mode);
+        self
+    }
+
+    /// Sets the parent key the completion is routed under.
+    pub fn with_completion_parent(mut self, parent_key: impl Into<String>) -> Self {
+        self.completion_parent = Some(parent_key.into());
+        self
+    }
+
+    /// Sets the delegation role.
+    pub fn with_role(mut self, role: SubagentRole) -> Self {
+        self.role = role;
+        self
+    }
+
+    /// Sets the inherited tool ceiling.
+    pub fn with_tool_ceiling(mut self, ceiling: ToolSnapshot) -> Self {
+        self.tool_ceiling = Some(ceiling);
+        self
+    }
+
+    /// Names the host's delegation tools for a leaf to drop.
+    pub fn with_delegation_tools(mut self, names: Vec<String>) -> Self {
+        self.delegation_tools = names;
+        self
+    }
+
+    /// Sets an authored capability scope that can only narrow the snapshot.
+    pub fn with_tool_scope(mut self, scope: tinyagents_definition::ToolScope) -> Self {
+        self.tool_scope = Some(scope);
+        self
+    }
+
+    /// Sets a `{skill}__` name prefix that can only narrow the snapshot.
+    pub fn with_skill_filter(mut self, skill: impl Into<String>) -> Self {
+        self.skill_filter = Some(skill.into());
+        self
+    }
+
+    /// Sets the timeout/retry/budget policy.
+    pub fn with_policy(mut self, policy: SubAgentPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Sets the result policy.
+    pub fn with_result_policy(mut self, policy: ResultPolicy) -> Self {
+        self.result_policy = policy;
+        self
+    }
+
+    /// Supplies the per-attempt context factory that enables retries.
+    pub fn with_retry_context(mut self, factory: AttemptContextFactory<C>) -> Self {
+        self.retry_context = Some(factory);
+        self
+    }
 }
 
 /// The one execution handed to a [`crate::subagent::SubagentExecutor`].
 pub struct SubagentExecution<C = ()> {
     /// The planner's complete, host-resolved execution description.
     pub prepared: PreparedSubagent<C>,
+    /// The authenticated durable identity selected by the validated request.
+    /// This is carried separately from `prepared.task_id`: task ids are only
+    /// unique inside a root/parent/thread scope and must not key host adapter
+    /// state by themselves.
+    pub task_key: SubagentTaskKey,
     /// Cooperative cancellation shared with the lifecycle owner.
     pub cancellation: CancellationToken,
+    /// Host-owned thread-turn authority retained across every executor await.
+    /// When set, the driver stops dispatch and persistence after ownership loss.
+    pub turn_fence: Option<Arc<dyn DeliveryFence>>,
 }
 
 /// A neutral reference to a host-owned artifact.
@@ -252,11 +539,53 @@ pub struct SubagentPause {
 pub struct SubagentIncomplete {
     /// A host-safe explanation for incomplete work.
     pub reason: String,
+    /// Typed cause, so consumers never parse `reason` (or the retired
+    /// `[SUBAGENT_INCOMPLETE]` text marker). Records written before this field
+    /// existed read as [`IncompleteKind::Unspecified`].
+    #[serde(default)]
+    pub kind: IncompleteKind,
 }
 
-/// The visible status of one subagent run.
+impl SubagentIncomplete {
+    /// An incomplete result with an unspecified cause.
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            kind: IncompleteKind::Unspecified,
+        }
+    }
+
+    /// An incomplete result with a typed cause.
+    pub fn with_kind(mut self, kind: IncompleteKind) -> Self {
+        self.kind = kind;
+        self
+    }
+}
+
+/// Why a subagent run ended incomplete.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IncompleteKind {
+    /// No typed cause was recorded.
+    #[default]
+    Unspecified,
+    /// The policy timeout elapsed; the child was cancelled.
+    Timeout,
+    /// A policy budget (calls, tokens) was exceeded.
+    BudgetExceeded,
+}
+
+/// The driver-level outcome of one subagent run: completed, paused for input,
+/// incomplete, or cancelled.
+///
+/// Not to be confused with the session crate's `TranscriptSubagentStatus` (a
+/// display projection read back from a transcript) or with the job / detached
+/// / task / run-ledger vocabularies; see the status-vocabulary map in the
+/// `tinyagents-tasks` README. Formerly named `SubagentStatus`; the serde wire format is
+/// unchanged.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum SubagentStatus {
+pub enum SubagentOutcomeKind {
     /// The subagent completed normally.
     Completed,
     /// The subagent stopped at a resumable input boundary.
@@ -266,6 +595,13 @@ pub enum SubagentStatus {
     /// Cooperative cancellation won the lifecycle race.
     Cancelled,
 }
+
+/// Former name of [`SubagentOutcomeKind`].
+///
+/// Renamed so it no longer collides with the session crate's transcript-view
+/// status. The serde wire format is unchanged.
+#[deprecated(since = "2.1.4", note = "renamed to `SubagentOutcomeKind`")]
+pub type SubagentStatus = SubagentOutcomeKind;
 
 /// The durable lifecycle action that made a run result observable.
 ///
@@ -339,40 +675,111 @@ impl SubagentRunResult {
 pub struct SubagentOutcome {
     /// Host-stable task identity.
     pub task_id: String,
+    /// Durable worker conversation id, when the host created one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_thread_id: Option<String>,
+    /// Host-resolved agent tier label, when the host has tiered agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    /// Explicit model override used for this run, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_override: Option<String>,
+    /// Known aggregate cost in USD, when the host can price every call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    /// Whether the known `cost_usd` value is billed or estimated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_source: Option<tinyagents_harness::cost::CostSource>,
+    /// Host-owned metadata that survives neutral persistence without making
+    /// this crate depend on a host-specific outcome taxonomy.
+    #[serde(flatten)]
+    pub extensions: BTreeMap<String, serde_json::Value>,
     /// Final visible text, retained even when cancellation arrives after work.
     pub output: String,
     /// Complete model history without lossy transcript conversion.
     pub history: Vec<Message>,
     /// Terminal or pause state.
-    pub status: SubagentStatus,
+    pub status: SubagentOutcomeKind,
     /// Model usage reported by the nested execution exactly once.
     pub usage: UsageTotals,
     /// Host-owned artifacts represented by neutral references.
     pub artifacts: Vec<ArtifactReference>,
+    /// Why the output failed the [`ResultPolicy::schema`], when one was set
+    /// and the output did not satisfy it. Informational: the status is
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_error: Option<String>,
+    /// Why an oversized output could not be stored as an artifact
+    /// ([`ResultOverflow::Artifact`](super::ResultOverflow)): no store was
+    /// configured, or the store failed. The output was truncated instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_error: Option<String>,
 }
 
 impl SubagentOutcome {
+    /// Adds a host-owned JSON field that must survive durable lifecycle
+    /// persistence without adding a parallel host outcome type.
+    pub fn with_extension(mut self, name: impl Into<String>, value: serde_json::Value) -> Self {
+        self.extensions.insert(name.into(), value);
+        self
+    }
+
+    /// Reads a host-owned extension by name.
+    pub fn extension(&self, name: &str) -> Option<&serde_json::Value> {
+        self.extensions.get(name)
+    }
+
+    /// A completed result with `output` and no history, usage or artifacts.
+    pub fn completed(task_id: impl Into<String>, output: impl Into<String>) -> Self {
+        Self {
+            output: output.into(),
+            status: SubagentOutcomeKind::Completed,
+            ..Self::cancelled(task_id)
+        }
+    }
+
     /// Creates the truthful empty result used when cancellation prevents a
     /// planner or executor from starting.
     pub fn cancelled(task_id: impl Into<String>) -> Self {
         Self {
             task_id: task_id.into(),
+            worker_thread_id: None,
+            tier: None,
+            model_override: None,
+            cost_usd: None,
+            cost_source: None,
+            extensions: BTreeMap::new(),
             output: String::new(),
             history: Vec::new(),
-            status: SubagentStatus::Cancelled,
+            status: SubagentOutcomeKind::Cancelled,
             usage: UsageTotals::default(),
             artifacts: Vec::new(),
+            schema_error: None,
+            artifact_error: None,
+        }
+    }
+
+    /// The truthful empty result for a run that ended without a complete
+    /// answer, with its typed cause.
+    pub fn incomplete(task_id: impl Into<String>, incomplete: SubagentIncomplete) -> Self {
+        Self {
+            status: SubagentOutcomeKind::Incomplete(incomplete),
+            ..Self::cancelled(task_id)
         }
     }
 
     pub(crate) fn cancelled_preserving(mut self) -> Self {
-        self.status = SubagentStatus::Cancelled;
+        self.status = SubagentOutcomeKind::Cancelled;
         self
     }
 }
 
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;
+
 /// The durable input to [`crate::subagent::SubagentPersistence::save_pause`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PersistedSubagentPause {
     /// Durable scoped lifecycle identity.
     pub key: SubagentTaskKey,
@@ -416,6 +823,7 @@ pub enum SubagentTerminalPersistenceDisposition {
 /// Typed lifecycle failures. Adapters classify their errors at the seam that
 /// owns them; the driver never flattens them into an untyped host error.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SubagentError {
     /// A supplied context or durable key violates neutral lifecycle invariants.
     InvalidRequest(String),
@@ -436,8 +844,23 @@ pub enum SubagentError {
         /// Task id returned by the planner or executor.
         actual: String,
     },
+    /// The executor failed in a way worth retrying (a transient provider or
+    /// transport failure). `tools_ran` says whether the attempt had already
+    /// executed tools: the driver retries such a failure only when the
+    /// [`SubAgentPolicy`] allows retry after tool calls. Adapters classify
+    /// their errors into this variant; an unclassified failure is
+    /// [`Self::Execution`] and is never retried.
+    Transient {
+        /// Host-safe description of the failure.
+        message: String,
+        /// Whether the failed attempt had executed any tool.
+        tools_ran: bool,
+    },
     /// Cooperative cancellation interrupted the lifecycle.
     Cancelled,
+    /// The spawn policy refused to admit this lifecycle; nothing was planned
+    /// or executed. A limit signal, not a failed or completed child.
+    SpawnRejected(super::SpawnRejection),
 }
 
 impl std::fmt::Display for SubagentError {
@@ -454,7 +877,13 @@ impl std::fmt::Display for SubagentError {
                 f,
                 "subagent host seam returned task id {actual:?}, expected {expected:?}"
             ),
+            Self::Transient { message, .. } => {
+                write!(f, "subagent execution failed transiently: {message}")
+            }
             Self::Cancelled => write!(f, "subagent execution was cancelled"),
+            Self::SpawnRejected(rejection) => {
+                write!(f, "subagent spawn was not admitted: {rejection}")
+            }
         }
     }
 }

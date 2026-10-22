@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use tinyagents_harness::{context::RunContext, runtime::AgentHarness};
 use tinyinference_llm::message::Message;
 
-use crate::{RuntimeError, ToolSnapshot, TranscriptPartial};
+use crate::turn_driver::TurnControls;
+use crate::{RuntimeError, TranscriptPartial};
+use tinyagents_harness::tool::ToolSnapshot;
 
 /// Immutable values passed from a [`crate::Session`] to one driver invocation.
 pub struct DriverRequest<C = ()> {
@@ -16,6 +18,9 @@ pub struct DriverRequest<C = ()> {
     pub run_context: RunContext<C>,
     /// Requests the driver's streaming execution path.
     pub stream: bool,
+    /// Host-neutral per-turn controls, from [`crate::TurnOptions::controls`].
+    /// Only a [`crate::turn_driver::TurnDriver`] acts on them.
+    pub controls: TurnControls,
 }
 
 /// A driver's complete or partial model result.
@@ -29,6 +34,13 @@ pub struct DriverOutcome {
     pub partial: Option<TranscriptPartial>,
     /// Whether the driver ended at an interruptible point.
     pub interrupted: bool,
+    /// Typed classification of how the run ended, when the driver has one
+    /// ([`HarnessDriver`] always does). Preferred by the session over the
+    /// outcome it would derive from `interrupted`, so a run that stopped on a
+    /// cap or a deferral is not reported as `Completed`.
+    pub outcome: Option<tinyagents_harness::terminal::TerminalOutcome>,
+    /// Tool calls executed during the turn, captured before their results are folded into history.
+    pub tool_outcomes: Vec<tinyagents_harness::turn_outcome::ToolCallOutcome>,
 }
 
 /// A driver error which may retain model history and display-only partial text.
@@ -38,6 +50,11 @@ pub struct DriverFailure {
     pub error: RuntimeError,
     /// Work produced before failure, safe for partial transcript persistence.
     pub partial: Option<DriverOutcome>,
+    /// Typed classification of the failure, when the driver has one
+    /// ([`HarnessDriver`] always does). Delivered to
+    /// [`crate::SessionHooks::on_terminal_outcome`]; `None` falls back to a
+    /// classification derived from the error.
+    pub outcome: Option<tinyagents_harness::terminal::TerminalOutcome>,
 }
 
 /// Object-safe model/tool-loop invocation boundary.
@@ -80,6 +97,7 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
             request.tools.specs(),
         ) {
             return Err(DriverFailure {
+                outcome: None,
                 error: RuntimeError::ToolSnapshotMismatch,
                 partial: None,
             });
@@ -102,38 +120,51 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
                 )
                 .await
         };
-        let output = partial
-            .run
-            .messages
-            .get(input_len..)
-            .unwrap_or_default()
-            .iter()
-            .rev()
-            .find_map(|message| matches!(message, Message::Assistant(_)).then(|| message.text()));
-        let outcome = DriverOutcome {
-            history: partial.run.messages,
-            output: output.clone(),
-            // The pinned harness retains partial model history but exposes no
-            // separate streamed text delta, reasoning, or iteration here. The
-            // accumulated final assistant text is the only display-safe value.
-            partial: partial
-                .error
-                .as_ref()
-                .and(output)
-                .map(TranscriptPartial::new),
-            interrupted: partial.run.paused.is_some(),
-        };
-        match partial.error {
-            Some(error) => Err(DriverFailure {
-                error: RuntimeError::Driver(error.to_string()),
-                partial: Some(outcome),
-            }),
-            None => Ok(outcome),
-        }
+        outcome_from_partial(partial, input_len)
     }
 }
 
-fn same_tools(left: &[tinytools::ToolSpec], right: &[tinytools::ToolSpec]) -> bool {
+/// Folds a collected harness run into the session driver's result shape.
+#[allow(clippy::result_large_err)] // `DriverFailure` is the session driver trait's own error type.
+pub(crate) fn outcome_from_partial(
+    partial: tinyagents_harness::agent_loop::PartialRunOutcome,
+    input_len: usize,
+) -> Result<DriverOutcome, DriverFailure> {
+    let output = partial
+        .run
+        .messages
+        .get(input_len..)
+        .unwrap_or_default()
+        .iter()
+        .rev()
+        .find_map(|message| matches!(message, Message::Assistant(_)).then(|| message.text()));
+    let terminal = partial.run.terminal.clone();
+    let outcome = DriverOutcome {
+        history: partial.run.messages,
+        output: output.clone(),
+        // The pinned harness retains partial model history but exposes no
+        // separate streamed text delta, reasoning, or iteration here. The
+        // accumulated final assistant text is the only display-safe value.
+        partial: partial
+            .error
+            .as_ref()
+            .and(output)
+            .map(TranscriptPartial::new),
+        interrupted: partial.run.paused.is_some(),
+        outcome: terminal.clone(),
+        tool_outcomes: Vec::new(),
+    };
+    match partial.error {
+        Some(error) => Err(DriverFailure {
+            outcome: terminal,
+            error: RuntimeError::Driver(error.to_string()),
+            partial: Some(outcome),
+        }),
+        None => Ok(outcome),
+    }
+}
+
+pub(crate) fn same_tools(left: &[tinytools::ToolSpec], right: &[tinytools::ToolSpec]) -> bool {
     left.len() == right.len()
         && left.iter().zip(right).all(|(left, right)| {
             left.name == right.name

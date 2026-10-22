@@ -29,7 +29,9 @@ the dependency tree.
   fresh, never-cancelled token; `cancel` latches it into the cancelled state
   (idempotent, irreversible); `is_cancelled` is a lock-free poll;
   `cancelled().await` resolves once cancellation is (or becomes) requested and
-  is cancel-safe for use in a `select!` arm.
+  is cancel-safe for use in a `select!` arm; `child_token` mints a linked
+  child (parent cancel cascades down, child cancel never propagates up or
+  sideways). `RunContext::child` hands each child run such a linked token.
 
 `CancelState` (the `Arc`-shared inner state) is private; callers only ever
 hold a `CancellationToken`.
@@ -40,7 +42,7 @@ hold a `CancellationToken`.
 | ---------- | -------------------------------------------------------------------- |
 | `types.rs` | `CancellationToken` and its private `CancelState` data layout.       |
 | `mod.rs`   | `CancellationToken` method implementations (`new`, `cancel`, `is_cancelled`, `cancelled`), `Default`/`Debug` impls. |
-| `test.rs`  | Unit tests for construction, cancellation, and cross-clone visibility. |
+| `mod_tests.rs` | Unit tests for construction, cancellation, and cross-clone visibility. |
 
 ## Operational constraints
 

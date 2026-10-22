@@ -144,8 +144,8 @@ pre-`completed_routes` behavior); the legacy fields are then cleared and
 Every bundled `Checkpointer` backend calls `normalize()` on every decode
 path — `get`, `get_scoped`, `list` (via a normalize-equivalent header
 projection that never needs a full-record decode; see "Listing" below),
-`state_history`, and `get_thread` — for all three backends
-(`InMemoryCheckpointer`, `FileCheckpointer`, `SqliteCheckpointer`). Callers
+`state_history`, and `get_thread` — for both backends
+(`InMemoryCheckpointer`, `DriverCheckpointer`). Callers
 outside this module therefore never observe a v1 record: `checkpoint.tasks`/
 `checkpoint.completed` are always populated and correct regardless of which
 format version the stored record was originally written in. Readers
@@ -338,83 +338,28 @@ Two backends are bundled:
 
 - `InMemoryCheckpointer` — an `Arc<Mutex<..>>` map, cheap to clone (clones share
   storage), for tests and ephemeral runs.
-- `FileCheckpointer` — a durable JSON/JSONL backend that survives process
-  restarts. Each thread maps to one append-only `<thread>.jsonl` file under a
-  base directory (one serialized `Checkpoint` per line, in insertion order).
-  `put` appends a line; `get`/`get_scoped`/`list` decode only the header
-  fields (thread/checkpoint/run ids, parent id, namespace, `version`, the v2
-  `tasks` set or the v1 `next_nodes`/`pending_activations` pair, metadata)
-  while scanning, and fully deserialize `State` only for the one winning
-  record — `list` never pays for a full-state decode of every row, and its
-  header decode resolves the same v2-or-v1 pending set `Checkpoint::to_metadata`
-  would, without needing `Checkpoint::normalize`'s full-record path.
-  `get`/`get_scoped`/`get_thread`/`state_history` all call
-  `Checkpoint::normalize` on the decoded record before returning it, so a v1
-  line on disk is indistinguishable from a v2 one to every caller.
-  `delete_*`/`prune` rewrite the file (and remove it once empty); `copy_thread`
-  copies the file with the `thread_id` rewritten on every record. Thread ids
-  are percent-escaped into a single safe filename component, and
-  `list_threads` recovers each canonical thread id from the first record
-  rather than un-escaping the filename. Pending writes are stored in a
-  per-thread append-only sidecar keyed by checkpoint id: `put_writes` appends
-  only the new-or-changed entries instead of read-modify-rewriting the whole
-  sidecar, and reads replay the same reducer `put_writes` itself uses to fold
-  repeated entries for a checkpoint id into the final ledger (an identity can
-  legitimately appear on more than one line across supersteps). Every
-  filesystem operation runs inside `tokio::task::spawn_blocking`. The
-  `Checkpointer` impl is bound by `State: Serialize + DeserializeOwned` (the
-  trait itself stays bound-free, so non-serializable states still use the
-  in-memory path). `Checkpoint<State>` derives serde's conditional
-  (de)serialization for this.
-- `SqliteCheckpointer` — a durable, queryable backend behind the optional
-  `sqlite` cargo feature (`rusqlite` with the `bundled` SQLite). Open a file with
-  `SqliteCheckpointer::open(path)` or an ephemeral database with
-  `SqliteCheckpointer::in_memory()`; clones share one `Arc<Mutex<Connection>>`, so
-  in-memory clones share data. Opening a connection sets `PRAGMA busy_timeout`,
-  `journal_mode = WAL`, and `synchronous = NORMAL` (mirroring
-  `tinyagents-session`'s store setup) so concurrent readers/writers don't
-  immediately hit `SQLITE_BUSY`. Every trait method runs its query inside
-  `tokio::task::spawn_blocking` against a cloned `Arc<Mutex<Connection>>`.
-  Each checkpoint is one row in a `checkpoints` table
-  keyed by `(thread_id, checkpoint_id)`: the full record is stored as JSON in a
-  `record` column, while the parent id, namespace (json), next nodes (json,
-  projected from `Checkpoint::to_metadata()`'s resolved `tasks`/v1-fallback —
-  never read from the legacy `next_nodes` field directly, which every v2
-  write leaves empty), source, step, run id, an interrupts flag,
-  `format_version`, and `created_at` are projected into their own columns so
-  thread listing and parent-chain walks are served by indexes
-  (`idx_checkpoints_thread`, `idx_checkpoints_lookup`) without deserializing whole
-  states. A monotonic `seq` primary key preserves insertion order, so `get(None)`
-  returns the most recent row, `get(Some(id))` the latest row with that id, and
-  `list` walks rows in insertion order — matching the other backends.
-  `state_history(limit)` walks the `parent_checkpoint_id` chain with a
-  recursive SQL CTE bounded by `LIMIT`, so requesting a short history from a
-  long-lived thread decodes only that many rows rather than every checkpoint
-  in the namespace. `get`/`get_scoped`/`get_thread`/`state_history` all call
-  `Checkpoint::normalize` on the decoded `record` JSON before returning it.
-  Like `FileCheckpointer`, the impl is bound by
-  `State: Serialize + DeserializeOwned`. Postgres backends remain future work.
+- `DriverCheckpointer` — a durable backend over a `tinystoragedrivers`
+  `DocumentStore`, so the host's storage backend (SQLite, MongoDB, memory)
+  holds the checkpoints. Each checkpoint is one document keyed by thread,
+  namespace and sequence; the full record is stored as JSON, and the parent
+  id, namespace, source, step and run id are projected into indexed fields so
+  listing and parent-chain walks do not decode whole states. `list` decodes
+  headers only (`Checkpoint<IgnoredAny>`), and `get`/`get_scoped`/`get_thread`/
+  `state_history` call `Checkpoint::normalize` on the decoded record so a v1
+  document is indistinguishable from a v2 one. Pending writes live in their
+  own collection keyed by checkpoint id. `put_with_writes` commits the
+  checkpoint and its writes in one atomic batch. The impl is bound by
+  `State: Serialize + DeserializeOwned`.
 
-  **`format_version`/`created_at` migration.** A database opened from a build
-  that predates these columns has a `checkpoints` table without them.
-  `SqliteCheckpointer::open`/`from_connection` runs a migration after the
-  idempotent `CREATE TABLE IF NOT EXISTS`: it reads `PRAGMA table_info
-  (checkpoints)` and, for each of `format_version`/`created_at` missing from
-  the result, issues `ALTER TABLE checkpoints ADD COLUMN … DEFAULT …`
-  (`format_version INTEGER NOT NULL DEFAULT 1`, `created_at INTEGER NOT NULL
-  DEFAULT 0`). A fresh database created by this build has both columns from
-  `SCHEMA` directly, so the migration is a no-op the very next time the same
-  database is opened. Existing rows backfill to `1`/`0` — the same visibly-unset
-  sentinels a v1 JSON record without a `version`/`created_at` key decodes to —
-  which is correct: a pre-migration row was, by construction, written by a
-  build that only ever produced checkpoint format v1 records.
+The earlier `FileCheckpointer` and `SqliteCheckpointer` were removed; see the
+CHANGELOG for the migration.
 
 ### `put_with_writes`
 
 `Checkpointer::put_with_writes(checkpoint, writes)` is a default trait method
 (so every out-of-tree backend keeps compiling unchanged) composed from `put`
-followed by `put_writes`. `SqliteCheckpointer` overrides it to run both
-statements inside one SQL transaction, so a boundary that needs to persist
+followed by `put_writes`. `DriverCheckpointer` overrides it to run both
+writes inside one atomic batch, so a boundary that needs to persist
 both a checkpoint and its pending writes commits them atomically instead of
 as two independent writes.
 

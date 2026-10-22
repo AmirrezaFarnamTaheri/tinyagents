@@ -285,7 +285,8 @@ struct Outcome {
     schema_bytes: usize,
     promoted_typed: bool,
     /// How the model reached `stock_quote`: `search` (via `tool_search`),
-    /// `bridge` (a `tool_call` straight off the manifest), `direct` (by name),
+    /// `manifest` (called by name straight off `tool_search`'s manifest, reported
+    /// as a `DeferredToolCall`), `direct` (by name, unreported),
     /// or `-` when it never did.
     route: &'static str,
     quoted: bool,
@@ -306,8 +307,9 @@ async fn run_once(
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("live", model.clone())
-        .set_default_model("live")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("live", model.clone()),
+        ))
         .register_tool(Arc::new(ReadNote))
         .push_middleware(Arc::new(Capture {
             listener: listener.clone(),
@@ -377,7 +379,7 @@ async fn run_once(
             .iter()
             .any(|event| matches!(event, AgentEvent::DeferredToolCall { .. }))
         {
-            "bridge"
+            "manifest"
         } else if quoted {
             "direct"
         } else {
@@ -455,7 +457,7 @@ async fn live_deferral_reaches_the_same_tool_with_fewer_prompt_tokens() {
     );
     // Any discovery route is a pass: some models search, some read the
     // manifest inside `tool_search`'s description and call the tool straight
-    // away (through `tool_call` or by name). All three are the design working.
+    // away by name. Both are the design working.
     assert_ne!(
         after.route, "-",
         "the deferred run should have discovered stock_quote"
@@ -506,8 +508,9 @@ async fn live_search_promotes_typed_schema_before_the_real_call() {
     });
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("live", model.clone())
-        .set_default_model("live")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("live", model.clone()),
+        ))
         .register_tool(Arc::new(LiveTool {
             name: "stock_quote",
             description: "Fetch the trading price of a stock ticker.",

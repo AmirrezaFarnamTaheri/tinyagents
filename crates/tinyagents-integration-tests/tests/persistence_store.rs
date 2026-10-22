@@ -1,11 +1,16 @@
-//! Regression tests for the harness store backends and the file
-//! checkpointer's on-disk durability.
+//! Regression tests for the driver-backed checkpointer and append store: the
+//! identity questions the old file backends once got wrong (thread ids that
+//! differ only by case, the empty thread id, offsets handed out by several
+//! handles on one store) must stay right on every backend.
+
+mod common;
 
 use std::sync::Arc;
 
-use tinyagents_graph::checkpoint::{Checkpoint, Checkpointer, FileCheckpointer, PendingActivation};
+use common::storage;
+use tinyagents_graph::checkpoint::{Checkpoint, Checkpointer, PendingActivation};
 use tinyagents_harness::ids::NodeId;
-use tinyagents_harness::store::{AppendStore, FileStore, JsonlAppendStore};
+use tinyagents_harness::store::{AppendStore, DriverAppendStore};
 
 fn checkpoint(thread: &str, id: &str) -> Checkpoint<i32> {
     Checkpoint::new(
@@ -21,15 +26,13 @@ fn checkpoint(thread: &str, id: &str) -> Checkpoint<i32> {
     .with_metadata(serde_json::json!({ "source": "loop", "step": 1 }))
 }
 
-// ── SESS-5: thread-id escaping ───────────────────────────────────────────────
-
-/// Thread ids that differ only by case must not share a file. On APFS/NTFS
-/// `Alice.jsonl` and `alice.jsonl` are the same file, so the old
-/// `[A-Za-z0-9._-]` safe set silently merged two unrelated lineages.
+/// Thread ids that differ only by case must not share state: on a
+/// case-insensitive filesystem `Alice` and `alice` were the same file, which
+/// silently merged two unrelated lineages.
 #[tokio::test]
-async fn thread_ids_differing_only_by_case_do_not_share_a_file() {
+async fn thread_ids_differing_only_by_case_do_not_share_state() {
     let dir = tempfile::tempdir().unwrap();
-    let cp = FileCheckpointer::<i32>::new(dir.path());
+    let cp = storage::checkpointer::<i32>(dir.path());
     cp.put(checkpoint("Alice", "upper")).await.unwrap();
     cp.put(checkpoint("alice", "lower")).await.unwrap();
 
@@ -39,27 +42,13 @@ async fn thread_ids_differing_only_by_case_do_not_share_a_file() {
     assert_eq!(lower.len(), 1, "`alice` holds only its own checkpoint");
     assert_eq!(upper[0].checkpoint_id, "upper");
     assert_eq!(lower[0].checkpoint_id, "lower");
-
-    // And the filenames themselves differ case-insensitively.
-    let mut names: Vec<String> = std::fs::read_dir(dir.path())
-        .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().to_lowercase())
-        .collect();
-    names.sort();
-    names.dedup();
-    assert_eq!(
-        names.len(),
-        2,
-        "two distinct case-folded filenames: {names:?}"
-    );
 }
 
-/// The empty thread id escapes to `""`, so its file is the dotfile `.jsonl`,
-/// whose `Path::extension()` is `None` — it used to be invisible to listing.
+/// The empty thread id is a valid thread and must be visible to listing.
 #[tokio::test]
 async fn the_empty_thread_id_is_visible_to_list_threads() {
     let dir = tempfile::tempdir().unwrap();
-    let cp = FileCheckpointer::<i32>::new(dir.path());
+    let cp = storage::checkpointer::<i32>(dir.path());
     cp.put(checkpoint("", "c1")).await.unwrap();
     let threads = cp.list_threads().await.unwrap();
     assert!(
@@ -68,56 +57,57 @@ async fn the_empty_thread_id_is_visible_to_list_threads() {
     );
 }
 
-// ── SESS-4: torn writes ──────────────────────────────────────────────────────
-
-/// A crash mid-append leaves a partial final line. It used to make the whole
-/// thread permanently unreadable; now the torn tail is discarded and every
-/// intact record in front of it still loads.
+/// Separators, dots and non-ASCII are ordinary characters in a thread id.
 #[tokio::test]
-async fn a_torn_trailing_line_does_not_destroy_the_thread() {
+async fn thread_ids_with_separators_and_unicode_round_trip() {
     let dir = tempfile::tempdir().unwrap();
-    let cp = FileCheckpointer::<i32>::new(dir.path());
-    cp.put(checkpoint("t", "c1")).await.unwrap();
-    cp.put(checkpoint("t", "c2")).await.unwrap();
-
-    let path = std::fs::read_dir(dir.path())
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .find(|p| p.to_string_lossy().ends_with("t.jsonl"))
-        .expect("thread file");
-    let mut text = std::fs::read_to_string(&path).unwrap();
-    text.push_str("{\"thread_id\":\"t\",\"checkpoint");
-    std::fs::write(&path, text).unwrap();
-
-    let listed = cp.list("t").await.expect("a torn tail is survivable");
-    assert_eq!(listed.len(), 2, "both intact records still load");
+    let cp = storage::checkpointer::<i32>(dir.path());
+    let ids = ["a/b", "a\\b", "..", "con", "naïve ☃", "with space", "x.y.z"];
+    for (n, id) in ids.iter().enumerate() {
+        cp.put(checkpoint(id, &format!("c{n}"))).await.unwrap();
+    }
+    let mut listed = cp.list_threads().await.unwrap();
+    listed.sort();
+    let mut expected: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
+    expected.sort();
+    assert_eq!(listed, expected);
+    for (n, id) in ids.iter().enumerate() {
+        let checkpoints = cp.list(id).await.unwrap();
+        assert_eq!(checkpoints.len(), 1, "{id}");
+        assert_eq!(checkpoints[0].checkpoint_id, format!("c{n}"));
+    }
 }
 
-/// One poisoned file must not break listing for every other thread.
+/// One undecodable record must not break listing for every other thread.
 #[tokio::test]
-async fn one_unreadable_thread_file_does_not_break_list_threads() {
+async fn one_undecodable_record_does_not_break_other_threads() {
+    use tinystoragedrivers_core::{DocumentStore, Precondition};
     let dir = tempfile::tempdir().unwrap();
-    let cp = FileCheckpointer::<i32>::new(dir.path());
+    let scoped = storage::sqlite(dir.path(), "checkpoints.sqlite");
+    let docs = storage::docs(&scoped);
+    let cp = tinyagents_graph::checkpoint::DriverCheckpointer::<i32>::new(docs.clone());
     cp.put(checkpoint("good", "c1")).await.unwrap();
-    std::fs::write(dir.path().join("poison.jsonl"), "not json at all\n").unwrap();
-
-    let threads = cp
-        .list_threads()
-        .await
-        .expect("listing survives one bad file");
+    docs.put(
+        "graph_checkpoints",
+        "poison",
+        serde_json::json!({"thread": "bad", "namespace": "", "seq": 0, "checkpoint_id": "x", "record": {"nope": true}}),
+        Precondition::None,
+    )
+    .await
+    .unwrap();
+    let threads = cp.list_threads().await.expect("listing survives");
     assert!(threads.iter().any(|t| t == "good"));
+    assert_eq!(cp.list("good").await.unwrap().len(), 1);
 }
 
-// ── SESS-10: JsonlAppendStore offsets ────────────────────────────────────────
-
-/// Two store instances over one directory must keep handing out fresh offsets.
-/// The old per-instance counter learned the length once, so a second instance
-/// re-issued offsets the first had already used.
+/// Two store handles over one database must keep handing out fresh offsets:
+/// a per-instance counter would re-issue offsets the first had already used.
 #[tokio::test]
 async fn offsets_stay_unique_across_store_instances() {
     let dir = tempfile::tempdir().unwrap();
-    let first = JsonlAppendStore::new(dir.path());
-    let second = JsonlAppendStore::new(dir.path());
+    let streams = || Arc::clone(storage::sqlite(dir.path(), "journal.sqlite").streams());
+    let first = DriverAppendStore::new(streams());
+    let second = DriverAppendStore::new(streams());
 
     let mut offsets = Vec::new();
     offsets.push(first.append("s", serde_json::json!(0)).await.unwrap());
@@ -133,50 +123,17 @@ async fn offsets_stay_unique_across_store_instances() {
     assert_eq!(second.len("s").await.unwrap(), 4);
 }
 
-/// `read_from` resolves by offset, not by position — the documented contract,
-/// and what the in-memory backend already did.
+/// `read_from` resolves by offset, not by position.
 #[tokio::test]
 async fn read_from_resolves_by_offset_not_position() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = JsonlAppendStore::new(dir.path());
-    for i in 0..4 {
-        store.append("s", serde_json::json!(i)).await.unwrap();
+    let store = DriverAppendStore::new(Arc::clone(storage::memory().streams()));
+    for n in 0..5 {
+        store.append("s", serde_json::json!(n)).await.unwrap();
     }
-    let window = store.read_from("s", 2).await.unwrap();
+    let tail = store.read_from("s", 3).await.unwrap();
     assert_eq!(
-        window.iter().map(|(o, _)| *o).collect::<Vec<_>>(),
-        vec![2, 3],
-        "the window and the offsets labelling it must agree"
+        tail,
+        vec![(3, serde_json::json!(3)), (4, serde_json::json!(4))]
     );
-    assert_eq!(window[0].1, serde_json::json!(2));
-}
-
-/// A stream whose offsets are sparse (a hand-written or partially pruned log)
-/// must still window correctly. Positional `.skip` gets this wrong.
-#[tokio::test]
-async fn read_from_handles_a_sparse_offset_sequence() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("sparse.jsonl");
-    std::fs::create_dir_all(dir.path()).unwrap();
-    std::fs::write(
-        &path,
-        "{\"offset\":10,\"value\":\"a\",\"created_at_ms\":0}\n\
-         {\"offset\":11,\"value\":\"b\",\"created_at_ms\":0}\n",
-    )
-    .unwrap();
-    let store = JsonlAppendStore::new(dir.path());
-    let window = store.read_from("sparse", 11).await.unwrap();
-    assert_eq!(
-        window.iter().map(|(o, _)| *o).collect::<Vec<_>>(),
-        vec![11],
-        "offset 11 selects the entry labelled 11, not the entry at index 11"
-    );
-    // A new append continues from the file's own numbering.
-    assert_eq!(
-        store
-            .append("sparse", serde_json::json!("c"))
-            .await
-            .unwrap(),
-        12
-    );
+    assert!(store.read_from("s", 5).await.unwrap().is_empty());
 }

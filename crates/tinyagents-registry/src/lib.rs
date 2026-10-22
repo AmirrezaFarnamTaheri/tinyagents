@@ -29,11 +29,12 @@ pub mod capability;
 pub mod catalog;
 pub mod component;
 pub mod diagnostics;
+pub mod pricing;
 pub mod router;
 
 pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
-pub use capability::CapabilityRegistry;
+pub use capability::{Capability, CapabilityRegistry};
 pub use catalog::{
     ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelCatalogSnapshot, ModelCatalogSource,
 };

@@ -1,5 +1,10 @@
 # graph::subagent_node
 
+> **Deprecated.** `SubAgentNode` and `subagent_node` are marked
+> `#[deprecated(note = "use tinyagents_orchestration SubagentDriver")]`. Graph
+> cannot depend on orchestration, so the node cannot adapt the driver; its
+> behaviour is unchanged. Use `SubagentDriver` for new work.
+
 Sub-agent nodes — the graph node that delegates to a harness *agent* (a
 model-driven agent loop) invoked through an explicit host capability.
 
@@ -41,9 +46,15 @@ one fails closed rather than silently fabricating agent behavior.
   the harness `RetryPolicy` for backoff. Default is a conservative *single
   attempt, no timeout, no budget* so a node never silently re-runs a
   non-idempotent agent.
-- `SubAgentBudget` — optional cap on model/tool call counts, enforced *after*
-  the child run returns; violating it fails the node with
-  `TinyAgentsError::LimitExceeded`.
+- `SubAgentBudget` — optional caps on model/tool calls and input/output tokens,
+  checked *after* the child run returns; violating one fails the node with
+  `TinyAgentsError::LimitExceeded`. `apply_call_caps` tightens a `RunConfig`
+  for in-run enforcement; `max_cost` is carried but not enforced here
+  (`to_budget_limits` hands it to the harness `BudgetMiddleware`).
+  `SubAgentPolicy::retry_after_tool_calls` (default `false`) is honoured by the
+  orchestration paths; the graph node cannot see whether a failed attempt ran
+  tools. The policy types are re-exported from
+  `tinyagents_orchestration::subagent`.
 - `InputMapper<State>` / `OutputMapper<Update>` — type aliases for the parent↔
   child mapping closures.
 
@@ -53,7 +64,7 @@ one fails closed rather than silently fabricating agent behavior.
 | --- | --- |
 | `types.rs` | `AgentInvocation`, `AgentInvocationBinding`, `AgentInvoker`, `SubAgentInput`, `SubAgentOutput`, `SubAgentBudget`, `SubAgentPolicy`, `InputMapper`, `OutputMapper`, `SubAgentNode`. |
 | `mod.rs` | `SubAgentNode` builders, `subagent_node` (the handler lowering), retry/timeout/budget execution (`run_with_policy`), and child-run recording. |
-| `test.rs` | Unit tests (delegation, mapper wiring, retry/timeout behavior, budget enforcement, child-run recording). |
+| `mod_tests.rs` | Unit tests (delegation, mapper wiring, retry/timeout behavior, budget enforcement, child-run recording). |
 
 ## Operational constraints
 

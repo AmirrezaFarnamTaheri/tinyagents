@@ -9,11 +9,9 @@
 //! Application-specific worktree/sandbox providers implement
 //! [`WorkspaceIsolation`] themselves.
 
-mod git;
 mod policy;
 mod types;
 
-pub use git::*;
 pub use policy::enforce_workspace_path;
 pub use types::*;
 
@@ -105,4 +103,5 @@ impl WorkspaceIsolation for SharedRootWorkspace {
 }
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;

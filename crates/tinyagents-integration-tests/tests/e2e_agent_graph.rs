@@ -41,44 +41,13 @@ struct AgentGraphState {
 
 /// Builds an assistant response that asks for a single tool call.
 fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> ModelResponse {
-    ModelResponse {
-        message: AssistantMessage {
-            id: Some(format!("msg-{id}")),
-            content: Vec::new(),
-            tool_calls: vec![ToolCall::new(id, name, arguments)],
-            usage: Some(Usage::new(6, 2)),
-            origin: None,
-        },
-        usage: Some(Usage::new(6, 2)),
-        finish_reason: Some("tool_calls".to_string()),
-        raw: None,
-        resolved_model: None,
-        continue_turn: None,
-        served_from_cache: false,
-        correlation: None,
-        resolved_route: None,
-    }
+    tinyagents_harness::testkit::tool_call_response(ToolCall::new(id, name, arguments))
+        .with_usage(Usage::new(6, 2))
 }
 
 /// Builds a plain-text final assistant response.
 fn text_response(text: &str, input: u64, output: u64) -> ModelResponse {
-    ModelResponse {
-        message: AssistantMessage {
-            id: None,
-            content: vec![ContentBlock::Text(text.to_string())],
-            tool_calls: Vec::new(),
-            usage: Some(Usage::new(input, output)),
-            origin: None,
-        },
-        usage: Some(Usage::new(input, output)),
-        finish_reason: Some("stop".to_string()),
-        raw: None,
-        resolved_model: None,
-        continue_turn: None,
-        served_from_cache: false,
-        correlation: None,
-        resolved_route: None,
-    }
+    tinyagents_harness::testkit::text_response(text).with_usage(Usage::new(input, output))
 }
 
 #[tokio::test]
@@ -95,14 +64,15 @@ async fn graph_node_drives_harness_agent_with_tool_loop() {
     // real tool, and attach the usage middleware.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model(
-            "scripted",
-            Arc::new(ScriptedModel::new(vec![
-                tool_call_response("call-1", "lookup_user", json!({ "user_id": "u-1" })),
-                text_response("resolved via lookup", 4, 3),
-            ])),
-        )
-        .set_default_model("scripted")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "scripted",
+                Arc::new(ScriptedModel::new(vec![
+                    tool_call_response("call-1", "lookup_user", json!({ "user_id": "u-1" })),
+                    text_response("resolved via lookup", 4, 3),
+                ])),
+            ),
+        ))
         .register_tool(Arc::new(FakeTool::returning("lookup_user", "Ada Lovelace")))
         .push_middleware(usage_mw.clone());
     let harness = Arc::new(harness);

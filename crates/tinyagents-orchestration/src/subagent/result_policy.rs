@@ -1,0 +1,288 @@
+//! Result policy: how much of a child's final output reaches its parent, and
+//! whether it is checked against a schema.
+//!
+//! The default policy changes nothing. A character cap trims the visible text
+//! to its head and tail around an explicit omission marker; a byte threshold
+//! can trigger artifact storage without changing the visible text. With
+//! [`ResultOverflow::Artifact`] the full output is handed to a host
+//! [`ArtifactStore`] when either limit is exceeded, and the parent gets a
+//! path-free [`ArtifactReference`]. An optional JSON schema is checked with the same
+//! structural validator the tool-call boundary uses (`type`, `properties`,
+//! `required`, `additionalProperties`, `items`, `enum`; no `$ref` or
+//! combinators) and a mismatch is *reported* in
+//! [`AppliedResult::schema_error`], never turned into a failure.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde_json::Value;
+
+use super::ArtifactReference;
+
+const LOG_PREFIX: &str = "[subagent-result-policy]";
+
+/// Whether `task_id` can be used as a single filename component.
+///
+/// The allow-list intentionally accepts only ids minted by this harness or
+/// short test labels, so path separators, dots and encoded traversal forms are
+/// rejected before a host joins the id to a storage directory.
+pub fn is_safe_task_id(task_id: &str) -> bool {
+    !task_id.is_empty()
+        && task_id.len() <= 128
+        && task_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+/// Renders a truthful failure envelope around delegated work that did not
+/// execute. The parent must not interpret partial text as a completed result.
+pub fn frame_unexecuted_outcome(tool_name: &str, error: &str) -> String {
+    format!(
+        "{tool_name} failed and did not complete — no work was performed and no results were produced. Do NOT treat this as success or fabricate an output; report the failure to the user. Error: {error}"
+    )
+}
+
+/// Detects a model response that consists of an unexecuted tool-call payload
+/// without usable prose. Such a stub is not a result that a parent can report.
+pub fn is_unexecuted_tool_call_stub(output: &str) -> bool {
+    use tinyagents_harness::tinytools_agent::dialect::{
+        contains_tool_call_payload, strip_tool_calls_from_response,
+    };
+    if !contains_tool_call_payload(output) {
+        return false;
+    }
+    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(output.trim())
+        && map.contains_key("tool_calls")
+    {
+        return true;
+    }
+    !strip_tool_calls_from_response(output)
+        .chars()
+        .any(char::is_alphanumeric)
+}
+
+/// What to do when a configured result limit is exceeded.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ResultOverflow {
+    /// Keep the head and tail with an omission marker.
+    #[default]
+    Truncate,
+    /// Store the full output via the [`ArtifactStore`], keep any character-capped
+    /// preview and the reference. Falls back to the character cap without a store.
+    Artifact,
+}
+
+/// Host seam that persists an oversized output and names it neutrally.
+#[async_trait]
+pub trait ArtifactStore: Send + Sync {
+    /// Stores `content` for `task_id`; the reference must carry no path or URL.
+    async fn store(&self, task_id: &str, content: &str) -> Result<ArtifactReference, String>;
+}
+
+/// Cap, overflow behaviour and optional schema for a child's final output.
+#[derive(Clone, Default)]
+pub struct ResultPolicy {
+    /// Most characters of output kept visible; `None` is uncapped.
+    pub max_chars: Option<usize>,
+    /// UTF-8 byte length above which artifact overflow is triggered; `None` is disabled.
+    pub max_bytes: Option<usize>,
+    /// What happens to output beyond the cap.
+    pub overflow: ResultOverflow,
+    /// JSON schema the final output must satisfy, when set.
+    pub schema: Option<Value>,
+    /// Where [`ResultOverflow::Artifact`] puts the full output.
+    pub artifact_store: Option<Arc<dyn ArtifactStore>>,
+}
+
+impl std::fmt::Debug for ResultPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResultPolicy")
+            .field("max_chars", &self.max_chars)
+            .field("max_bytes", &self.max_bytes)
+            .field("overflow", &self.overflow)
+            .field("schema", &self.schema)
+            .field("artifact_store", &self.artifact_store.is_some())
+            .finish()
+    }
+}
+
+/// The policy applied to one output.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AppliedResult {
+    /// The text the parent sees.
+    pub text: String,
+    /// Characters dropped from the middle; `0` when nothing was cut.
+    pub omitted_chars: usize,
+    /// The stored full output, for [`ResultOverflow::Artifact`].
+    pub artifact: Option<ArtifactReference>,
+    /// Why the output does not satisfy [`ResultPolicy::schema`].
+    pub schema_error: Option<String>,
+    /// Why an artifact was wanted but not stored (no store, or store failed).
+    pub artifact_error: Option<String>,
+}
+
+impl ResultPolicy {
+    /// A policy that changes nothing.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Caps the visible output at `max_chars` characters.
+    pub fn with_max_chars(mut self, max_chars: usize) -> Self {
+        self.max_chars = Some(max_chars);
+        self
+    }
+
+    /// Triggers artifact overflow when the full output exceeds `max_bytes` UTF-8 bytes.
+    /// This threshold never truncates bytes; visible text is capped only by `max_chars`.
+    pub fn with_max_bytes(mut self, max_bytes: usize) -> Self {
+        self.max_bytes = Some(max_bytes);
+        self
+    }
+
+    /// Chooses the overflow behaviour.
+    pub fn with_overflow(mut self, overflow: ResultOverflow) -> Self {
+        self.overflow = overflow;
+        self
+    }
+
+    /// Requires the final output to satisfy `schema`.
+    pub fn with_schema(mut self, schema: Value) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
+    /// Sets the store used by [`ResultOverflow::Artifact`].
+    pub fn with_artifact_store(mut self, store: Arc<dyn ArtifactStore>) -> Self {
+        self.artifact_store = Some(store);
+        self
+    }
+
+    /// Whether applying this policy can alter or annotate an output.
+    pub fn is_active(&self) -> bool {
+        self.max_chars.is_some()
+            || (self.max_bytes.is_some() && self.overflow == ResultOverflow::Artifact)
+            || self.schema.is_some()
+    }
+
+    /// Applies the policy to `full`. `structured` is the run's already parsed
+    /// value, preferred over re-parsing `full` for schema validation.
+    pub async fn apply(
+        &self,
+        task_id: &str,
+        full: &str,
+        structured: Option<&Value>,
+    ) -> AppliedResult {
+        let mut applied = AppliedResult {
+            text: full.to_owned(),
+            ..AppliedResult::default()
+        };
+        if let Some(schema) = &self.schema {
+            applied.schema_error = validate_output(schema, full, structured);
+            if let Some(error) = &applied.schema_error {
+                tracing::debug!("{LOG_PREFIX} schema_error task_id={task_id} error={error}");
+            }
+        }
+        let char_overflow = if let Some(max) = self.max_chars {
+            let (text, omitted) = truncate_head_tail(full, max);
+            if omitted > 0 {
+                applied.text = text;
+                applied.omitted_chars = omitted;
+            }
+            omitted > 0
+        } else {
+            false
+        };
+        let byte_overflow = self.max_bytes.is_some_and(|max| full.len() > max);
+        if self.overflow == ResultOverflow::Artifact && (char_overflow || byte_overflow) {
+            match &self.artifact_store {
+                Some(store) => match store.store(task_id, full).await {
+                    Ok(reference) => applied.artifact = Some(reference),
+                    Err(error) => {
+                        tracing::warn!("{LOG_PREFIX} artifact_store_failed task_id={task_id}");
+                        applied.artifact_error = Some(format!("artifact store failed: {error}"));
+                    }
+                },
+                None => {
+                    tracing::warn!("{LOG_PREFIX} artifact_without_store task_id={task_id}");
+                    applied.artifact_error = Some("no artifact store configured".to_owned());
+                }
+            }
+        }
+        applied
+    }
+}
+
+/// Shortens `text` to at most `max_chars` characters *including* a
+/// `[… N chars omitted …]` marker between its head and tail; returns the text
+/// and `N` (`0` when it already fits). Counts characters, never splitting a
+/// code point. When `max_chars` leaves no room for the marker, the text is
+/// hard-cut to its first `max_chars` characters (the returned count still
+/// reports what was dropped), so the cap always holds.
+pub fn truncate_head_tail(text: &str, max_chars: usize) -> (String, usize) {
+    let total = text.chars().count();
+    if total <= max_chars {
+        return (text.to_owned(), 0);
+    }
+    let marker = |omitted: usize| format!("\n[… {omitted} chars omitted …]\n");
+    // The marker's width depends on the omitted count, which depends on how
+    // much the marker leaves room for: iterate to a fixed point.
+    let mut kept = max_chars;
+    let mut omitted = total - kept;
+    for _ in 0..4 {
+        let room = max_chars.saturating_sub(marker(omitted).chars().count());
+        if room == kept {
+            break;
+        }
+        kept = room;
+        omitted = total - kept;
+    }
+    if kept == 0 {
+        let end = text
+            .char_indices()
+            .nth(max_chars)
+            .map_or(text.len(), |(i, _)| i);
+        return (text[..end].to_owned(), total - max_chars);
+    }
+    let head = kept.div_ceil(2);
+    let tail = kept - head;
+    let head_end = text.char_indices().nth(head).map_or(text.len(), |(i, _)| i);
+    let tail_start = text
+        .char_indices()
+        .nth(total - tail)
+        .map_or(text.len(), |(i, _)| i);
+    (
+        format!(
+            "{}{}{}",
+            &text[..head_end],
+            marker(omitted),
+            &text[tail_start..]
+        ),
+        omitted,
+    )
+}
+
+fn validate_output(schema: &Value, text: &str, structured: Option<&Value>) -> Option<String> {
+    let parsed;
+    let value = match structured {
+        Some(value) => value,
+        None => match serde_json::from_str::<Value>(text.trim()) {
+            Ok(value) => {
+                parsed = value;
+                &parsed
+            }
+            Err(error) => return Some(format!("output is not valid JSON: {error}")),
+        },
+    };
+    match tinyinference_llm::tool::validate_json_value(schema, value, "output") {
+        Ok(()) => None,
+        Err(tinyinference_llm::Error::Validation(message)) => Some(message),
+        Err(other) => Some(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+#[path = "result_policy_tests.rs"]
+mod tests;

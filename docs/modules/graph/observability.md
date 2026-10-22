@@ -328,6 +328,15 @@ exporter
     .await?;
 ```
 
+Hosts that provide their own transport can call
+`tinyagents_graph::build_graph_langfuse_batch(trace, &observations, metadata_fn)`.
+This pure builder requires no `LangfuseClient`, credentials, environment
+variables, or network access. It returns the same ingestion payload used by
+`GraphLangfuseExporter`, including graph hierarchy and health metadata. The
+optional span metadata hook follows the exporter's override rules. An empty
+journal returns a validation error. The host then hands the payload to its
+own export sink, retaining ownership of endpoint and authentication policy.
+
 The batch maps the graph run onto Langfuse's trace/observation model:
 
 - one `trace-create` (id defaults to the run's `root_run_id`; name defaults to

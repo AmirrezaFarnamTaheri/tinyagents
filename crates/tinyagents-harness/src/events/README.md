@@ -25,6 +25,10 @@ snapshot rather than a stream.
   sub-agent recursion. Most `*Started`/`*Completed` pairs also have a
   `*Failed` terminal partner so an exporter pairing calls by id never sees an
   open span for a call that actually errored.
+  Run boundaries carry a typed [`TerminalOutcome`](crate::terminal::TerminalOutcome) on
+  `RunCompleted`/`RunFailed`, and `TurnStarted`/`TurnCompleted`/
+  `MessageAppended` let a consumer mirror the transcript turn by turn; see
+  `docs/modules/harness/terminal-outcome.md`.
 - [`EventRecord`] — an [`AgentEvent`] paired with a stable [`EventId`] and a
   monotonic stream `offset`.
 - [`EventListener`] — the `Send + Sync` trait a pluggable observer
@@ -51,7 +55,7 @@ snapshot rather than a stream.
 | --- | --- |
 | `types.rs` | Every public type listed above, including the full `AgentEvent` variant vocabulary; this is the module's entire public surface. |
 | `mod.rs` | Behavior: `EventSink`'s ordered-dispatch/panic-safety implementation, `RecordingListener`/`EventJournal`/`HarnessRunStatus` impls, and poisoned-lock recovery helpers shared across them. |
-| `test.rs` | Fan-out/replay ordering (including under concurrency and a panicking listener), poisoned-lock recovery, `HarnessRunStatus` transitions, and `AgentEvent` serde round-trips. |
+| `mod_tests.rs` | Fan-out/replay ordering (including under concurrency and a panicking listener), poisoned-lock recovery, `HarnessRunStatus` transitions, and `AgentEvent` serde round-trips. |
 
 ## Operational constraints
 
@@ -77,3 +81,14 @@ snapshot rather than a stream.
   callers construct one `EventSink`, subscribe whatever combination of a
   `RecordingListener` (tests), an `EventJournal` (in-process replay), and an
   `observability` sink (durability) they need, and emit through the sink.
+
+## Tool progress
+
+`AgentEvent::ToolProgressDetail { call_id, message, fraction, partial }` (wire kind
+`tool.progress`) is emitted while a tool is still running, when it reports
+through `tinytools::ToolRunContext::report_progress`. Every progress event for a
+call lies between its `ToolStarted` and its terminal `ToolCompleted` /
+`ToolFailed`; updates reported after the call settles are dropped. Calls in one
+concurrent batch interleave. A flooding tool is coalesced (default 32 events per
+second per call), so the stream is a thinned view; the held final update is flushed when the call settles, even past the window limit. The
+mechanics live in [`../tool/progress/mod.rs`](../tool/progress/mod.rs).

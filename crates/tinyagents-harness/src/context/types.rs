@@ -51,6 +51,8 @@ pub(crate) struct TerminalRunSummary {
     /// Names of calls that reached a tool executor, in execution order.
     /// Mirrors [`crate::middleware::AgentRun::executed_tools`].
     pub(crate) executed_tools: Vec<String>,
+    /// Per-tool outcome records forwarded to the learning sink.
+    pub(crate) tool_outcomes: Vec<crate::host::ToolOutcomeRecord>,
 }
 
 impl TerminalRunSummary {
@@ -60,6 +62,7 @@ impl TerminalRunSummary {
             text: run.text(),
             usage: run.usage,
             executed_tools: run.executed_tools.clone(),
+            tool_outcomes: run.tool_outcomes.clone(),
         }
     }
 }
@@ -339,6 +342,9 @@ pub struct RunContext<Ctx = ()> {
     /// shared per-run bookkeeping (a middleware's in-flight reservation, say)
     /// can be keyed on it. Read it with [`RunContext::instance_id`].
     pub(crate) instance_id: u64,
+    /// Live marker used by middleware to prune state after a cancelled run
+    /// drops its context without reaching a terminal lifecycle hook.
+    pub(crate) lifecycle: std::sync::Arc<()>,
     /// The declarative configuration this context was built from.
     pub config: RunConfig,
     /// Arbitrary user-supplied run data.
@@ -347,6 +353,16 @@ pub struct RunContext<Ctx = ()> {
     /// session. `None` lets a standalone harness infer its initial prefix.
     /// A child context starts at `None` for its own conversation.
     pub frozen_system_prefix_len: Option<usize>,
+    /// Capability profile of the model the next call is expected to reach.
+    ///
+    /// The agent loop previews model resolution and sets this just before
+    /// `before_model` middleware runs, so middleware can shape what it adds
+    /// for the target (for example
+    /// [`push_ephemeral_instruction`](crate::middleware::push_ephemeral_instruction)
+    /// avoids new system messages on a model that hoists them). `None` when no
+    /// model has been previewed — outside the agent loop, or when only a host
+    /// routing decision (made after `before_model`) can name the model.
+    pub model_profile: Option<tinyinference_llm::model::ModelProfile>,
     /// Registry of named long-term stores.
     pub stores: StoreRegistry,
     /// Optional hierarchical long-term store handed to every tool this run
@@ -369,6 +385,11 @@ pub struct RunContext<Ctx = ()> {
     /// with [`RunContext::with_state_view`] instead. Shared with child
     /// contexts, which run against the same application state.
     pub state_view: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+    /// Typed host extension slots: per-run host values (turn origin,
+    /// workspace handle, progress sink, ...) keyed by type. Replaces ambient
+    /// `task_local!` state; inherited by child contexts and visible to tools
+    /// through `ToolExecutionContext::host`. See [`super::HostExtensions`].
+    pub host_ext: super::HostExtensions,
     /// Event fan-out bus for observability.
     pub events: EventSink,
     /// Live limit tracker derived from `config`.
@@ -400,6 +421,11 @@ pub struct RunContext<Ctx = ()> {
     /// streaming pipeline races [`CancellationToken::cancelled`] against the
     /// provider stream. On observing cancellation the run ends with
     /// [`crate::error::TinyAgentsError::Cancelled`].
+    ///
+    /// Child contexts ([`RunContext::child`]) receive a
+    /// [`CancellationToken::child_token`]: cancelling the parent cancels every
+    /// descendant, but cancelling one child does not affect the parent or its
+    /// siblings.
     pub cancellation: CancellationToken,
     /// A one-shot control request a middleware or step can set to steer the
     /// loop (stop with a final response, or interrupt). Drained by the agent
@@ -414,6 +440,25 @@ pub struct RunContext<Ctx = ()> {
     /// [`tinytools::ToolControl::state_update`]. See
     /// [`RunContext::push_tool_state_update`].
     pub(crate) tool_state_updates: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    /// One entry per tool call finished in the current batch, in call order:
+    /// `Some(output)` when the call asked the loop to end the run
+    /// ([`tinytools::ToolControl::terminate`] / `return_direct`), `None`
+    /// otherwise. The batch driver settles it once every call has answered —
+    /// the run ends only if **every** call voted `Some`.
+    pub(crate) terminate_votes: Vec<Option<String>>,
+    /// Positions (within the batch about to run) of the tool calls a length
+    /// stop may have cut off; admission answers each with a synthetic error
+    /// instead of running it (see `RunPolicy::reject_truncated_tool_calls`).
+    /// Positional, not by provider id, so duplicate or empty ids fail closed.
+    /// Set per turn and cleared when the batch ends.
+    pub(crate) truncated_call_positions: std::collections::HashSet<usize>,
+    /// The subset of `truncated_call_positions` whose tool was also cut off
+    /// on the previous truncated turn: answered with the stronger "stop
+    /// sending calls this large" corrective. Same lifetime as the set above.
+    pub(crate) truncated_repeat_positions: std::collections::HashSet<usize>,
+    /// How many calls the current batch has admitted so far; the position
+    /// `truncated_call_positions` is matched against. Reset per batch.
+    pub(crate) batch_admissions: usize,
     /// An optional host-supplied workspace/sandbox descriptor threaded into every
     /// [`ToolExecutionContext`][crate::tool::ToolExecutionContext] this
     /// run creates, so tools discover their allowed root from context rather
@@ -455,6 +500,17 @@ pub struct RunContext<Ctx = ()> {
     /// Runtime-owned terminal lifecycle callback, consumed exactly once by the
     /// agent-loop guard even when the driving future is cancelled or dropped.
     pub(crate) terminal_observer: Option<TerminalObserver>,
+    /// Lifecycle cursor over the working transcript: which messages were
+    /// announced and which turn is open (see `agent_loop::lifecycle`).
+    pub(crate) turns: crate::agent_loop::TurnTracker,
+    /// Set by a no-progress / repeat guard that paused the run, holding its
+    /// root-cause summary, so the loop can report `TerminalReason::Halted`.
+    pub(crate) halted_by_guard: Option<String>,
+    /// Typed classifier cause for a guard halt, preserved independently from
+    /// the human-readable summary.
+    pub(crate) halted_by_guard_cause: Option<crate::no_progress::ClassifiedStopCause>,
+    /// The kind of the most recent `LimitReached` event this run emitted.
+    pub(crate) last_limit: std::sync::Mutex<Option<crate::events::LimitKind>>,
     /// The [`CallId`] the agent loop minted for the model call currently in
     /// flight through the model-wrap middleware onion, mirroring
     /// [`crate::events::HarnessRunStatus::active_model_call`].
@@ -468,6 +524,32 @@ pub struct RunContext<Ctx = ()> {
     /// `None` outside that window, and always `None` for a caller that never
     /// goes through the agent loop.
     pub active_model_call: Option<CallId>,
+    pub(crate) provider_started: bool,
+    /// Whether the *current* model call reached the provider; reset when a
+    /// call begins (see `begin_model_call`).
+    pub(crate) call_provider_started: bool,
+    /// Set when a model call returned an error, so the terminal classifier
+    /// still knows the failure surfaced inside the provider call after
+    /// `active_model_call` was cleared.
+    pub(crate) model_call_failed: bool,
+    pub(crate) model_base_called: bool,
+    /// Whether the model call most recently dispatched by the agent loop used
+    /// the streaming path. Set by the loop's innermost model call before the
+    /// wrap middleware sees the result, so a middleware can tell that
+    /// discarding a response would also discard output a consumer already
+    /// received as deltas.
+    pub call_streamed: bool,
+    /// Identifies the current shape of the prompt prefix: `0` until a
+    /// middleware that rewrites it (a compaction, a truncation) calls
+    /// [`RunContext::mark_prompt_prefix_changed`], then a process-unique
+    /// value. Provider cache accounting keys on it so the uncached tokens of a
+    /// deliberately rewritten prefix are not reported as a miss.
+    pub(crate) prefix_epoch: u64,
+    /// Usage of responses a wrap middleware paid for and then discarded (a
+    /// retry after an overflow reported by a successful response). The agent
+    /// loop folds it into the run's totals and the host budget at its next
+    /// accounting point; see [`RunContext::record_discarded_usage`].
+    pub(crate) discarded_usage: Vec<tinyinference_llm::usage::Usage>,
     /// Resolutions for the deferred tool calls left pending on the transcript
     /// this run is resuming (A2). Taken by the agent loop before its first
     /// model call and applied to the unanswered tool calls on the last
@@ -481,6 +563,10 @@ pub struct RunContext<Ctx = ()> {
     /// deferred a second time by the same gate. Read with
     /// [`RunContext::is_call_approved`].
     pub(crate) approved_calls: std::collections::HashSet<String>,
+    /// Host-only metadata a `before_tool` hook asked to stamp on the result
+    /// that answers a call it refused, keyed by call id. See
+    /// [`RunContext::set_refusal_metadata`].
+    pub(crate) refusal_metadata: std::collections::HashMap<String, serde_json::Value>,
     /// Monotonic, per-context (not process-global) counter handed out by
     /// [`RunContext::next_child_ordinal`], used to derive deterministic child
     /// run ids (e.g. [`crate::subagent::SubAgent`]'s `{name}-d{depth}-{parent
@@ -505,6 +591,10 @@ pub struct RunContext<Ctx = ()> {
     /// [`crate::tool::LedgerFailure`] for the two modes; defaults to
     /// [`crate::tool::LedgerFailure::Abort`].
     pub tool_effect_ledger_failure: crate::tool::LedgerFailure,
+    /// Run-wide gate for nested tool calls across every concurrent parent:
+    /// concurrency-safe calls hold it shared, calls to tools (or wrap
+    /// middleware) that are not concurrency-safe hold it exclusively. A call already running under the gate does not retake it.
+    pub(crate) nested_serial: std::sync::Arc<tokio::sync::RwLock<()>>,
     /// Durable sink for [`crate::summarization::CompactionRecord`]s this run
     /// produces, when a host wants every compaction persisted somewhere
     /// durable rather than only kept in
@@ -516,8 +606,45 @@ pub struct RunContext<Ctx = ()> {
     /// [`RunContext::with_compaction_sink`]; a child context inherits its
     /// parent's sink, matching how `stores`/`events`/`tool_effect_ledger`
     /// propagate. `tinyagents-harness` cannot depend on
-    /// `tinyagents-session` (the dependency runs the other way), so this is
-    /// a trait object rather than a concrete `Arc<EntryTree>` — see
+    /// `tinyagents-session` (the dependency runs the other way), so persistence
+    /// remains a host-provided trait object — see
     /// [`crate::summarization::CompactionSink`]'s docs.
     pub compaction_sink: Option<std::sync::Arc<dyn crate::summarization::CompactionSink>>,
+}
+
+/// Depth and inclusive child-depth ceiling of the active run tree.
+///
+/// This data-only snapshot can cross a transport boundary without retaining
+/// run state, cancellation or stores. The receiving host must still validate
+/// untrusted input and apply its own policy ceiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunDepth {
+    /// Zero-based depth of the current run; a root run is zero.
+    pub depth: usize,
+    /// Inclusive maximum child depth permitted by the run's configuration.
+    pub max_depth: usize,
+}
+
+impl From<&RunConfig> for RunDepth {
+    fn from(config: &RunConfig) -> Self {
+        Self {
+            depth: config.depth(),
+            max_depth: config.max_depth(),
+        }
+    }
+}
+
+impl RunDepth {
+    /// Derives the next depth through the same guard as `RunConfig::child`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TinyAgentsError::SubAgentDepth` when the next child would
+    /// exceed this tree's ceiling.
+    pub fn checked_child(self) -> crate::error::Result<Self> {
+        Ok(Self {
+            depth: RunConfig::checked_child_depth(self.depth, self.max_depth)?,
+            max_depth: self.max_depth,
+        })
+    }
 }

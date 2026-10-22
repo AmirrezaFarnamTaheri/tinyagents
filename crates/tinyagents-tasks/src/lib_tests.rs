@@ -1,0 +1,901 @@
+//! Unit tests for task-store transitions and filtering, orphan reconciliation,
+//! detached-task ownership/steering/cancellation, and store registry behavior.
+
+use std::sync::Arc;
+
+use super::*;
+use tinyagents_harness::cancel::CancellationToken;
+use tinyagents_harness::ids::TaskId;
+use tinyagents_harness::steering::SteeringHandle;
+
+fn graph_spec(id: &str) -> OrchestrationTaskSpec {
+    OrchestrationTaskSpec::new(
+        id,
+        OrchestrationTaskKind::Graph {
+            graph_id: "child".into(),
+        },
+    )
+}
+
+#[test]
+fn in_memory_store_tracks_task_lifecycle() {
+    let store = InMemoryTaskStore::new();
+    let task_id = TaskId::new("task-a");
+
+    let pending = store.insert(graph_spec(task_id.as_str())).unwrap();
+    assert_eq!(pending.status, OrchestrationTaskStatus::Pending);
+
+    let running = store.mark_running(&task_id).unwrap();
+    assert_eq!(running.status, OrchestrationTaskStatus::Running);
+    assert!(running.started_at.is_some());
+
+    let completed = store
+        .complete(&task_id, OrchestrationTaskResult::text("done"))
+        .unwrap();
+    assert_eq!(completed.status, OrchestrationTaskStatus::Completed);
+    assert!(completed.ended_at.is_some());
+    assert!(completed.is_terminal());
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RuntimeStatus {
+    Running,
+    Completed(String),
+}
+
+fn runtime_registry() -> DetachedTaskRegistry<String, RuntimeStatus> {
+    DetachedTaskRegistry::new(SteeringRegistry::new(), 2, |status| {
+        matches!(status, RuntimeStatus::Completed(_))
+    })
+}
+
+fn detached_handles() -> (
+    tokio::sync::watch::Sender<RuntimeStatus>,
+    tokio::sync::watch::Receiver<RuntimeStatus>,
+    CancellationToken,
+    tokio::task::JoinHandle<()>,
+) {
+    let (tx, rx) = tokio::sync::watch::channel(RuntimeStatus::Running);
+    let cancellation = CancellationToken::new();
+    let join = tokio::spawn(std::future::pending());
+    (tx, rx, cancellation, join)
+}
+
+#[tokio::test]
+async fn detached_registry_enforces_owner_and_waits_for_terminal_status() {
+    let registry = runtime_registry();
+    let task_id = TaskId::new("detached-wait");
+    let (tx, rx, cancellation, join) = detached_handles();
+    registry
+        .register(
+            task_id.clone(),
+            "parent-a",
+            "researcher".to_string(),
+            rx,
+            cancellation,
+            join.abort_handle(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        registry.snapshot(&task_id, "parent-b").unwrap_err(),
+        DetachedTaskRegistryError::NotOwned
+    );
+    assert_eq!(
+        registry.snapshot(&task_id, "parent-a").unwrap().metadata,
+        "researcher"
+    );
+
+    assert_eq!(
+        registry
+            .wait(&task_id, "parent-b", std::time::Duration::from_millis(1))
+            .await,
+        Err(DetachedTaskRegistryError::NotOwned)
+    );
+    tx.send(RuntimeStatus::Completed("done".into())).unwrap();
+    assert_eq!(
+        registry
+            .wait(&task_id, "parent-a", std::time::Duration::from_secs(1))
+            .await
+            .unwrap(),
+        DetachedTaskWaitOutcome::Terminal(RuntimeStatus::Completed("done".into()))
+    );
+    assert!(registry.is_empty().unwrap());
+    join.abort();
+}
+
+#[tokio::test]
+async fn trusted_terminal_pruning_keeps_live_tasks_and_releases_steering() {
+    let steering = SteeringRegistry::new();
+    let registry = DetachedTaskRegistry::new(steering.clone(), 8, |status: &RuntimeStatus| {
+        matches!(status, RuntimeStatus::Completed(_))
+    });
+    let task_id = TaskId::new("trusted-terminal-prune");
+    let (tx, rx, cancellation, join) = detached_handles();
+    registry
+        .register_cooperative(
+            task_id.clone(),
+            "parent",
+            "metadata".to_owned(),
+            rx,
+            cancellation,
+        )
+        .unwrap();
+    steering.register(task_id.clone(), SteeringHandle::allow_all());
+
+    assert_eq!(registry.prune_terminal_trusted(&task_id).unwrap(), None);
+    assert!(registry.snapshot_trusted(&task_id).is_ok());
+    assert!(steering.get(&task_id).is_some());
+
+    tx.send(RuntimeStatus::Completed("done".into())).unwrap();
+    assert_eq!(
+        registry.prune_terminal_trusted(&task_id).unwrap(),
+        Some(RuntimeStatus::Completed("done".into()))
+    );
+    assert!(registry.snapshot_trusted(&task_id).is_err());
+    assert!(steering.get(&task_id).is_none());
+    join.abort();
+}
+
+#[tokio::test]
+async fn batch_wait_preserves_order_and_metadata_when_pruning_terminal_entries() {
+    let registry = runtime_registry();
+    let ids = [TaskId::new("batch-first"), TaskId::new("batch-second")];
+    let (first_tx, first_rx, first_cancel, first_join) = detached_handles();
+    let (second_tx, second_rx, second_cancel, second_join) = detached_handles();
+    registry
+        .register(
+            ids[0].clone(),
+            "owner",
+            "one".into(),
+            first_rx,
+            first_cancel,
+            first_join.abort_handle(),
+        )
+        .unwrap();
+    registry
+        .register(
+            ids[1].clone(),
+            "owner",
+            "two".into(),
+            second_rx,
+            second_cancel,
+            second_join.abort_handle(),
+        )
+        .unwrap();
+    first_tx
+        .send(RuntimeStatus::Completed("first".into()))
+        .unwrap();
+    second_tx
+        .send(RuntimeStatus::Completed("second".into()))
+        .unwrap();
+
+    let items = registry
+        .wait_many(&ids, "owner", Some(std::time::Duration::ZERO))
+        .await
+        .unwrap();
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.task_id.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.metadata.as_str())
+            .collect::<Vec<_>>(),
+        ["one", "two"]
+    );
+    assert!(
+        items
+            .iter()
+            .all(|item| matches!(item.outcome, DetachedTaskWaitOutcome::Terminal(_)))
+    );
+    assert_eq!(registry.len().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn batch_wait_stops_at_first_error_without_touching_later_ids() {
+    let registry = runtime_registry();
+    let later = TaskId::new("batch-later");
+    let (_tx, rx, cancellation, join) = detached_handles();
+    registry
+        .register(
+            later.clone(),
+            "owner",
+            "later".into(),
+            rx,
+            cancellation,
+            join.abort_handle(),
+        )
+        .unwrap();
+
+    let error = registry
+        .wait_many(
+            &[TaskId::new("missing"), later.clone()],
+            "owner",
+            Some(std::time::Duration::ZERO),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.task_id, TaskId::new("missing"));
+    assert_eq!(error.error, DetachedTaskRegistryError::Unknown);
+    assert_eq!(
+        registry.snapshot(&later, "owner").unwrap().metadata,
+        "later"
+    );
+}
+
+#[tokio::test]
+async fn unbounded_batch_wait_resumes_until_terminal_and_timeout_can_be_retried() {
+    let registry = runtime_registry();
+    let task_id = TaskId::new("batch-retry");
+    let (tx, rx, cancellation, join) = detached_handles();
+    registry
+        .register(
+            task_id.clone(),
+            "owner",
+            "retry".into(),
+            rx,
+            cancellation,
+            join.abort_handle(),
+        )
+        .unwrap();
+
+    let timed_out = registry
+        .wait_many(
+            std::slice::from_ref(&task_id),
+            "owner",
+            Some(std::time::Duration::ZERO),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        timed_out[0].outcome,
+        DetachedTaskWaitOutcome::TimedOut(RuntimeStatus::Running)
+    ));
+    assert_eq!(registry.len().unwrap(), 1);
+
+    let waiter_registry = registry.clone();
+    let waiter_id = task_id.clone();
+    let waiter = tokio::spawn(async move {
+        waiter_registry
+            .wait_many(&[waiter_id], "owner", None)
+            .await
+            .unwrap()
+    });
+    tokio::task::yield_now().await;
+    tx.send(RuntimeStatus::Completed("done".into())).unwrap();
+    let completed = waiter.await.unwrap();
+    assert!(matches!(
+        completed[0].outcome,
+        DetachedTaskWaitOutcome::Terminal(RuntimeStatus::Completed(_))
+    ));
+    assert_eq!(completed[0].metadata, "retry");
+    assert!(registry.is_empty().unwrap());
+}
+
+#[tokio::test(start_paused = true)]
+async fn batch_wait_uses_one_finite_deadline_for_every_child() {
+    let registry = runtime_registry();
+    let ids = [
+        TaskId::new("shared-deadline-first"),
+        TaskId::new("shared-deadline-second"),
+    ];
+    let (_first_tx, first_rx, first_cancel, first_join) = detached_handles();
+    let (_second_tx, second_rx, second_cancel, second_join) = detached_handles();
+    registry
+        .register(
+            ids[0].clone(),
+            "owner",
+            "first".into(),
+            first_rx,
+            first_cancel,
+            first_join.abort_handle(),
+        )
+        .unwrap();
+    registry
+        .register(
+            ids[1].clone(),
+            "owner",
+            "second".into(),
+            second_rx,
+            second_cancel,
+            second_join.abort_handle(),
+        )
+        .unwrap();
+
+    let waiter_registry = registry.clone();
+    let waiter_ids = ids.clone();
+    let waiter = tokio::spawn(async move {
+        waiter_registry
+            .wait_many(
+                &waiter_ids,
+                "owner",
+                Some(std::time::Duration::from_secs(10)),
+            )
+            .await
+            .unwrap()
+    });
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_secs(10)).await;
+    tokio::task::yield_now().await;
+
+    assert!(
+        waiter.is_finished(),
+        "second child must not receive a fresh timeout budget"
+    );
+    let outcomes = waiter.await.unwrap();
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes.iter().all(|item| matches!(
+        item.outcome,
+        DetachedTaskWaitOutcome::TimedOut(RuntimeStatus::Running)
+    )));
+    assert_eq!(
+        registry.len().unwrap(),
+        2,
+        "timeout must leave both entries available"
+    );
+}
+
+#[tokio::test]
+async fn detached_registry_remembers_steer_request_ids_per_task() {
+    let registry = runtime_registry();
+    let (first, rx_first, cancel_first, join_first) = detached_handles();
+    let (second, rx_second, cancel_second, join_second) = detached_handles();
+    let _keep = (first, second);
+    let first_id = TaskId::new("steer-a");
+    let second_id = TaskId::new("steer-b");
+    for (id, rx, cancel, join) in [
+        (&first_id, rx_first, cancel_first, &join_first),
+        (&second_id, rx_second, cancel_second, &join_second),
+    ] {
+        registry
+            .register(
+                id.clone(),
+                "p",
+                "m".to_string(),
+                rx,
+                cancel,
+                join.abort_handle(),
+            )
+            .unwrap();
+    }
+
+    assert_eq!(registry.claim_steer_request(&first_id, "req-1"), Ok(true));
+    assert_eq!(
+        registry.claim_steer_request(&first_id, "req-1"),
+        Ok(false),
+        "the same request id on the same task is a duplicate"
+    );
+    assert_eq!(
+        registry.claim_steer_request(&second_id, "req-1"),
+        Ok(true),
+        "request ids are scoped to a task"
+    );
+    assert_eq!(
+        registry.claim_steer_request(&TaskId::new("nope"), "req-1"),
+        Err(DetachedTaskRegistryError::Unknown)
+    );
+    join_first.abort();
+    join_second.abort();
+}
+
+#[tokio::test]
+async fn detached_registry_timeout_keeps_task_registered() {
+    let registry = runtime_registry();
+    let task_id = TaskId::new("detached-timeout");
+    let (_tx, rx, cancellation, join) = detached_handles();
+    registry
+        .register(
+            task_id.clone(),
+            "parent",
+            "worker".to_string(),
+            rx,
+            cancellation,
+            join.abort_handle(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        registry
+            .wait(&task_id, "parent", std::time::Duration::from_millis(1))
+            .await
+            .unwrap(),
+        DetachedTaskWaitOutcome::TimedOut(RuntimeStatus::Running)
+    );
+    assert_eq!(registry.len().unwrap(), 1);
+    join.abort();
+}
+
+#[tokio::test]
+async fn detached_registry_cancel_is_cooperative_then_aborts_and_returns_metadata() {
+    let registry = runtime_registry();
+    let task_id = TaskId::new("detached-cancel");
+    let (_tx, rx, cancellation, join) = detached_handles();
+    registry
+        .register(
+            task_id.clone(),
+            "parent",
+            "worker-meta".to_string(),
+            rx,
+            cancellation.clone(),
+            join.abort_handle(),
+        )
+        .unwrap();
+
+    let cancelled = registry.cancel(&task_id, "parent").unwrap();
+    assert_eq!(cancelled.metadata, "worker-meta");
+    assert!(cancellation.is_cancelled());
+    assert!(join.await.unwrap_err().is_cancelled());
+    assert!(registry.is_empty().unwrap());
+}
+
+#[tokio::test]
+async fn detached_registry_uses_shared_steering_and_sweeps_terminal_at_soft_cap() {
+    let steering = SteeringRegistry::new();
+    let registry = DetachedTaskRegistry::new(steering.clone(), 1, |status: &RuntimeStatus| {
+        matches!(status, RuntimeStatus::Completed(_))
+    });
+    let first = TaskId::new("detached-first");
+    let (first_tx, first_rx, first_cancel, first_join) = detached_handles();
+    registry
+        .register(
+            first.clone(),
+            "parent",
+            "first".to_string(),
+            first_rx,
+            first_cancel,
+            first_join.abort_handle(),
+        )
+        .unwrap();
+    let handle = SteeringHandle::allow_all();
+    steering.register(first.clone(), handle);
+    assert!(registry.steering_handle(&first, "parent").is_ok());
+    first_tx
+        .send(RuntimeStatus::Completed("done".into()))
+        .unwrap();
+
+    let second = TaskId::new("detached-second");
+    let (_second_tx, second_rx, second_cancel, second_join) = detached_handles();
+    registry
+        .register(
+            second.clone(),
+            "parent",
+            "second".to_string(),
+            second_rx,
+            second_cancel,
+            second_join.abort_handle(),
+        )
+        .unwrap();
+
+    assert_eq!(registry.len().unwrap(), 1);
+    assert!(steering.get(&first).is_none());
+    assert_eq!(
+        registry.snapshots(Some("parent")).unwrap()[0].task_id,
+        second
+    );
+    first_join.abort();
+    second_join.abort();
+}
+
+#[derive(Debug)]
+struct PanickingMetadata;
+
+impl Clone for PanickingMetadata {
+    fn clone(&self) -> Self {
+        panic!("poison registry lock during metadata clone")
+    }
+}
+
+#[tokio::test]
+async fn detached_registry_reports_a_poisoned_lock() {
+    let registry =
+        DetachedTaskRegistry::new(SteeringRegistry::new(), 2, |status: &RuntimeStatus| {
+            matches!(status, RuntimeStatus::Completed(_))
+        });
+    let task_id = TaskId::new("detached-poison");
+    let (_tx, rx, cancellation, join) = detached_handles();
+    registry
+        .register(
+            task_id,
+            "parent",
+            PanickingMetadata,
+            rx,
+            cancellation,
+            join.abort_handle(),
+        )
+        .unwrap();
+
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = registry.snapshots(None);
+    }));
+    assert!(panic.is_err());
+    assert_eq!(registry.len(), Err(DetachedTaskRegistryError::LockPoisoned));
+    join.abort();
+}
+
+#[tokio::test]
+async fn cooperative_registration_cancels_without_removing_or_aborting() {
+    let registry = runtime_registry();
+    let task_id = TaskId::new("coop-cancel");
+    let (tx, rx, _cancellation, join) = detached_handles();
+    let cancellation = CancellationToken::new();
+    registry
+        .register_cooperative(
+            task_id.clone(),
+            "parent",
+            "meta".to_string(),
+            rx,
+            cancellation.clone(),
+        )
+        .unwrap();
+    assert!(registry.holds_cancellation(&task_id).unwrap());
+
+    assert_eq!(
+        registry.cancel_cooperative(&task_id, "other").unwrap_err(),
+        DetachedTaskRegistryError::NotOwned
+    );
+    assert!(!cancellation.is_cancelled());
+
+    let snapshot = registry.cancel_cooperative(&task_id, "parent").unwrap();
+    assert_eq!(snapshot.status, RuntimeStatus::Running);
+    assert!(cancellation.is_cancelled());
+    // The entry stays registered and the token is released.
+    assert_eq!(registry.len().unwrap(), 1);
+    assert!(!registry.holds_cancellation(&task_id).unwrap());
+
+    tx.send(RuntimeStatus::Completed("x".into())).unwrap();
+    assert_eq!(
+        registry.cancel_cooperative(&task_id, "parent").unwrap_err(),
+        DetachedTaskRegistryError::AlreadyDone
+    );
+    join.abort();
+}
+
+#[tokio::test]
+async fn release_cancellation_drops_the_token_without_cancelling_it() {
+    let registry = runtime_registry();
+    let task_id = TaskId::new("coop-release");
+    let (_tx, rx, _c, join) = detached_handles();
+    let cancellation = CancellationToken::new();
+    registry
+        .register_cooperative(
+            task_id.clone(),
+            "p",
+            "m".to_string(),
+            rx,
+            cancellation.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        registry
+            .release_cancellation_trusted(&TaskId::new("missing"))
+            .unwrap_err(),
+        DetachedTaskRegistryError::Unknown
+    );
+    registry.release_cancellation_trusted(&task_id).unwrap();
+    assert!(!registry.holds_cancellation(&task_id).unwrap());
+    assert!(!cancellation.is_cancelled());
+    // Hard cancel still works on an entry that holds no abort handle.
+    let cancelled = registry.cancel_trusted(&task_id).unwrap();
+    assert_eq!(cancelled.metadata, "m");
+    join.abort();
+}
+
+#[test]
+fn filter_by_kind_and_created_window() {
+    let store = InMemoryTaskStore::new();
+    store.insert(graph_spec("g1")).unwrap();
+    store
+        .insert(OrchestrationTaskSpec::new(
+            "s1",
+            OrchestrationTaskKind::SubAgent {
+                agent: "worker".into(),
+            },
+        ))
+        .unwrap();
+
+    let sub_agents = store.list(OrchestrationTaskFilter::default().with_kind("sub_agent"));
+    assert_eq!(sub_agents.len(), 1);
+    assert_eq!(sub_agents[0].spec.task_id.as_str(), "s1");
+
+    // A created-before bound in the past excludes everything.
+    let none = store.list(
+        OrchestrationTaskFilter::default().created_between(None, Some(std::time::UNIX_EPOCH)),
+    );
+    assert!(none.is_empty());
+    // A created-after bound in the past includes everything.
+    let all = store.list(
+        OrchestrationTaskFilter::default().created_between(Some(std::time::UNIX_EPOCH), None),
+    );
+    assert_eq!(all.len(), 2);
+}
+
+#[test]
+fn terminal_tasks_reject_further_control() {
+    let store = InMemoryTaskStore::new();
+    let task_id = TaskId::new("task-a");
+
+    store.insert(graph_spec(task_id.as_str())).unwrap();
+    store
+        .fail(&task_id, "child failed".to_string())
+        .expect("live task can fail");
+
+    let err = store
+        .request_cancel(&task_id)
+        .expect_err("terminal task cannot be cancelled");
+    assert!(err.to_string().contains("cannot transition"));
+}
+
+#[test]
+fn registry_opens_each_key_once_and_shares_the_same_store() {
+    let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = Arc::clone(&opens);
+    let registry: TaskStoreRegistry<String> = TaskStoreRegistry::new(move |_key| {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>
+    });
+
+    let first = registry.get_or_open(&"a".to_string()).expect("opens");
+    let second = registry.get_or_open(&"a".to_string()).expect("reuses");
+
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "same key must reuse one store"
+    );
+    assert_eq!(opens.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(registry.len().expect("len"), 1);
+}
+
+#[test]
+fn registry_keeps_distinct_keys_isolated() {
+    let registry: TaskStoreRegistry<String> =
+        TaskStoreRegistry::new(|_key| Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>);
+
+    let a = registry.get_or_open(&"a".to_string()).expect("opens a");
+    let b = registry.get_or_open(&"b".to_string()).expect("opens b");
+    assert!(!Arc::ptr_eq(&a, &b), "distinct keys must not share a store");
+
+    a.insert(graph_spec("only-in-a")).expect("insert");
+    assert_eq!(a.list(OrchestrationTaskFilter::default()).len(), 1);
+    assert!(
+        b.list(OrchestrationTaskFilter::default()).is_empty(),
+        "records must not leak across scopes"
+    );
+    assert_eq!(registry.len().expect("len"), 2);
+}
+
+#[test]
+fn registry_get_does_not_open_and_clear_forces_a_reopen() {
+    let registry: TaskStoreRegistry<String> =
+        TaskStoreRegistry::new(|_key| Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>);
+
+    assert!(registry.is_empty().expect("is_empty"));
+    assert!(registry.get(&"a".to_string()).expect("get").is_none());
+    assert!(registry.is_empty().expect("still empty"));
+
+    let first = registry.get_or_open(&"a".to_string()).expect("opens");
+    assert!(registry.get(&"a".to_string()).expect("get").is_some());
+
+    registry.clear().expect("clear");
+    assert!(registry.is_empty().expect("cleared"));
+
+    let reopened = registry.get_or_open(&"a".to_string()).expect("reopens");
+    assert!(!Arc::ptr_eq(&first, &reopened), "clear must force a reopen");
+}
+
+#[test]
+fn registry_values_returns_every_open_store() {
+    let registry: TaskStoreRegistry<String> =
+        TaskStoreRegistry::new(|_key| Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>);
+    assert!(registry.values().expect("values").is_empty());
+
+    registry.get_or_open(&"a".to_string()).expect("opens a");
+    registry.get_or_open(&"b".to_string()).expect("opens b");
+
+    let stores = registry.values().expect("values");
+    assert_eq!(stores.len(), 2);
+
+    // A record written through one store is visible through exactly one of the
+    // returned handles, so callers can sweep across scopes.
+    registry
+        .get_or_open(&"a".to_string())
+        .expect("reuses a")
+        .insert(graph_spec("only-in-a"))
+        .expect("insert");
+    let total: usize = stores
+        .iter()
+        .map(|store| store.list(OrchestrationTaskFilter::default()).len())
+        .sum();
+    assert_eq!(total, 1);
+}
+
+#[test]
+fn registry_debug_reports_open_store_count() {
+    let registry: TaskStoreRegistry<String> =
+        TaskStoreRegistry::new(|_key| Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>);
+    registry.get_or_open(&"a".to_string()).expect("opens");
+    assert!(format!("{registry:?}").contains("TaskStoreRegistry"));
+}
+
+#[test]
+fn registry_lock_error_displays_the_poison_detail() {
+    let err = TaskStoreRegistryError::Lock("poisoned".to_string());
+    assert!(err.to_string().contains("poisoned"));
+}
+
+// --- reconcile_orphaned_tasks -------------------------------------------
+
+#[test]
+fn reconcile_settles_live_tasks_and_leaves_terminal_ones_alone() {
+    let store = InMemoryTaskStore::new();
+
+    store.insert(graph_spec("pending")).expect("insert");
+
+    store.insert(graph_spec("running")).expect("insert");
+    store
+        .mark_running(&TaskId::new("running"))
+        .expect("running");
+
+    store.insert(graph_spec("awaiting")).expect("insert");
+    store
+        .mark_running(&TaskId::new("awaiting"))
+        .expect("running");
+    store
+        .mark_awaiting(&TaskId::new("awaiting"))
+        .expect("awaiting");
+
+    store.insert(graph_spec("done")).expect("insert");
+    store.mark_running(&TaskId::new("done")).expect("running");
+    store
+        .complete(&TaskId::new("done"), OrchestrationTaskResult::text("ok"))
+        .expect("complete");
+
+    let report = reconcile_orphaned_tasks(&store, OrchestrationTaskFilter::default(), &|_record| {
+        "driver died".to_string()
+    });
+
+    assert_eq!(
+        report.reconciled_count(),
+        3,
+        "three live tasks were settled"
+    );
+    assert_eq!(report.error_count(), 0);
+    assert!(
+        report
+            .tasks
+            .iter()
+            .all(|task| task.outcome == ReconcileOutcome::Failed),
+        "live-but-not-cancelling tasks settle as failed"
+    );
+
+    for id in ["pending", "running", "awaiting"] {
+        let record = store.get(&TaskId::new(id)).expect("record");
+        assert_eq!(record.status, OrchestrationTaskStatus::Failed);
+        assert_eq!(record.error.as_deref(), Some("driver died"));
+    }
+    // The already-terminal task was not touched.
+    let done = store.get(&TaskId::new("done")).expect("record");
+    assert_eq!(done.status, OrchestrationTaskStatus::Completed);
+}
+
+#[test]
+fn reconcile_honours_a_pending_cancellation() {
+    let store = InMemoryTaskStore::new();
+    store.insert(graph_spec("cancelling")).expect("insert");
+    store
+        .mark_running(&TaskId::new("cancelling"))
+        .expect("running");
+    store
+        .request_cancel(&TaskId::new("cancelling"))
+        .expect("cancel");
+
+    let report = reconcile_orphaned_tasks(&store, OrchestrationTaskFilter::default(), &|_| {
+        "driver died".to_string()
+    });
+
+    assert_eq!(report.tasks.len(), 1);
+    assert_eq!(report.tasks[0].outcome, ReconcileOutcome::Cancelled);
+    assert_eq!(
+        report.tasks[0].prior_status,
+        OrchestrationTaskStatus::CancelRequested
+    );
+    assert_eq!(
+        store
+            .get(&TaskId::new("cancelling"))
+            .expect("record")
+            .status,
+        OrchestrationTaskStatus::Cancelled
+    );
+}
+
+#[test]
+fn reconcile_reason_closure_sees_the_record_being_settled() {
+    let store = InMemoryTaskStore::new();
+    store.insert(graph_spec("t1")).expect("insert");
+    store.mark_running(&TaskId::new("t1")).expect("running");
+
+    reconcile_orphaned_tasks(&store, OrchestrationTaskFilter::default(), &|record| {
+        format!("orphaned (was `{}`)", task_status_label(record.status))
+    });
+
+    assert_eq!(
+        store
+            .get(&TaskId::new("t1"))
+            .expect("record")
+            .error
+            .as_deref(),
+        Some("orphaned (was `running`)")
+    );
+}
+
+#[test]
+fn reconcile_respects_the_filter() {
+    let store = InMemoryTaskStore::new();
+    store
+        .insert(OrchestrationTaskSpec::new(
+            "agent-task",
+            OrchestrationTaskKind::SubAgent {
+                agent: "worker".into(),
+            },
+        ))
+        .expect("insert");
+    store.insert(graph_spec("graph-task")).expect("insert");
+
+    let report = reconcile_orphaned_tasks(
+        &store,
+        OrchestrationTaskFilter::default().with_kind("sub_agent"),
+        &|_| "driver died".to_string(),
+    );
+
+    assert_eq!(report.tasks.len(), 1);
+    assert_eq!(report.tasks[0].task_id.as_str(), "agent-task");
+    assert_eq!(
+        store
+            .get(&TaskId::new("graph-task"))
+            .expect("record")
+            .status,
+        OrchestrationTaskStatus::Pending,
+        "a filtered-out task must not be swept"
+    );
+}
+
+#[test]
+fn reconcile_on_an_empty_store_reports_nothing() {
+    let store = InMemoryTaskStore::new();
+    let report = reconcile_orphaned_tasks(&store, OrchestrationTaskFilter::default(), &|_| {
+        "driver died".to_string()
+    });
+    assert!(report.is_empty());
+    assert_eq!(report.reconciled_count(), 0);
+    assert_eq!(report.error_count(), 0);
+    assert_eq!(report.settled().count(), 0);
+}
+
+#[test]
+fn reconcile_outcome_error_is_not_counted_as_settled() {
+    let error = ReconcileOutcome::Error("boom".to_string());
+    assert!(!error.is_settled());
+    assert!(ReconcileOutcome::Failed.is_settled());
+    assert!(ReconcileOutcome::Cancelled.is_settled());
+}
+
+#[test]
+fn task_status_label_covers_every_status() {
+    for (status, expected) in [
+        (OrchestrationTaskStatus::Pending, "pending"),
+        (OrchestrationTaskStatus::Running, "running"),
+        (OrchestrationTaskStatus::Awaiting, "awaiting"),
+        (OrchestrationTaskStatus::CancelRequested, "cancel_requested"),
+        (OrchestrationTaskStatus::Completed, "completed"),
+        (OrchestrationTaskStatus::Failed, "failed"),
+        (OrchestrationTaskStatus::Cancelled, "cancelled"),
+        (OrchestrationTaskStatus::TimedOut, "timed_out"),
+        (OrchestrationTaskStatus::Abandoned, "abandoned"),
+    ] {
+        assert_eq!(task_status_label(status), expected);
+    }
+}

@@ -53,6 +53,7 @@ mod renamed;
 mod types;
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 pub(crate) mod test;
 
 use std::any::Any;
@@ -260,12 +261,6 @@ pub(crate) struct OverrideTool {
     pub(crate) description: Option<String>,
     pub(crate) parameters: Option<Value>,
     pub(crate) policy_transform: Option<Arc<dyn Fn(ToolPolicy) -> ToolPolicy + Send + Sync>>,
-    /// Overrides [`Tool::exposure`] instead of delegating to `inner`. Used by
-    /// [`crate::capability::CapabilityToolSet`] (gap G3) to apply a
-    /// [`crate::capability::Capability::exposure`] uniformly to every tool a
-    /// capability's inner [`ToolSet`] contributes, regardless of what each
-    /// individual tool declares for itself.
-    pub(crate) exposure_override: Option<ToolExposure>,
 }
 
 impl OverrideTool {
@@ -276,15 +271,7 @@ impl OverrideTool {
             description: None,
             parameters: None,
             policy_transform: None,
-            exposure_override: None,
         }
-    }
-
-    /// Overrides [`Tool::exposure`] with `exposure` instead of delegating to
-    /// `inner`.
-    pub(crate) fn with_exposure(mut self, exposure: ToolExposure) -> Self {
-        self.exposure_override = Some(exposure);
-        self
     }
 
     pub(crate) fn with_name(mut self, name: impl Into<String>) -> Self {
@@ -352,6 +339,10 @@ impl Tool for OverrideTool {
             .await
     }
 
+    async fn prepare_authorization(&self, args: &Value) -> anyhow::Result<Option<Value>> {
+        self.inner.prepare_authorization(args).await
+    }
+
     fn injected_arguments(&self) -> Vec<ToolInjectedArgument> {
         self.inner.injected_arguments()
     }
@@ -377,8 +368,28 @@ impl Tool for OverrideTool {
     }
 
     fn exposure(&self) -> ToolExposure {
-        self.exposure_override
-            .unwrap_or_else(|| self.inner.exposure())
+        self.inner.exposure()
+    }
+
+    // A renamed or prefixed tool is still the same tool to the host's tool
+    // rules: keep its family, tags and indirect target.
+    fn family(&self) -> Option<&str> {
+        self.inner.family()
+    }
+
+    fn tags(&self) -> Vec<String> {
+        self.inner.tags()
+    }
+
+    fn indirect_target(&self, args: &Value) -> Option<tinytools::IndirectCall> {
+        self.inner.indirect_target(args)
+    }
+
+    async fn indirect_target_async(
+        &self,
+        args: &Value,
+    ) -> anyhow::Result<Option<tinytools::IndirectCall>> {
+        self.inner.indirect_target_async(args).await
     }
 
     fn is_concurrency_safe(&self, args: &Value) -> bool {

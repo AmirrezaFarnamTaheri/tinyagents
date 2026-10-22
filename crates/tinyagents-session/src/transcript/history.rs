@@ -17,18 +17,28 @@
 //! rewrite. [`TranscriptHistory::clear`] is therefore an empty compaction.
 //!
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::path::Path;
+use std::sync::Arc;
 
 use crate::transcript::types::TranscriptMessage;
 
 use crate::transcript::{
-    SessionAdoption, SessionRef, SessionTranscript, TranscriptMeta, TurnUsage,
-    adopt_legacy_session_transcripts, find_latest_transcript, find_root_transcript_for_thread,
-    find_root_transcript_for_thread_scoped, read_transcript, resolve_keyed_transcript_path,
-    session_stem,
+    DisplaySessionTranscript, SessionAdoption, SessionRef, SessionTranscript, ThreadTranscript,
+    ThreadTranscripts, TranscriptMeta, TurnUsage, session_stem,
 };
+
+/// The stem a read handle is bound to: its path's last component, without the
+/// `.jsonl` extension a file handle carries. (A stem may itself contain dots,
+/// so this never uses `file_stem`.)
+pub(super) fn stem_of_handle(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    name.strip_suffix(".jsonl")
+        .map(str::to_string)
+        .unwrap_or(name)
+}
 
 /// Upper bound on the compaction generations one session may accumulate.
 ///
@@ -49,8 +59,7 @@ const MAX_GENERATIONS: u32 = 4096;
 /// `prev` is a field rather than handle state on purpose: the turn path tracks
 /// the previously-persisted logical set in memory on `Agent`
 /// (`persisted_transcript_messages`) precisely so it never has to re-read a
-/// growing file, and a disk re-read is not a faithful substitute — see
-/// `FileTranscriptHistory::write_logical_set_locked`.
+/// growing log, and a store re-read is not a faithful substitute.
 pub struct TranscriptTurn<'a> {
     /// Logical message set already persisted, for the extension-vs-compaction diff.
     pub prev: &'a [TranscriptMessage],
@@ -136,9 +145,7 @@ pub trait TranscriptHistory: TranscriptRead {
 /// reads hold.
 ///
 /// Split out of [`TranscriptHistory`] rather than added as one more method on it,
-/// for a reason that is not stylistic: a *discovered* transcript can still be a
-/// legacy `.md` file (see [`FileTranscriptHistory::opened_at`]), and
-/// `append_transcript_turn` writes JSONL. Handing discovery results out as
+/// for a reason that is not stylistic: handing discovery results out as
 /// `Arc<dyn TranscriptRead>` makes it impossible to `append_turn` into
 /// one by construction, instead of by convention.
 ///
@@ -155,23 +162,33 @@ pub trait TranscriptRead: Send + Sync {
     /// The model-context replay of this transcript, `_meta` included, or
     /// `Ok(None)` when the file does not exist.
     ///
-    /// Exactly [`read_transcript`], so compaction records have already replaced
+    /// The log replayed, so compaction records have already replaced
     /// the accumulator and `interrupted: true` partials are already skipped —
     /// §3.1's "single most important constraint". Returning the whole
     /// [`SessionTranscript`] rather than messages alone is what lets the shadow
     /// read keep working through this seam.
     fn read_session(&self) -> anyhow::Result<Option<SessionTranscript>>;
+
+    /// The display projection of this transcript — every record, including
+    /// pre-compaction history, compaction markers and interrupted partials —
+    /// or `Ok(None)` when it does not exist.
+    ///
+    /// The default builds it from [`Self::read_session`], which holds only
+    /// the reduced model context: an implementor that keeps more (the file
+    /// log, a driver's entry log) overrides it.
+    fn read_display(&self) -> anyhow::Result<Option<DisplaySessionTranscript>> {
+        Ok(self.read_session()?.map(super::display_from_session))
+    }
 }
 
 /// Resolves transcripts by the two keys the turn path actually has, and binds
 /// this session's own write handle.
 ///
 /// One injected object covers the whole turn path: both resume reads and the
-/// first-write bind. A host holds it as `Option<Arc<dyn TranscriptLocator>>`
-/// and falls back to [`FileTranscriptLocator`] built from the *current*
-/// `workspace_dir` — lazily, never frozen at build time,
-/// because tests reassign `agent.workspace_dir` after `build()` and a
-/// build-time locator would silently keep pointing at the old directory.
+/// first-write bind. A host holds it as `Option<Arc<dyn TranscriptLocator>>`,
+/// built from the store it currently targets rather than frozen at build time,
+/// so a host that rebuilds its locator per turn still resolves the same
+/// destination (see [`Self::destination_key`]).
 pub trait TranscriptLocator: Send + Sync {
     /// The durable destination this locator addresses, when it can name one.
     ///
@@ -201,9 +218,9 @@ pub trait TranscriptLocator: Send + Sync {
     fn root_for_thread(&self, thread_id: &str) -> Option<Arc<dyn TranscriptRead>>;
 
     /// [`Self::root_for_thread`], additionally scoped to `agent_id` when
-    /// given — see
-    /// [`transcript::find_root_transcript_for_thread_scoped`](crate::transcript::find_root_transcript_for_thread_scoped)
-    /// for why. Defaults to the unscoped lookup so an implementor that never
+    /// given: one caller-supplied thread id can be handed to several
+    /// independently configured agents, and each needs its own transcript.
+    /// Defaults to the unscoped lookup so an implementor that never
     /// serves several distinct agents over the same `thread_id` (this test
     /// double, notably) does not have to know about agent scoping at all.
     fn root_for_thread_scoped(
@@ -213,6 +230,28 @@ pub trait TranscriptLocator: Send + Sync {
     ) -> Option<Arc<dyn TranscriptRead>> {
         let _ = agent_id;
         self.root_for_thread(thread_id)
+    }
+
+    /// Every transcript backing `thread_id`'s view: its root generations in
+    /// projection order and its sub-agent transcripts, or `None` when the
+    /// thread has no root transcript yet. Scoped to the roots `agent_id` owns
+    /// when given (sub-agents are then found by stem only).
+    ///
+    /// Defaults to [`Self::root_for_thread_scoped`] alone, with no
+    /// sub-agents, for a locator that cannot list.
+    fn thread_transcripts(
+        &self,
+        thread_id: &str,
+        agent_id: Option<&str>,
+    ) -> Option<ThreadTranscripts> {
+        let root = self.root_for_thread_scoped(thread_id, agent_id)?;
+        Some(ThreadTranscripts {
+            roots: vec![ThreadTranscript {
+                stem: stem_of_handle(root.path()),
+                transcript: root,
+            }],
+            subagents: Vec::new(),
+        })
     }
 
     /// Binds (creating on first write) this session's own write handle for
@@ -325,6 +364,30 @@ pub trait TranscriptLocator: Send + Sync {
         Ok(None)
     }
 
+    /// Appends the display-only `partial` of an interrupted turn to the
+    /// newest root transcript of `thread_id` (scoped to `agent_id` when
+    /// given); returns whether there was one to append to.
+    ///
+    /// An interrupted **first** turn has no transcript yet, so there is
+    /// nothing to append to and this returns `Ok(false)`. The model-context
+    /// replay never includes a partial.
+    ///
+    /// Defaults to `Ok(false)`, for locators that keep no display partials.
+    ///
+    /// # Errors
+    ///
+    /// When a transcript exists but cannot be appended to.
+    fn append_interrupted_partial(
+        &self,
+        thread_id: &str,
+        agent_id: Option<&str>,
+        partial: &TranscriptPartial,
+        request_id: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let _ = (thread_id, agent_id, partial, request_id);
+        Ok(false)
+    }
+
     /// Seals `session` and binds its successor generation.
     ///
     /// Called when a turn's logical message set is no longer an extension of
@@ -361,22 +424,39 @@ pub trait TranscriptLocator: Send + Sync {
         let successor = session.next_generation();
         anyhow::ensure!(
             successor.generation <= MAX_GENERATIONS,
-            "session {} has reached the {MAX_GENERATIONS}-generation compaction limit; \
-             refusing to create generation {}",
-            session.session_id(),
-            successor.generation
+            "session generation limit reached"
         );
         anyhow::ensure!(
             !self.session_exists(&successor),
-            "session generation {} already exists; refusing to overwrite a sealed transcript",
-            successor.session_id()
+            "session generation already exists"
         );
-
         let mut meta = seed;
         meta.session_id = Some(successor.session_id());
         meta.parent_session_id = successor.parent_session_id();
         let handle = self.open_session(&successor, meta)?;
         Ok((successor, handle))
+    }
+
+    fn begin_generation_from_baseline(
+        &self,
+        session: &SessionRef,
+        seed: TranscriptMeta,
+        baseline: &[TranscriptMessage],
+    ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)> {
+        if let Some(transcript) = self.read_session_transcript(session)
+            && let Some(transcript) = transcript.read_session()?
+        {
+            anyhow::ensure!(
+                same_transcript_messages(&transcript.messages, baseline),
+                "transcript baseline is stale; reload the session before creating a generation"
+            );
+        } else {
+            anyhow::ensure!(
+                baseline.is_empty(),
+                "transcript baseline is stale; reload the session before creating a generation"
+            );
+        }
+        self.begin_generation(session, seed)
     }
 
     /// Forks `session`'s head generation for edit or regenerate, without
@@ -436,7 +516,8 @@ pub trait TranscriptLocator: Send + Sync {
         let keep = cut.resolve(&transcript.messages)?;
         let truncated = transcript.messages[..keep].to_vec();
 
-        let (successor, handle) = self.begin_generation(&head, seed)?;
+        let (successor, handle) =
+            self.begin_generation_from_baseline(&head, seed, &transcript.messages)?;
         // Same call a compaction makes to persist its own replacement set —
         // see `a_compaction_seals_a_generation_and_leaves_it_untouched`.
         handle.replace(&truncated)?;
@@ -487,177 +568,21 @@ impl TruncateCut {
     }
 }
 
-/// The default [`TranscriptLocator`]: real files under
-/// `{workspace_dir}/session_raw`.
-///
-/// Thin by design — each method wraps exactly one `transcript::` free function
-/// and changes nothing about it, so swapping the turn path onto the locator is
-/// behaviour-preserving.
-pub struct FileTranscriptLocator {
-    workspace_dir: PathBuf,
-}
-
-impl FileTranscriptLocator {
-    /// Builds a locator rooted at `workspace_dir` (i.e. it resolves
-    /// `{workspace_dir}/session_raw/...`).
-    pub fn new(workspace_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            workspace_dir: workspace_dir.into(),
-        }
-    }
-}
-
-impl TranscriptLocator for FileTranscriptLocator {
-    /// The workspace root every lookup and bind resolves under, which is
-    /// this locator's only field and therefore its whole identity.
-    fn destination_key(&self) -> Option<String> {
-        Some(self.workspace_dir.to_string_lossy().into_owned())
-    }
-
-    fn latest_for_agent(&self, agent_name: &str) -> Option<Arc<dyn TranscriptRead>> {
-        let path = find_latest_transcript(&self.workspace_dir, agent_name)?;
-        tracing::debug!(
-            "[transcript-history] locator latest_for_agent agent={agent_name} path={}",
-            path.display()
-        );
-        Some(Arc::new(FileTranscriptHistory::opened_at(
-            path,
-            seed_meta_for_discovered(agent_name),
-        )))
-    }
-
-    fn root_for_thread(&self, thread_id: &str) -> Option<Arc<dyn TranscriptRead>> {
-        let path = find_root_transcript_for_thread(&self.workspace_dir, thread_id)?;
-        tracing::debug!(
-            "[transcript-history] locator root_for_thread thread={thread_id} path={}",
-            path.display()
-        );
-        Some(Arc::new(FileTranscriptHistory::opened_at(
-            path,
-            seed_meta_for_discovered(thread_id),
-        )))
-    }
-
-    fn root_for_thread_scoped(
-        &self,
-        thread_id: &str,
-        agent_id: Option<&str>,
-    ) -> Option<Arc<dyn TranscriptRead>> {
-        // Same cross-dir, newest-wins scan as `root_for_thread`, additionally
-        // filtered on `_meta.agent_id` so one runtime agent's resume cannot
-        // pick up a different agent's transcript for a caller-reused
-        // `thread_id` — see `find_root_transcript_for_thread_scoped`.
-        let path =
-            find_root_transcript_for_thread_scoped(&self.workspace_dir, thread_id, agent_id)?;
-        tracing::debug!(
-            "[transcript-history] locator root_for_thread_scoped thread={thread_id} \
-             agent_id={agent_id:?} path={}",
-            path.display()
-        );
-        Some(Arc::new(FileTranscriptHistory::opened_at(
-            path,
-            seed_meta_for_discovered(thread_id),
-        )))
-    }
-
-    fn open_stem(
-        &self,
-        stem: &str,
-        seed: TranscriptMeta,
-    ) -> anyhow::Result<Arc<dyn TranscriptHistory>> {
-        Ok(Arc::new(FileTranscriptHistory::new(
-            &self.workspace_dir,
-            stem,
-            seed,
-        )?))
-    }
-
-    fn session_exists(&self, session: &SessionRef) -> bool {
-        // A direct path probe, not a read: `head_generation` calls this once
-        // per generation and only needs to know whether the file is there.
-        // `is_file()` rather than `exists()`: a directory, FIFO or other
-        // non-regular entry occupying the canonical path must not be
-        // reported as an existing generation — reads/appends against it
-        // would fail (or, for a directory, silently target the wrong thing)
-        // downstream, and `head_generation`'s chain walk would stop at a
-        // phantom "generation" that was never actually written.
-        resolve_keyed_transcript_path(&self.workspace_dir, &session_stem(session))
-            .is_ok_and(|path| path.is_file())
-    }
-
-    fn read_session_transcript(&self, session: &SessionRef) -> Option<Arc<dyn TranscriptRead>> {
-        let stem = session_stem(session);
-        let path = resolve_keyed_transcript_path(&self.workspace_dir, &stem).ok()?;
-        if !path.is_file() {
-            return None;
-        }
-        tracing::debug!(
-            "[transcript-history] locator read_session session={stem} path={}",
-            path.display()
-        );
-        Some(Arc::new(FileTranscriptHistory::opened_at(
-            path,
-            seed_meta_for_discovered(&stem),
-        )))
-    }
-
-    fn adopt_legacy(
-        &self,
-        session: &SessionRef,
-        thread_id: &str,
-        seed: &TranscriptMeta,
-    ) -> anyhow::Result<Option<SessionAdoption>> {
-        adopt_legacy_session_transcripts(&self.workspace_dir, session, thread_id, seed)
-    }
-
-    fn begin_generation(
-        &self,
-        session: &SessionRef,
-        seed: TranscriptMeta,
-    ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)> {
-        let successor = session.next_generation();
-        anyhow::ensure!(
-            successor.generation <= MAX_GENERATIONS,
-            "session {} has reached the {MAX_GENERATIONS}-generation compaction limit; \
-             refusing to create generation {}",
-            session.session_id(),
-            successor.generation
-        );
-        let stem = session_stem(&successor);
-        let path = resolve_keyed_transcript_path(&self.workspace_dir, &stem)?;
-        anyhow::ensure!(
-            !path.exists(),
-            "session generation {stem} already exists; refusing to overwrite a sealed transcript"
-        );
-
-        let mut meta = seed;
-        meta.session_id = Some(successor.session_id());
-        meta.parent_session_id = successor.parent_session_id();
-        tracing::info!(
-            "[transcript-history] sealed session={} and opened generation {} at {}",
-            session.session_id(),
-            successor.generation,
-            path.display()
-        );
-        Ok((
-            successor,
-            Arc::new(FileTranscriptHistory::new(
-                &self.workspace_dir,
-                &stem,
-                meta,
-            )?),
-        ))
-    }
+pub(crate) fn same_transcript_messages(
+    left: &[TranscriptMessage],
+    right: &[TranscriptMessage],
+) -> bool {
+    left.len() == right.len() && left.iter().zip(right).all(|(a, b)| a.same_row_as(b))
 }
 
 /// A placeholder `_meta` for a handle bound to an already-existing transcript.
 ///
-/// `seed_meta` is consulted only when the file is **absent**, and a discovered
-/// path exists by definition, so this value is never written. It exists because
-/// [`FileTranscriptHistory`] is one type serving both roles; giving read-only
-/// handles a `None` meta would mean an `Option` field every write path then has
-/// to unwrap for no benefit.
-fn seed_meta_for_discovered(agent_name: &str) -> TranscriptMeta {
+/// `seed_meta` is consulted only when the transcript is **absent**, and a
+/// discovered one exists by definition, so this value is never written. One
+/// history type serves both roles; giving read-only handles a `None` meta
+/// would mean an `Option` field every write path then has to unwrap for no
+/// benefit.
+pub(super) fn seed_meta_for_discovered(agent_name: &str) -> TranscriptMeta {
     TranscriptMeta {
         session_id: None,
         parent_session_id: None,
@@ -677,314 +602,5 @@ fn seed_meta_for_discovered(agent_name: &str) -> TranscriptMeta {
         charged_amount_usd: 0.0,
         thread_id: None,
         task_id: None,
-    }
-}
-
-/// A lossless history backed by one `session_raw/{stem}.jsonl` transcript.
-///
-/// Construct with [`FileTranscriptHistory::new`] (workspace-rooted, i.e.
-/// `{workspace}/session_raw/`). The `seed_meta` is used only when the
-/// transcript file does not exist yet; for an existing file the authoritative
-/// cumulative `_meta` is read back from disk so turn counts and token rollups
-/// keep accumulating rather than resetting.
-pub struct FileTranscriptHistory {
-    /// Fully-resolved transcript file, fixed at construction.
-    ///
-    /// Resolved eagerly rather than derived per call from a `(workspace, stem)`
-    /// pair: the old shape hardcoded `{workspace}/session_raw/`, which is the
-    /// **wrong directory** for a canonical session and would have silently
-    /// cross-written into the canonical session's transcripts the moment this
-    /// handle was wired into the turn path.
-    path: PathBuf,
-    /// `_meta` used for the very first write, before a file exists.
-    seed_meta: TranscriptMeta,
-}
-
-impl FileTranscriptHistory {
-    /// Binds a history handle to `{workspace_dir}/session_raw/{stem}.jsonl`.
-    ///
-    pub fn new(
-        workspace_dir: impl AsRef<Path>,
-        stem: &str,
-        seed_meta: TranscriptMeta,
-    ) -> anyhow::Result<Self> {
-        let path = resolve_keyed_transcript_path(workspace_dir.as_ref(), stem)?;
-        tracing::debug!(
-            "[transcript-history] bound stem={stem} path={}",
-            path.display()
-        );
-        Ok(Self { path, seed_meta })
-    }
-
-    /// Binds a handle to an **already-discovered** transcript file, verbatim.
-    ///
-    /// Deliberately does **not** go through `resolve_keyed_transcript_path*`,
-    /// which the two stem constructors above use. That helper `create_dir_all`s
-    /// its parent and forces a `.jsonl` extension — both wrong for a discovered
-    /// path: `find_latest_transcript` can still return a legacy `.md`
-    /// file (`read_transcript` routes by extension), and re-resolving would
-    /// mangle it into a sibling `.jsonl` that does not exist while creating
-    /// stray directories on a pure read.
-    ///
-    /// Hand the result out as `Arc<dyn TranscriptRead>`, not
-    /// `Arc<dyn TranscriptHistory>` — see [`TranscriptRead`]'s doc.
-    pub fn opened_at(path: PathBuf, seed_meta: TranscriptMeta) -> Self {
-        tracing::debug!(
-            "[transcript-history] opened discovered path={}",
-            path.display()
-        );
-        Self { path, seed_meta }
-    }
-
-    /// This handle's transcript file.
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// Reads the current transcript, or `None` when no file exists yet.
-    ///
-    /// A missing transcript is the normal first-turn state, not an error.
-    fn read(&self) -> anyhow::Result<Option<SessionTranscript>> {
-        if !self.path.exists() {
-            return Ok(None);
-        }
-        read_transcript(&self.path).map(Some)
-    }
-
-    /// The logical (model-context) message set currently on disk.
-    ///
-    /// Routes through [`read_transcript`], so compaction records have already
-    /// replaced the accumulator and `interrupted: true` partials are skipped.
-    fn persisted(&self) -> anyhow::Result<Vec<TranscriptMessage>> {
-        Ok(self.read()?.map(|t| t.messages).unwrap_or_default())
-    }
-
-    /// The `_meta` to write: the file's own cumulative meta when it exists,
-    /// otherwise this handle's seed.
-    ///
-    /// Uses the existing durable metadata as a default when a caller does not
-    /// caller-computed meta. The **turn path must never route through here** —
-    /// it computes `turn_count` and the four token/cost rollups fresh each turn,
-    /// and re-reading the file's `_meta` would freeze them at the previous
-    /// turn's values, silently breaking `read_thread_usage_summary`.
-    fn meta_for_write(&self) -> anyhow::Result<TranscriptMeta> {
-        Ok(self
-            .read()?
-            .map(|t| t.meta)
-            .unwrap_or_else(|| self.seed_meta.clone()))
-    }
-}
-
-/// A process-wide, per-path mutex serializing the read-modify-write sequence
-/// [`FileTranscriptHistory::append`]/`replace`/`clear` run against one file.
-///
-/// [`SessionRef`]'s own doc names this as a supported shape: two cores in one
-/// process sharing a workspace should both see and extend one conversation.
-/// Without this, two `FileTranscriptHistory` instances bound to the same
-/// path (a legitimate, common way to get there — `open_session` is called
-/// fresh per `Session::resume`) can each read the file's current content,
-/// compute a diff against that now-stale view, and write. Whichever finishes
-/// its own read first computes a `next` that does not extend what the file
-/// looks like by the time it *writes* — `append_transcript_turn_with_partial`
-/// then reads that mismatch as "the context was reduced" and appends a
-/// **compaction record** instead of a plain tail, and a compaction's
-/// replacement value is what canonical reads return going forward. The
-/// other write's whole contribution becomes unreachable, even though its
-/// bytes are still physically on disk as a now-superseded line — a silent
-/// lost update, not a crash.
-///
-/// Keyed by path rather than by `Arc<Mutex<_>>` identity because the two
-/// racing instances are typically *separate* `FileTranscriptHistory` values,
-/// not a shared handle. Entries are [`Weak`] and swept opportunistically so
-/// the registry does not grow for the lifetime of a long-running host: once
-/// every in-flight critical section for a path finishes, nothing keeps that
-/// path's entry alive, and the next unrelated call reclaims the slot.
-fn path_lock(path: &Path) -> Arc<Mutex<()>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
-    let registry = REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut locks = registry
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    locks.retain(|_, weak| weak.strong_count() > 0);
-    if let Some(existing) = locks.get(path).and_then(Weak::upgrade) {
-        return existing;
-    }
-    let fresh = Arc::new(Mutex::new(()));
-    locks.insert(path.to_path_buf(), Arc::downgrade(&fresh));
-    fresh
-}
-
-impl TranscriptRead for FileTranscriptHistory {
-    fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// Same call the free-function readers make, on the same path, with the
-    /// same return type — so there is nothing left for the round trip to lose.
-    fn read_session(&self) -> anyhow::Result<Option<SessionTranscript>> {
-        if !self.path.exists() {
-            tracing::debug!(
-                "[transcript-history] read_session absent path={}",
-                self.path.display()
-            );
-            return Ok(None);
-        }
-        let session = read_transcript(&self.path)?;
-        tracing::debug!(
-            "[transcript-history] read_session messages={} path={}",
-            session.messages.len(),
-            self.path.display()
-        );
-        Ok(Some(session))
-    }
-}
-
-impl FileTranscriptHistory {
-    /// The actual `append_turn` write. Assumes the caller already holds
-    /// [`path_lock`] for [`Self::path`] — never call this directly; every
-    /// public entry point below acquires the lock once and then routes
-    /// through here (and [`Self::append_turn_with_partial_locked`]) so the
-    /// lock is taken exactly once per call, never nested (this crate's
-    /// `Mutex` is not reentrant).
-    fn append_turn_locked(&self, turn: TranscriptTurn<'_>) -> anyhow::Result<()> {
-        tracing::debug!(
-            "[transcript-history] append_turn prev={} next={} usage={} request_id={:?} path={}",
-            turn.prev.len(),
-            turn.next.len(),
-            turn.turn_usage.is_some(),
-            turn.request_id,
-            self.path.display()
-        );
-        crate::transcript::writer::append_transcript_turn_with_extras(
-            &self.path,
-            turn.prev,
-            turn.next,
-            turn.meta,
-            turn.turn_usage,
-            turn.request_id,
-            crate::transcript::writer::AppendTranscriptExtras {
-                partial: None,
-                tools: turn.tools,
-            },
-        )?;
-        Ok(())
-    }
-
-    /// [`Self::append_turn_locked`]'s counterpart for the display-partial
-    /// variant. Same locking contract.
-    fn append_turn_with_partial_locked(
-        &self,
-        turn: TranscriptTurn<'_>,
-        partial: Option<&TranscriptPartial>,
-    ) -> anyhow::Result<()> {
-        tracing::debug!(
-            "[transcript-history] append_turn_with_partial prev={} next={} partial={} path={}",
-            turn.prev.len(),
-            turn.next.len(),
-            partial.is_some(),
-            self.path.display()
-        );
-        crate::transcript::writer::append_transcript_turn_with_extras(
-            &self.path,
-            turn.prev,
-            turn.next,
-            turn.meta,
-            turn.turn_usage,
-            turn.request_id,
-            crate::transcript::writer::AppendTranscriptExtras {
-                partial,
-                tools: turn.tools,
-            },
-        )?;
-        Ok(())
-    }
-
-    /// Writes `next` as the new logical set, diffing against what is
-    /// persisted. Assumes the caller already holds [`path_lock`] for
-    /// [`Self::path`] — see [`Self::append_turn_locked`]'s doc for why.
-    ///
-    /// Routes through [`Self::append_turn_locked`] so every write in this
-    /// module — trait-driven and turn-path alike — funnels through one call
-    /// to [`append_transcript_turn`], and the extension-vs-compaction
-    /// decision stays with the format owner rather than drifting here.
-    ///
-    /// The `self.persisted()` disk re-read is what the generic trait path has
-    /// to do, and is deliberately **not** what the turn path does.
-    /// [`read_transcript`] reconstructs `TranscriptMessage`s from line records: the
-    /// `failure` / `failure_detail` fields have been lifted out of
-    /// `extra_metadata` and turn-usage fields hoisted to top-level line fields.
-    /// Feeding that back in as `prev` would make `common_prefix_len` mismatch
-    /// at the first such message, so the writer would emit a full compaction
-    /// record — re-appending the entire message set — on every single turn.
-    fn write_logical_set_locked(&self, next: &[TranscriptMessage]) -> anyhow::Result<()> {
-        let prev = self.persisted()?;
-        let meta = self.meta_for_write()?;
-        self.append_turn_locked(TranscriptTurn {
-            prev: &prev,
-            next,
-            meta: &meta,
-            turn_usage: None,
-            request_id: None,
-            tools: None,
-        })
-    }
-}
-
-impl TranscriptHistory for FileTranscriptHistory {
-    /// Pure forwarder: every argument reaches the transcript writer's turn append
-    /// untouched, so the bytes this writes are identical to what the free
-    /// function would have written at the call site.
-    ///
-    /// This — not [`TranscriptHistory::append`] — is the turn path's own
-    /// write call (`Session::persist` in `tinyagents-runtime` calls
-    /// [`TranscriptHistory::append_turn_with_partial`] directly), so the
-    /// same [`path_lock`] serialization `append`/`replace`/`clear` need
-    /// applies here too: two `FileTranscriptHistory` handles bound to the
-    /// same successor generation (two compactions racing on
-    /// `TranscriptLocator::begin_generation` for one session) would
-    /// otherwise both see the file absent and both take the writer's
-    /// create-fresh path, and whichever `fs::write` lands last would
-    /// silently discard the other's retained set.
-    fn append_turn(&self, turn: TranscriptTurn<'_>) -> anyhow::Result<()> {
-        let lock = path_lock(&self.path);
-        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.append_turn_locked(turn)
-    }
-
-    fn append_turn_with_partial(
-        &self,
-        turn: TranscriptTurn<'_>,
-        partial: Option<&TranscriptPartial>,
-    ) -> anyhow::Result<()> {
-        let lock = path_lock(&self.path);
-        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.append_turn_with_partial_locked(turn, partial)
-    }
-
-    fn messages(&self) -> anyhow::Result<Vec<TranscriptMessage>> {
-        self.persisted()
-    }
-
-    fn append(&self, message: TranscriptMessage) -> anyhow::Result<()> {
-        let lock = path_lock(&self.path);
-        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut next = self.persisted()?;
-        next.push(message);
-        self.write_logical_set_locked(&next)
-    }
-
-    fn replace(&self, messages: &[TranscriptMessage]) -> anyhow::Result<()> {
-        let lock = path_lock(&self.path);
-        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.write_logical_set_locked(messages)
-    }
-
-    fn clear(&self) -> anyhow::Result<()> {
-        let lock = path_lock(&self.path);
-        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !self.path.exists() {
-            return Ok(());
-        }
-        self.write_logical_set_locked(&[])
     }
 }

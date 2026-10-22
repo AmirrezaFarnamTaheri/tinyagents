@@ -30,8 +30,9 @@ async fn orchestrator_steers_a_real_openai_run() {
 
     let model = OpenAiModel::from_env().expect("OpenAiModel from env");
     let mut harness = AgentHarness::<(), ()>::new();
-    harness.register_model("openai", Arc::new(model));
-    harness.set_default_model("openai");
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("openai", Arc::new(model)),
+    ));
 
     // The orchestrator injects an overriding instruction before the model call.
     let steering = SteeringHandle::allow_all();

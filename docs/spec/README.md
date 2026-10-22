@@ -5,13 +5,15 @@ typed state-graph runtime. It takes its shape from LangChain (models, tools,
 middleware, structured output, streaming, usage/cost) and LangGraph
 (`START`/`END`, nodes, conditional edges, channels/reducers, checkpoints,
 interrupts, subgraphs, time travel) — rebuilt as ordinary, typed Rust. The
-system is organized as five public crates:
+system is organized as focused workspace packages:
 
 1. the harness
-2. the graph
-3. the registry
-4. durable sessions
-5. host-neutral session runtime
+2. reusable harness tools
+3. the graph
+4. the registry
+5. durable sessions
+6. host-neutral session runtime
+7. host-neutral orchestration
 
 The goal is to make agent systems easy to define, inspect, run, test, and
 serialize without hiding the Rust types that make production systems reliable.
@@ -35,12 +37,14 @@ observability, or test contracts.
 
 ## Detailed Module Docs
 
+- [Harness tools crate](../../crates/tinyagents-harness-tools/README.md)
 - [Harness module](../modules/harness/README.md)
   - [Context](../modules/harness/context.md)
   - [Model and providers](../modules/harness/model.md)
   - [Embeddings and retrieval](../modules/harness/embeddings.md)
   - [Media generation](../modules/harness/media.md)
   - [Prompt](../modules/harness/prompt.md)
+  - [Stop hooks](../modules/harness/stop-hooks.md)
   - [Tool](../modules/harness/tool.md)
   - [Tool exposure and discovery](../modules/harness/tool-discovery.md)
   - [Middleware](../modules/harness/middleware.md)
@@ -120,9 +124,9 @@ model; only the enclosing run wall-clock deadline aborts the run.
 
 Tool schemas are advertised by exposure, not by registration. Initially only
 `ToolExposure::Direct` tools appear in a request's `tools` array; `Deferred`
-tools are indexed per run and reached through the intrinsic `tool_search` /
-`tool_call` bridge, whose `tool_call` is unwrapped to the real tool before
-admission so policy and authorization see the true name. Search matches gain
+tools are indexed per run and reached through the intrinsic `tool_search`
+bridge; a revealed tool is called by its own name, so policy and authorization
+see the true name with nothing to unwrap. Search matches gain
 typed declarations on later requests and are recorded in the transcript for
 resume. The `tools` array stays stable between discoveries when no per-turn
 exposure middleware changes the advertised set.
@@ -146,7 +150,9 @@ they use. Shared runtime errors live in `tinyagents-harness`.
 ```text
 crates/
   tinyagents-harness/           # models, tools, middleware, providers, runtime
+  tinyagents-harness-tools/     # reusable tool implementations and stateful support
   tinyagents-graph/             # durable typed state graphs
+  tinyagents-tasks/             # graph-independent detached-task registry, task stores, orchestration tools
   tinyagents-registry/          # named capabilities and model catalog
   tinyagents-session/           # durable session history and run ledger
   tinyagents-definition/        # host-owned agent definition vocabulary
@@ -201,3 +207,10 @@ Remaining open question:
 
 - Should graph nodes support typed route enums as a stronger alternative to
   string-keyed conditional routing before further serialization work lands?
+
+Transcript accounting preserves cost provenance in durable usage records.
+Hosts should use `TranscriptSpend::cost_split` to separate charged or estimated
+amounts from unpriced usage, and `thread_spend_in` for full-history accounting.
+See the [transcript contract](../../crates/tinyagents-session/src/transcript/README.md#spend-and-cost-provenance-spendrs).
+
+- [Transcript execution projections](../../crates/tinyagents-runtime/src/transcript/README.md): mechanical typed-row conversion; durable codecs remain host-owned.

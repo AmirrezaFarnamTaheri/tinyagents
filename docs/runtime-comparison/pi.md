@@ -96,7 +96,7 @@ Harness/product layer:
 | Session backends + conformance | memory, JSONL, SQLite, `session/testing/conformance` | Partial: SQLite session DB + JSONL transcript; no backend conformance suite (sdk-gaps §17) | |
 | Extension API / event bus | 40+ product events, `registerTool/Command/Provider`, UI | Partial: middleware + registry; no plugin loader (host concern) | |
 | Skills / prompt templates | Yes (`Skill`, `PromptTemplate` types in agent-core `harness/types.ts`; loaders in coding-agent) | No skills (grep empty); `prompt/` module exists | |
-| Sub-agents | Example extension only (`examples/extensions/subagent/`) | Yes: `SubAgent`, `SubAgentTool`, parallel policies | TA ahead. |
+| Sub-agents | Example extension only (`examples/extensions/subagent/`) | Yes: async `DriverSubAgentTool`, job registry, steering, and detached settlement | TA ahead. |
 | Graph/workflow runtime | None | Yes (`tinyagents-graph`) | TA ahead. |
 | Per-tool timeouts / limits / budgets | None (signal only) | Yes: `ToolTimeout`, `RunLimits`, budget middleware | TA ahead. |
 | Telemetry | typed schema spans (`pi-telemetry`) | Yes: `AgentEvent` + Langfuse exporter | |
@@ -278,12 +278,12 @@ policy allowlist and provenance) — pi has nothing equivalent to policy-checked
 Best of both: keep `SteeringCommand` for control, adopt pi's two message lanes for content.
 
 **Session tree.** pi's in-place tree (`id/parentId`, labels, compaction and branch-summary entries as tree
-nodes, forks as path copies) is a clean, replay-only design, and the `AgentHarness` refinement (Branch vs
+nodes, forks as path copies) is a clean, replay-only design. Its `AgentHarness` refinement (Branch vs
 AgentLane, "context never reads past a compaction", append-only-context invariant for KV cache) is
-sharper than anything in TinyAgents' session crate. Worse: two coexisting designs (coding-agent v3 JSONL
-vs harness entry tree, plus pico v5 in `pi-durable`) and an admitted O(history) copy on first divergence
-of an uncompacted SQLite branch (§2.6). TinyAgents' graph checkpointer already has fork/time-travel; the
-gap is applying the same idea to conversation history.
+sharper than TinyAgents' linear session history. Worse: pi has two coexisting designs (coding-agent v3
+JSONL and the harness entry tree, plus pico v5 in `pi-durable`) and an admitted O(history) copy on first
+divergence of an uncompacted SQLite branch (§2.6). TinyAgents' graph checkpointer already has
+fork/time-travel; the gap is applying the same idea to conversation history.
 
 **Compaction.** pi's is more complete operationally (cut-point rules, split turns, iterative summaries,
 overflow-triggered compaction with retry, hook can decline/replace, usage attributed). TinyAgents is

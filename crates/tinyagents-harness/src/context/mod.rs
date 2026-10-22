@@ -33,9 +33,18 @@
 //! assert_eq!(ctx.limits.model_calls(), 1);
 //! ```
 
+mod agents_md;
+mod depth;
+mod host_ext;
 mod stats;
 mod types;
 
+pub use agents_md::{
+    AGENTS_MD_FILENAME, AgentsMdContent, MAX_AGENTS_MD_READ_BYTES, load_agents_md,
+    load_agents_md_layers,
+};
+pub use depth::{current_run_depth, with_run_depth};
+pub use host_ext::HostExtensions;
 pub use stats::*;
 pub use types::*;
 
@@ -230,11 +239,10 @@ impl RunConfig {
     /// and the REPL sub-run builtin — funnels its `depth + 1` check through here
     /// so the fail-closed guard cannot drift out of sync between them.
     pub fn checked_child_depth(parent_depth: usize, max_depth: usize) -> Result<usize> {
-        let child_depth = parent_depth + 1;
-        if child_depth > max_depth {
-            return Err(crate::error::TinyAgentsError::SubAgentDepth(max_depth));
-        }
-        Ok(child_depth)
+        parent_depth
+            .checked_add(1)
+            .filter(|child_depth| *child_depth <= max_depth)
+            .ok_or(crate::error::TinyAgentsError::SubAgentDepth(max_depth))
     }
 
     /// Builds the [`RunConfig`] for a child run one level deeper than this one.
@@ -299,12 +307,15 @@ impl<Ctx> RunContext<Ctx> {
         let events = EventSink::with_stream_id(config.run_id.as_str());
         Self {
             instance_id: next_context_instance_id(),
+            lifecycle: std::sync::Arc::new(()),
             config,
             data,
             frozen_system_prefix_len: None,
+            model_profile: None,
             stores: StoreRegistry::new(),
             namespaced_store: None,
             state_view: None,
+            host_ext: HostExtensions::new(),
             events,
             limits,
             steering: None,
@@ -313,18 +324,35 @@ impl<Ctx> RunContext<Ctx> {
             control: std::sync::Arc::new(std::sync::Mutex::new(None)),
             state_updates: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             tool_state_updates: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            terminate_votes: Vec::new(),
+            truncated_call_positions: std::collections::HashSet::new(),
+            truncated_repeat_positions: std::collections::HashSet::new(),
+            batch_admissions: 0,
             workspace: None,
             on_error_dispatched: false,
             streaming: false,
             host_agent_id: None,
             host_authority: None,
             terminal_observer: None,
+            turns: crate::agent_loop::TurnTracker::default(),
+            halted_by_guard: None,
+            halted_by_guard_cause: None,
+            last_limit: std::sync::Mutex::new(None),
             active_model_call: None,
+            provider_started: false,
+            call_provider_started: false,
+            model_call_failed: false,
+            model_base_called: false,
+            call_streamed: false,
+            prefix_epoch: 0,
+            discarded_usage: Vec::new(),
             deferred_results: None,
             approved_calls: std::collections::HashSet::new(),
+            refusal_metadata: std::collections::HashMap::new(),
             child_ordinal: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             tool_effect_ledger: None,
             tool_effect_ledger_failure: crate::tool::LedgerFailure::default(),
+            nested_serial: std::sync::Arc::default(),
             compaction_sink: None,
         }
     }
@@ -362,6 +390,24 @@ impl<Ctx> RunContext<Ctx> {
     /// human already decided on.
     pub fn is_call_approved(&self, call_id: &str) -> bool {
         self.approved_calls.contains(call_id)
+    }
+
+    /// Asks the loop to stamp `metadata` on the error result that answers
+    /// `call_id` when a `before_tool` hook refuses the call (by returning
+    /// `ToolFailed`/`ModelRetry`). The metadata is in place before any
+    /// `after_tool` hook sees the result, whatever its position in the stack.
+    /// Unused when the call is not refused.
+    pub fn set_refusal_metadata(
+        &mut self,
+        call_id: impl Into<String>,
+        metadata: serde_json::Value,
+    ) {
+        self.refusal_metadata.insert(call_id.into(), metadata);
+    }
+
+    /// Takes the metadata queued for the refused call `call_id`.
+    pub(crate) fn take_refusal_metadata(&mut self, call_id: &str) -> Option<serde_json::Value> {
+        self.refusal_metadata.remove(call_id)
     }
 
     /// Marks `call_id` as approved for this run (A2).
@@ -450,8 +496,11 @@ impl<Ctx> RunContext<Ctx> {
             .with_stores(self.stores.clone())
             .with_optional_namespaced_store(self.namespaced_store.clone())
             .with_optional_state_view(self.state_view.clone())
+            .with_host_extensions(self.host_ext.clone())
             .with_events(self.events.clone())
-            .with_cancellation(self.cancellation.clone())
+            // A linked child token: a parent cancel cascades down, but
+            // cancelling this child leaves the parent and siblings running.
+            .with_cancellation(self.cancellation.child_token())
             .with_optional_steering(steering)
             .with_optional_workspace(self.workspace.clone())
             .with_streaming(self.streaming);
@@ -482,6 +531,15 @@ impl<Ctx> RunContext<Ctx> {
     /// instead when it is shared across runs.
     pub fn instance_id(&self) -> u64 {
         self.instance_id
+    }
+
+    /// A weak liveness token for middleware that keeps per-run state.
+    ///
+    /// The token becomes un-upgradeable when this context is dropped. Middleware
+    /// can use it to reclaim state when callers abandon a run before terminal
+    /// callbacks fire.
+    pub fn lifecycle_token(&self) -> std::sync::Weak<()> {
+        std::sync::Arc::downgrade(&self.lifecycle)
     }
 
     /// Records that the middleware stack already dispatched `on_error` for the
@@ -519,6 +577,31 @@ impl<Ctx> RunContext<Ctx> {
     fn with_optional_steering(mut self, steering: Option<crate::steering::SteeringHandle>) -> Self {
         self.steering = steering;
         self
+    }
+
+    /// Records the usage of a provider response a wrap middleware is about to
+    /// discard and re-request. The provider billed it, so the agent loop adds
+    /// it to the run's usage (and the host budget) when it accounts for the
+    /// call that replaces it.
+    pub fn record_discarded_usage(&mut self, usage: tinyinference_llm::usage::Usage) {
+        self.discarded_usage.push(usage);
+    }
+
+    /// Declares that a middleware rewrote the prompt prefix on purpose
+    /// (compaction, truncation): the next provider cache read is expected to
+    /// be cold, so it is not a cache miss.
+    pub fn mark_prompt_prefix_changed(&mut self) {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        self.prefix_epoch = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The value [`Self::mark_prompt_prefix_changed`] last set (`0` if never).
+    pub fn prompt_prefix_epoch(&self) -> u64 {
+        self.prefix_epoch
+    }
+
+    pub(crate) fn take_discarded_usage(&mut self) -> Vec<tinyinference_llm::usage::Usage> {
+        std::mem::take(&mut self.discarded_usage)
     }
 
     fn with_streaming(mut self, streaming: bool) -> Self {
@@ -662,6 +745,64 @@ impl<Ctx> RunContext<Ctx> {
         self
     }
 
+    /// Installs a typed host extension (`X`), replacing any earlier value of
+    /// the same type. Read it back with [`RunContext::host`], or from a tool
+    /// with [`ToolExecutionContext::host`][crate::tool::ToolExecutionContext::host].
+    /// Child contexts inherit the whole map; a child may install its own
+    /// value without affecting the parent. This is the explicit replacement
+    /// for ambient `task_local!` host state.
+    #[must_use]
+    pub fn with_host<X: std::any::Any + Send + Sync>(mut self, value: X) -> Self {
+        self.host_ext = self.host_ext.with(value);
+        self
+    }
+
+    /// As [`with_host`](Self::with_host) for an already-shared value.
+    #[must_use]
+    pub fn with_host_arc<X: std::any::Any + Send + Sync>(
+        mut self,
+        value: std::sync::Arc<X>,
+    ) -> Self {
+        self.host_ext = self.host_ext.with_arc(value);
+        self
+    }
+
+    /// As [`with_host_arc`](Self::with_host_arc) but keeps an `X` already
+    /// installed (a default that never overrides a parent's value).
+    #[must_use]
+    pub fn with_host_arc_if_absent<X: std::any::Any + Send + Sync>(
+        mut self,
+        value: std::sync::Arc<X>,
+    ) -> Self {
+        self.host_ext = self.host_ext.with_arc_if_absent(value);
+        self
+    }
+
+    /// Replaces the whole host extension map.
+    #[must_use]
+    pub fn with_host_extensions(mut self, host_ext: HostExtensions) -> Self {
+        self.host_ext = host_ext;
+        self
+    }
+
+    /// The installed host extension of type `X`, if any.
+    #[must_use]
+    pub fn host<X: std::any::Any + Send + Sync>(&self) -> Option<&X> {
+        self.host_ext.get::<X>()
+    }
+
+    /// The installed host extension of type `X` as a shared handle.
+    #[must_use]
+    pub fn host_arc<X: std::any::Any + Send + Sync>(&self) -> Option<std::sync::Arc<X>> {
+        self.host_ext.get_arc::<X>()
+    }
+
+    /// The whole host extension map (cheap to clone).
+    #[must_use]
+    pub fn host_extensions(&self) -> &HostExtensions {
+        &self.host_ext
+    }
+
     fn with_optional_state_view(
         mut self,
         state: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
@@ -729,10 +870,11 @@ impl<Ctx> RunContext<Ctx> {
         self
     }
 
-    /// Attaches a durable [`crate::summarization::CompactionSink`] so every
-    /// [`crate::summarization::CompactionRecord`] a compaction produces on
-    /// this run is persisted (typically into a session's entry tree),
-    /// instead of only living in
+    /// Attaches a durable [`crate::summarization::CompactionSink`] for
+    /// [`crate::summarization::CompactionRecord`]s produced by compactions with
+    /// a trusted live boundary. Compactions without such a boundary are not
+    /// persisted. Eligible records are sent to the host-provided store instead
+    /// of only living in
     /// [`crate::middleware::ContextCompressionMiddleware::records`]'s
     /// in-process buffer. `None` (the default) disables persistence.
     #[must_use]
@@ -746,7 +888,115 @@ impl<Ctx> RunContext<Ctx> {
 
     /// Emits `event` on this run's event sink, returning the recorded entry.
     pub fn emit(&self, event: AgentEvent) -> EventRecord {
+        // Remember which cap tripped last, so a `LimitExceeded` failure can be
+        // classified with its kind (the error itself carries only text).
+        if let AgentEvent::LimitReached { kind } = &event {
+            *self
+                .last_limit
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(*kind);
+        }
         self.events.emit(event)
+    }
+
+    /// Forgets the cached limit kind. The loop calls this at each turn's limit
+    /// checks so a kind emitted earlier cannot be attributed to a later,
+    /// unrelated `LimitExceeded` that emitted no event of its own.
+    pub(crate) fn clear_last_limit(&self) {
+        self.last_limit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
+
+    /// The most recent `LimitReached` kind, without consuming it.
+    pub fn peek_last_limit(&self) -> Option<crate::events::LimitKind> {
+        *self
+            .last_limit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) fn take_last_limit(&self) -> Option<crate::events::LimitKind> {
+        self.last_limit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    /// Records that a provider call was dispatched. Called by the model base
+    /// call of each loop driver immediately before it reaches the provider.
+    pub fn mark_provider_started(&mut self) {
+        self.provider_started = true;
+        self.call_provider_started = true;
+    }
+
+    /// Records that a summarizer (a compaction, outside the model-call layer)
+    /// dispatched a provider call. Sets only the run-wide flag: the per-call
+    /// flag still describes the main model call.
+    pub(crate) fn mark_summarizer_dispatched(&mut self) {
+        tracing::debug!("[tinyagents::run] summarizer dispatched a provider call");
+        self.provider_started = true;
+    }
+
+    #[doc(hidden)]
+    pub fn mark_model_call_failed(&mut self) {
+        self.model_call_failed = true;
+    }
+
+    /// Whether a model call surfaced an error (see `model_call_failed`).
+    pub fn model_call_failed(&self) -> bool {
+        self.model_call_failed
+    }
+
+    /// Marks the start of a model call: clears the per-call provider flag.
+    pub fn begin_model_call(&mut self) {
+        self.call_provider_started = false;
+        self.model_call_failed = false;
+        self.model_base_called = false;
+    }
+
+    pub(crate) fn mark_model_base_called(&mut self) {
+        self.model_base_called = true;
+    }
+
+    pub(crate) fn model_base_called(&self) -> bool {
+        self.model_base_called
+    }
+
+    /// Whether the current (or most recent) model call reached the provider.
+    pub fn call_provider_started(&self) -> bool {
+        self.call_provider_started
+    }
+
+    /// Whether any provider call has been dispatched during this run.
+    pub fn provider_started(&self) -> bool {
+        self.provider_started
+    }
+
+    /// Takes the repeat-progress guard's halt summary, if one was latched.
+    pub fn take_halted_by_guard(&mut self) -> Option<String> {
+        self.halted_by_guard.take()
+    }
+
+    /// Record a classified guard halt, preserving its typed root cause.
+    pub fn halt_with_cause(&mut self, cause: crate::no_progress::ClassifiedStopCause) {
+        if self.halted_by_guard.is_none() {
+            self.halted_by_guard = Some(cause.summary.clone());
+            self.halted_by_guard_cause = Some(cause);
+        }
+    }
+
+    /// Take the typed cause recorded with a classified guard halt.
+    pub fn take_halted_by_guard_cause(
+        &mut self,
+    ) -> Option<crate::no_progress::ClassifiedStopCause> {
+        self.halted_by_guard_cause.take()
+    }
+
+    /// Resets lifecycle tracking for a run whose input already contains seed messages.
+    pub fn reset_turn_tracker(&mut self, seed_len: usize) {
+        self.turns = crate::agent_loop::TurnTracker::new(seed_len);
     }
 
     /// Returns this run's identifier.
@@ -816,6 +1066,10 @@ impl<Ctx> RunContext<Ctx> {
     ///
     /// Returns an error if the configured model-call cap is exceeded.
     pub fn record_model_call(&mut self) -> Result<()> {
+        self.last_limit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         self.limits.record_model_call()
     }
 
@@ -823,6 +1077,10 @@ impl<Ctx> RunContext<Ctx> {
     ///
     /// Returns an error if the configured tool-call cap is exceeded.
     pub fn record_tool_call(&mut self) -> Result<()> {
+        self.last_limit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         self.limits.record_tool_call()
     }
 
@@ -868,4 +1126,5 @@ fn shallow_merge_metadata(
 }
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;

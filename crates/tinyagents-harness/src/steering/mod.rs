@@ -4,7 +4,7 @@
 //! typed control over a *child* it is currently running: an orchestrating agent
 //! (or human, or graph supervisor) injects [`SteeringCommand`]s into a live
 //! sub-agent loop without killing or restarting it. It is the mid-run
-//! counterpart to `SubAgentSession` reuse in `tinyagents-orchestration` (which
+//! counterpart to durable child-session reuse in `tinyagents-orchestration` (which
 //! resumes a *completed* child) — together they cover both ways an orchestrator
 //! keeps a sub-agent "in play".
 //!
@@ -77,11 +77,27 @@ impl SteeringPolicy {
         }
     }
 
-    /// Creates a policy that permits every [`SteeringCommandKind`].
+    /// Creates a policy that permits every [`SteeringCommandKind`] **except**
+    /// [`SteeringCommandKind::SwitchModel`].
+    ///
+    /// A model switch changes what the run costs and which provider receives
+    /// the transcript, so it is never granted implicitly: use
+    /// [`SteeringPolicy::allow_all_with_model_switch`] or
+    /// `.allow(SteeringCommandKind::SwitchModel)` to opt in.
     pub fn allow_all() -> Self {
         Self {
-            allowed: SteeringCommandKind::ALL.into_iter().collect(),
+            allowed: SteeringCommandKind::ALL
+                .into_iter()
+                .filter(|kind| *kind != SteeringCommandKind::SwitchModel)
+                .collect(),
         }
+    }
+
+    /// Creates a policy that permits every [`SteeringCommandKind`], including
+    /// [`SteeringCommandKind::SwitchModel`]. Only hand this to an orchestrator
+    /// you trust with the run's spend and data residency.
+    pub fn allow_all_with_model_switch() -> Self {
+        Self::allow_all().allow(SteeringCommandKind::SwitchModel)
     }
 
     /// Adds `kind` to the allowlist (builder style) and returns the policy.
@@ -123,12 +139,23 @@ impl SteeringHandle {
         Self::new(SteeringPolicy::allow_all())
     }
 
+    /// Convenience constructor for a handle whose policy is
+    /// [`SteeringPolicy::allow_all_with_model_switch`].
+    pub fn allow_all_with_model_switch() -> Self {
+        Self::new(SteeringPolicy::allow_all_with_model_switch())
+    }
+
     /// Binds this handle to `run_id` as the **root** of its steering tree.
     ///
     /// Called by [`RunContext::with_steering`][crate::context::RunContext::with_steering]
     /// when an orchestrator attaches a handle to a run; every
     /// [`SteeringTarget::Root`]-addressed command drains here.
+    ///
+    /// A model switch is scoped to one run, but `local` is shared with the
+    /// handle being bound, so a switch left over from an earlier run on the
+    /// same handle is cleared here: the new run starts on its own model.
     pub(crate) fn bind_root(&self, run_id: RunId) -> Self {
+        self.reject_model_override();
         Self {
             inner: Arc::clone(&self.inner),
             run_id,
@@ -184,6 +211,26 @@ impl SteeringHandle {
     /// ([`SteeringTarget::All`]).
     pub fn send_all(&self, command: SteeringCommand) {
         self.send_to(SteeringTarget::All, command);
+    }
+
+    /// Removes one queued command when its exact target and payload match.
+    ///
+    /// This is used by producers that must retract work which was queued for
+    /// a run but could not be completed. Other commands, including commands
+    /// addressed to different runs, remain in FIFO order.
+    pub fn retract(&self, target: &SteeringTarget, command: &SteeringCommand) -> bool {
+        let mut queue = self
+            .inner
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(index) = queue.iter().position(|(queued_target, queued_command)| {
+            queued_target == target && queued_command == command
+        }) else {
+            return false;
+        };
+        queue.remove(index);
+        true
     }
 
     /// Removes and returns the commands addressed to *this* handle's run (its
@@ -302,6 +349,65 @@ impl SteeringHandle {
         current
     }
 
+    /// The model a [`SteeringCommand::SwitchModel`] selected for this run, if
+    /// any. Read by the agent loop before it resolves a model binding; the
+    /// loop validates the name against its registry and calls
+    /// `SteeringHandle::reject_model_override` when it cannot honour it.
+    pub fn model_override(&self) -> Option<String> {
+        self.lock_model_override().clone()
+    }
+
+    /// Records the model a `SwitchModel` asked for, replacing any earlier one.
+    fn set_model_override(&self, model: String) -> bool {
+        let mut slot = self.lock_model_override();
+        let superseded = slot.is_some()
+            && !self
+                .local
+                .model_override_announced
+                .load(std::sync::atomic::Ordering::SeqCst);
+        *slot = Some(model);
+        self.local
+            .model_override_announced
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        superseded
+    }
+
+    /// Marks the current model override as reported, returning `true` only the
+    /// first time since it was set -- the caller emits the one
+    /// `Steered { accepted: true }` for the command exactly then.
+    pub(crate) fn announce_model_override(&self, applied: &str) -> bool {
+        // Held across the flag claim so it is atomic with `set_model_override`
+        // replacing the override and resetting the flag.
+        let slot = self.lock_model_override();
+        slot.as_deref() == Some(applied)
+            && !self
+                .local
+                .model_override_announced
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Drops a model override the model call could not honour, so the run
+    /// keeps its current model and the name is not re-checked on every call.
+    ///
+    /// Returns `true` when the override had already been reported as applied
+    /// (`Steered { accepted: true }`), so the caller must not emit a second,
+    /// contradictory outcome for the same command.
+    pub(crate) fn reject_model_override(&self) -> bool {
+        let mut slot = self.lock_model_override();
+        slot.take();
+        self.local
+            .model_override_announced
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Locks the model override, recovering from poisoning.
+    fn lock_model_override(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.local
+            .model_override
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Locks the pause latch, recovering from poisoning (see
     /// [`SteeringHandle::send`]).
     fn lock_paused(&self) -> std::sync::MutexGuard<'_, Option<PauseState>> {
@@ -342,6 +448,13 @@ impl SteeringHandle {
 ///   [`SteeringCommand::Resume`] — in this batch or a subsequent one — clears
 ///   it. While latched, every checkpoint returns [`SteeringOutcome::Pause`]
 ///   even with an empty queue.
+/// - [`SteeringCommand::SwitchModel`] records the requested model on the
+///   handle ([`SteeringHandle::model_override`]); the agent loop validates and
+///   applies it before resolving the next model call. A blank name is
+///   rejected here (`accepted: false`). A queued switch emits **no**
+///   `Steered` event at the checkpoint: its single outcome is reported when
+///   the model call applies it (`accepted: true`) or rejects it
+///   (`accepted: false`).
 /// - [`SteeringCommand::InjectMessage`] and [`SteeringCommand::Redirect`]
 ///   append to `messages`; [`SteeringCommand::SetMetadata`] replaces
 ///   `ctx.config.metadata`.
@@ -417,6 +530,38 @@ pub fn apply_pending_steering<Ctx>(
             SteeringCommand::SetMetadata { metadata } => {
                 ctx.config.metadata = metadata;
             }
+            SteeringCommand::SwitchModel { model } => {
+                let model = model.trim().to_owned();
+                if model.is_empty() {
+                    tracing::debug!(
+                        target: "tinyagents::steering",
+                        checkpoint,
+                        "[steering] switch_model rejected: blank model name"
+                    );
+                    ctx.emit(AgentEvent::Steered {
+                        command_kind: kind.as_str().to_string(),
+                        accepted: false,
+                    });
+                    continue;
+                }
+                tracing::debug!(
+                    target: "tinyagents::steering",
+                    checkpoint,
+                    model = %model,
+                    "[steering] model switch queued for the next model call"
+                );
+                let superseded = handle.set_model_override(model);
+                if superseded {
+                    ctx.emit(AgentEvent::Steered {
+                        command_kind: kind.as_str().to_string(),
+                        accepted: false,
+                    });
+                }
+                // Queuing is not an outcome: the agent loop reports the one
+                // `Steered` event for this command when it applies or rejects
+                // the switch at the model-call boundary.
+                continue;
+            }
         }
 
         ctx.emit(AgentEvent::Steered {
@@ -434,5 +579,54 @@ pub fn apply_pending_steering<Ctx>(
     }
 }
 
+/// Validation failure from [`RecentRequestIds::claim`].
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestIdError {
+    /// The identifier exceeds [`RecentRequestIds::MAX_REQUEST_ID_BYTES`].
+    TooLong,
+}
+
+impl RecentRequestIds {
+    /// Number of ids remembered per task by [`Self::default`].
+    pub const DEFAULT_CAPACITY: usize = 64;
+
+    /// Longest `request_id` (in bytes) callers should accept; bounds the
+    /// memory a task's id window can hold.
+    pub const MAX_REQUEST_ID_BYTES: usize = 128;
+
+    /// Creates a memory holding at most `capacity` ids (minimum one).
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            order: VecDeque::new(),
+        }
+    }
+
+    /// Records `request_id`, returning `true` when it is new and `false` when
+    /// it was already remembered (a duplicate). The oldest id is forgotten once
+    /// the memory is full.
+    pub fn claim(&mut self, request_id: &str) -> std::result::Result<bool, RequestIdError> {
+        if request_id.len() > Self::MAX_REQUEST_ID_BYTES {
+            return Err(RequestIdError::TooLong);
+        }
+        if self.order.iter().any(|seen| seen == request_id) {
+            return Ok(false);
+        }
+        if self.order.len() >= self.capacity {
+            self.order.pop_front();
+        }
+        self.order.push_back(request_id.to_owned());
+        Ok(true)
+    }
+}
+
+impl Default for RecentRequestIds {
+    fn default() -> Self {
+        Self::with_capacity(Self::DEFAULT_CAPACITY)
+    }
+}
+
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;

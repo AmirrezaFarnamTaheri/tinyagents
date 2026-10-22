@@ -132,7 +132,9 @@ pub struct ModelFallbackMiddleware {
 /// capacity for a call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RateLimitBehavior {
-    /// Fail the call immediately with
+    /// Fail immediately: a temporarily empty bucket that can refill returns
+    /// [`TinyAgentsError::RateLimited`][crate::error::TinyAgentsError::RateLimited],
+    /// while a bucket that can never admit the requested tokens returns
     /// [`TinyAgentsError::LimitExceeded`][crate::error::TinyAgentsError::LimitExceeded].
     Error,
     /// Wait (polling at the configured interval) until the bucket refills enough
@@ -254,8 +256,9 @@ pub struct BudgetSpend {
 /// - `after_model` (spend + reconcile): folds the response usage into the
 ///   tracker, prices it via the configured per-model [`ModelPricing`](crate::cost::ModelPricing) table
 ///   (wiring cost into the loop, emitting
-///   [`AgentEvent::UsageRecorded`][crate::events::AgentEvent::UsageRecorded]
-///   and [`AgentEvent::CostRecorded`][crate::events::AgentEvent::CostRecorded]),
+///   [`AgentEvent::CostRecorded`][crate::events::AgentEvent::CostRecorded];
+///   the loop itself emits the call's
+///   [`AgentEvent::UsageRecorded`][crate::events::AgentEvent::UsageRecorded]),
 ///   and emits warn/exceeded events as thresholds are crossed.
 ///
 /// Reservation and refund semantics are intentionally out of scope here; this
@@ -337,20 +340,20 @@ pub struct ToolPolicyMiddleware {
     /// When `true`, a tool result larger than its declared `max_result_bytes` is
     /// truncated and flagged, enforcing the declared payload cap.
     pub(crate) enforce_result_bytes: bool,
-    /// When `true`, the two reserved intrinsic discovery-bridge names
-    /// (`tool_search`/`tool_call`) are exempted from classification/side-effect
+    /// When `true`, the reserved intrinsic discovery-bridge name
+    /// (`tool_search`) is exempted from classification/side-effect
     /// checks whenever `policies` has no entry for them.
     ///
     /// Off by default, including under [`Self::strict`]: exempting *every*
-    /// policy-less tool sharing these two magic names is only safe when the
+    /// policy-less tool sharing this magic name is only safe when the
     /// caller can guarantee `policies` is the *complete* registry snapshot
     /// (so "no entry" reliably means "not a registered tool, must be the
     /// intrinsic bridge"). An incomplete or stale snapshot could otherwise let
     /// a real, side-effecting host tool that happens to be registered under
-    /// one of these reserved names bypass `strict()`'s fail-closed checks.
+    /// this reserved name bypass `strict()`'s fail-closed checks.
     /// Enable explicitly with
     /// [`exempt_discovery_bridge`](Self::exempt_discovery_bridge) when using
-    /// the harness's own `tool_search`/`tool_call` bridge together with a
+    /// the harness's own `tool_search` bridge together with a
     /// policy snapshot you trust to be complete.
     pub(crate) exempt_discovery_bridge: bool,
 }
@@ -721,4 +724,20 @@ pub fn plan_mode_middleware(
     policies: std::collections::HashMap<String, ToolPolicy>,
 ) -> PlanModeMiddleware {
     PlanModeMiddleware::new(mode, policies)
+}
+
+/// Product-level tool names commonly required for plan-mode control.
+/// Hosts may extend this list for their own safe planning tools.
+pub const fn plan_mode_allowlist() -> &'static [&'static str] {
+    &[
+        "plan_exit",
+        "request_plan_review",
+        "todo",
+        "goal_get",
+        "goal_set",
+        "goal_complete",
+        "goal_pause",
+        "goal_resume",
+        "goal_clear",
+    ]
 }

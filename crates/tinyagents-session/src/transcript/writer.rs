@@ -2,11 +2,13 @@
 //! delta (message tail or compaction record), interrupted partials, and the
 //! derived `.md` companion.
 
+#[cfg(test)]
 use super::history::TranscriptPartial;
+#[cfg(test)]
 use super::jsonl::{
-    COMPACTION_KIND, CompactionLine, MessageLine, build_message_line, meta_line_json,
-    serialise_message_lines, tools_line_json,
+    COMPACTION_KIND, CompactionLine, MessageLine, build_message_line, partial_line,
 };
+use super::jsonl::{meta_line_json, serialise_message_lines, tools_line_json};
 use super::markdown::render_markdown;
 use super::paths::md_companion_path;
 use super::types::TranscriptMessage;
@@ -24,11 +26,25 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// one-shot writer used by migrations, the sub-agent runners, and tests.
 /// The incremental session-persistence path uses [`append_transcript_turn`]
 /// instead, which never rewrites existing lines.
-pub fn write_transcript(
+#[cfg(test)]
+pub(crate) fn write_transcript(
     jsonl_path: &Path,
     messages: &[TranscriptMessage],
     meta: &TranscriptMeta,
     last_assistant_turn_usage: Option<&TurnUsage>,
+) -> Result<()> {
+    write_transcript_with_tools(jsonl_path, messages, meta, last_assistant_turn_usage, None)
+}
+
+/// [`write_transcript`], additionally recording `tools` as the transcript's
+/// latest `{"kind":"tools"}` record, so a full rewrite of a transcript that
+/// recorded its tool declarations keeps them.
+pub(crate) fn write_transcript_with_tools(
+    jsonl_path: &Path,
+    messages: &[TranscriptMessage],
+    meta: &TranscriptMeta,
+    last_assistant_turn_usage: Option<&TurnUsage>,
+    tools: Option<&serde_json::Value>,
 ) -> Result<()> {
     if let Some(parent) = jsonl_path.parent() {
         fs::create_dir_all(parent)
@@ -40,6 +56,10 @@ pub fn write_transcript(
     jsonl_buf.push_str(&meta_line_json(meta)?);
     jsonl_buf.push('\n');
     serialise_message_lines(messages, last_assistant_turn_usage, None, &mut jsonl_buf)?;
+    if let Some(tools) = tools {
+        jsonl_buf.push_str(&tools_line_json(tools)?);
+        jsonl_buf.push('\n');
+    }
 
     atomic_write(jsonl_path, jsonl_buf.as_bytes())
         .with_context(|| format!("write transcript {}", jsonl_path.display()))?;
@@ -60,7 +80,8 @@ pub fn write_transcript(
 /// wants. Returns `Ok(true)` when this call created `jsonl_path`, `Ok(false)`
 /// when it already existed (some other write already won the race and this
 /// call's `messages`/`meta` were discarded).
-pub fn write_transcript_if_absent(
+#[cfg(test)]
+pub(crate) fn write_transcript_if_absent(
     jsonl_path: &Path,
     messages: &[TranscriptMessage],
     meta: &TranscriptMeta,
@@ -70,7 +91,8 @@ pub fn write_transcript_if_absent(
 
 /// Like [`write_transcript_if_absent`], additionally preserving the latest
 /// recorded tool declarations when a transcript is migrated into a session.
-pub fn write_transcript_if_absent_with_tools(
+#[cfg(test)]
+pub(crate) fn write_transcript_if_absent_with_tools(
     jsonl_path: &Path,
     messages: &[TranscriptMessage],
     meta: &TranscriptMeta,
@@ -129,7 +151,8 @@ pub fn write_transcript_if_absent_with_tools(
 ///
 /// `request_id`, when supplied by the caller, is stamped on every appended
 /// line as a turn boundary marker.
-pub fn append_transcript_turn(
+#[cfg(test)]
+pub(crate) fn append_transcript_turn(
     jsonl_path: &Path,
     prev_persisted: &[TranscriptMessage],
     messages: &[TranscriptMessage],
@@ -151,38 +174,8 @@ pub fn append_transcript_turn(
     )
 }
 
-/// Appends one logical turn and, when present, its display-only interruption
-/// row from one serialized buffer and one file-write operation.
-///
-/// The partial is written after the logical delta and refreshed metadata. It
-/// has `interrupted: true`, so the model-context reader skips it while the
-/// display reader preserves it. Serialization happens before opening the file
-/// for append, preventing a serialization failure from leaving a logical turn
-/// without its associated display partial.
-pub fn append_transcript_turn_with_partial(
-    jsonl_path: &Path,
-    prev_persisted: &[TranscriptMessage],
-    messages: &[TranscriptMessage],
-    meta: &TranscriptMeta,
-    turn_usage: Option<&TurnUsage>,
-    request_id: Option<&str>,
-    partial: Option<&TranscriptPartial>,
-) -> Result<()> {
-    append_transcript_turn_with_extras(
-        jsonl_path,
-        prev_persisted,
-        messages,
-        meta,
-        turn_usage,
-        request_id,
-        AppendTranscriptExtras {
-            partial,
-            tools: None,
-        },
-    )
-}
-
 /// Optional turn records serialized alongside a turn's logical delta.
+#[cfg(test)]
 pub(crate) struct AppendTranscriptExtras<'a> {
     pub partial: Option<&'a TranscriptPartial>,
     pub tools: Option<&'a serde_json::Value>,
@@ -190,6 +183,7 @@ pub(crate) struct AppendTranscriptExtras<'a> {
 
 /// Appends a turn, optional display partial, and optional tool declarations
 /// from one serialized buffer and one file-write operation.
+#[cfg(test)]
 pub(crate) fn append_transcript_turn_with_extras(
     jsonl_path: &Path,
     prev_persisted: &[TranscriptMessage],
@@ -305,7 +299,8 @@ pub(crate) fn append_transcript_turn_with_extras(
 /// Appends a `{"kind":"tools"}` record naming the tool declarations the
 /// session's latest turn was sent with. The file must already exist (its
 /// first line is always `_meta`), so callers append this after the turn.
-pub fn append_tools_record(jsonl_path: &Path, tools: &serde_json::Value) -> Result<()> {
+#[cfg(test)]
+pub(crate) fn append_tools_record(jsonl_path: &Path, tools: &serde_json::Value) -> Result<()> {
     anyhow::ensure!(
         jsonl_path.is_file(),
         "transcript must exist before appending tool declarations: {}",
@@ -323,6 +318,7 @@ pub fn append_tools_record(jsonl_path: &Path, tools: &serde_json::Value) -> Resu
 }
 
 /// Appends the optional display-only row to an already assembled turn buffer.
+#[cfg(test)]
 fn serialise_interrupted_partial(
     partial: Option<&TranscriptPartial>,
     request_id: Option<&str>,
@@ -331,19 +327,7 @@ fn serialise_interrupted_partial(
     let Some(partial) = partial.filter(|partial| !partial.content.is_empty()) else {
         return Ok(());
     };
-    let mut line = build_message_line(
-        &TranscriptMessage::assistant(&partial.content),
-        None,
-        request_id,
-        true,
-    );
-    line.iteration = partial.iteration;
-    line.reasoning_content = partial
-        .reasoning_content
-        .as_deref()
-        .map(str::trim)
-        .filter(|content| !content.is_empty())
-        .map(str::to_owned);
+    let mut line = partial_line(partial, request_id);
     line.ts = Some(chrono::Utc::now().to_rfc3339());
     buf.push_str(&serde_json::to_string(&line).context("serialise interrupted partial line")?);
     buf.push('\n');
@@ -357,7 +341,8 @@ fn serialise_interrupted_partial(
 /// resumed context never carries a truncated answer. Does not affect the
 /// caller's tracked `prev_persisted` (nothing about the logical model context
 /// changed). No-op when `partial_content` is empty.
-pub fn append_interrupted_partial(
+#[cfg(test)]
+pub(crate) fn append_interrupted_partial(
     jsonl_path: &Path,
     partial_content: &str,
     request_id: Option<&str>,
@@ -392,14 +377,16 @@ pub fn append_interrupted_partial(
 }
 
 /// Longest common prefix length between two message slices, comparing on the
-/// stable, serialised fields (`role`, `content`, `id`). `TranscriptMessage` does not
-/// derive `PartialEq`, and `extra_metadata` is intentionally excluded because
+/// model-visible fields (`role`, `content`, `id` and the typed tool-call, tool-result
+/// and image structure; see [`TranscriptMessage::same_row_as`]). `extra_metadata` is
+/// intentionally excluded because
 /// it is enriched (turn usage) between the in-memory history and the persisted
 /// line, which must not count as a divergence.
+#[cfg(test)]
 fn common_prefix_len(a: &[TranscriptMessage], b: &[TranscriptMessage]) -> usize {
     a.iter()
         .zip(b.iter())
-        .take_while(|(x, y)| x.role == y.role && x.content == y.content && x.id == y.id)
+        .take_while(|(x, y)| x.same_row_as(y))
         .count()
 }
 
@@ -503,6 +490,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
 /// holds the honor of "first write" when it finishes — never clobber a
 /// conversation's genuine first turn with an adoption fold that started
 /// scanning before that turn existed.
+#[cfg(test)]
 fn publish_transcript_if_absent(path: &Path, contents: &[u8]) -> Result<bool> {
     let tmp_path = unique_tmp_path(path);
 
@@ -528,7 +516,8 @@ fn publish_transcript_if_absent(path: &Path, contents: &[u8]) -> Result<bool> {
 }
 
 /// Append raw bytes to a file, opening in append mode (O(1), no read-back).
-fn append_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
+#[cfg(test)]
+pub(super) fn append_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::{Read, Seek, SeekFrom, Write};
     let mut file = fs::OpenOptions::new()
         .read(true)

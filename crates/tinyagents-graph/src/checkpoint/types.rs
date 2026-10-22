@@ -178,7 +178,7 @@ pub struct CheckpointTuple<State> {
 /// Derives `Serialize`/`Deserialize` with serde's conditional bounds: a
 /// `Checkpoint<State>` is (de)serializable exactly when `State` is, which is
 /// what lets file-backed backends such as
-/// [`FileCheckpointer`](crate::FileCheckpointer) round-trip whole records
+/// `FileCheckpointer` round-trip whole records
 /// through JSON. The in-memory path never needs it.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Checkpoint<State> {
@@ -410,6 +410,26 @@ pub struct BarrierArrivals {
 }
 
 impl<State> Checkpoint<State> {
+    /// The address of this checkpoint: its thread, its id, and its namespace.
+    pub fn config(&self) -> CheckpointConfig {
+        CheckpointConfig {
+            thread_id: self.thread_id.clone(),
+            checkpoint_id: Some(self.checkpoint_id.clone()),
+            namespace: self.namespace.clone(),
+        }
+    }
+
+    /// The address of the checkpoint this one was written after, if any.
+    pub fn parent_config(&self) -> Option<CheckpointConfig> {
+        self.parent_checkpoint_id
+            .as_ref()
+            .map(|parent| CheckpointConfig {
+                thread_id: self.thread_id.clone(),
+                checkpoint_id: Some(parent.clone()),
+                namespace: self.namespace.clone(),
+            })
+    }
+
     /// Builds a fresh checkpoint format v2 record.
     ///
     /// Sensible defaults for everything except `state` and `tasks`: a

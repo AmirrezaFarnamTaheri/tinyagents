@@ -177,6 +177,40 @@ pub trait HarnessEventJournal: Send + Sync {
         Ok(all)
     }
 
+    /// Like [`Self::read_window`], but pairs each observation with its journal
+    /// offset (the position [`Self::append`] returned), so a pager can derive
+    /// its next cursor even when the backend resumed past a stale `offset`.
+    /// The default assumes the window starts exactly at `offset`; backends
+    /// that can resume elsewhere override it.
+    async fn read_window_positioned(
+        &self,
+        run_id: &str,
+        offset: u64,
+        limit: usize,
+    ) -> Result<Vec<(u64, AgentObservation)>> {
+        let window = self.read_window(run_id, offset, limit).await?;
+        Ok((offset..).zip(window).collect())
+    }
+
+    /// Closes `run_id`'s journal once the run is finished and nothing will be
+    /// appended to it again.
+    ///
+    /// Sealing never changes what a reader observes: every offset, event id
+    /// and page reads back exactly as before. A durable journal stores a
+    /// sealed run compactly and then applies its retention period. The host
+    /// calls this when a run ends normally; [`reap_orphaned_runs_and_seal`]
+    /// does it for runs a restart left behind. Sealing is idempotent, a run
+    /// that wrote nothing is a no-op, and an observation appended to a sealed
+    /// run is refused by a journal that seals.
+    ///
+    /// The default does nothing, for a journal that has no sealed form.
+    ///
+    /// [`reap_orphaned_runs_and_seal`]: crate::observability::reap_orphaned_runs_and_seal
+    async fn seal_run(&self, run_id: &str) -> Result<()> {
+        let _ = run_id;
+        Ok(())
+    }
+
     /// Returns observations for `run_id` from `offset` whose
     /// [`AgentEvent::kind`][crate::events::AgentEvent::kind] is in
     /// `kinds`. An empty `kinds` slice matches everything. This is the
@@ -285,7 +319,7 @@ impl Default for InMemoryEventJournal {
 ///
 /// Each run's observations are appended to the store under a stream named by
 /// the run id, so `read_from` resumes from a durable offset. Pair with
-/// [`crate::store::JsonlAppendStore`] for a local durable journal or
+/// [`crate::store::DriverAppendStore`] for a durable journal or
 /// [`crate::store::InMemoryAppendStore`] for deterministic tests.
 #[derive(Clone, Debug)]
 pub struct StoreEventJournal<A: AppendStore> {
@@ -439,7 +473,7 @@ pub struct JournalSink {
 }
 
 /// An [`EventListener`] that appends each [`EventRecord`] as a JSON line into a
-/// [`JsonlAppendStore`](crate::store::JsonlAppendStore) stream.
+/// [`DriverAppendStore`](crate::store::DriverAppendStore) stream.
 ///
 /// This is the lightweight durable sink: it persists the live record (id,
 /// offset, event) under a fixed stream name. Each record is handed to a

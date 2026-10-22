@@ -17,7 +17,7 @@ surface that is genuinely new: the compiled-graph rendition of the agent loop
 `crates/tinyagents-graph/src/compiled/`) is the durable, typed, Pregel-style
 state graph: partial updates and reducers (`reducer`), commands and
 interrupts (`command`), checkpointing (`checkpoint`, with `InMemoryCheckpointer`,
-`FileCheckpointer`, and an optional `SqliteCheckpointer`), streaming/events
+and `DriverCheckpointer`), streaming/events
 (`stream`), subgraph embedding (`subgraph`), and recursion tracking
 (`recursion`). See `docs/modules/graph/` for that design in full; nothing on
 this page duplicates it.
@@ -158,7 +158,7 @@ direct run's `AgentEvent` kind sequence is a subsequence of the graph run's
 (the graph engine may emit extra events — for example `ToolsAdvertised` once
 per turn instead of once per run — but never fewer or reordered ones); plus
 checkpoint+resume across an interrupt (`InMemoryCheckpointer` and
-`FileCheckpointer`) and `LoopIter` stepping with `override_next`.
+`DriverCheckpointer`) and `LoopIter` stepping with `override_next`.
 
 ## See also
 

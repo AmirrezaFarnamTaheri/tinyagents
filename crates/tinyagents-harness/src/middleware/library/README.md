@@ -33,6 +33,12 @@ Grouped by extension shape:
   (token bucket); either fails fast (`RateLimitBehavior::Error`) or polls until
   capacity frees up (`RateLimitBehavior::Wait`), with an injectable clock for
   deterministic tests.
+- `RequiredCapabilitiesMiddleware`, `FallbackObserverMiddleware`, and
+  `UsageCarryMiddleware` — stamp a route's capability requirement without
+  replacing a stricter request value, observe a successfully resolved fallback,
+  and hand one completed logical-call response to a host-owned usage sink.
+  Pair these with `tinyagents_registry::WorkloadRouter::from_workload_routes`,
+  supplying the host's vision hint.
 
 ### Tool policy / selection (`Middleware` lifecycle hooks)
 
@@ -53,6 +59,15 @@ Grouped by extension shape:
 - `HumanApprovalMiddleware` — raises `TinyAgentsError::Interrupted` from
   `before_tool` for flagged tools unless an `ApprovalFn` admits the call; the
   harness-native half of a human-in-the-loop gate.
+- `ToolPolicyGateMiddleware` — combines a builder policy with an optional
+  session ceiling. A denial from either policy wins before approval; a shared
+  resolver handles one or both approval requirements. `with_session_listing`
+  and `visible_tool_names` let a host scope a session-specific skill listing
+  to the tools already available to the run.
+  `structured_denial_renderer` formats host-authored blocked, reason,
+  workaround, and relay text while leaving marker wording under host control.
+  `StructuredDenialRenderOptions` lets hosts customize the reason label and
+  separator before the relay instruction while preserving the shared renderer.
 
 ### Budget (`Middleware` lifecycle hooks)
 
@@ -65,6 +80,14 @@ Grouped by extension shape:
   `after_model`, and releases the reservation in `on_error` so a failed call
   never leaks it. Emits `AgentEvent::BudgetReserved`, `BudgetReconciled`,
   `UsageRecorded`, `CostRecorded`, `BudgetWarning`, and `BudgetExceeded`.
+- `TurnClock` / `TurnClockMiddleware` — a reading of the run's wall-clock
+  budget (the tighter of the run's own deadline and the host's
+  `RunPolicy::limits.max_wall_clock_ms`), and an `after_tool` hook that appends
+  `[turn budget: 32m elapsed / 28m remaining]` to a tool result once per tenth
+  of the budget past half of it. The note rides a tool result (durable,
+  never rewritten) rather than a per-request system message, so it does not
+  churn the prompt-prefix cache. Pair with `RunPolicy::tool_result_durations`,
+  which appends `[took 12.3s]` to each executed tool row.
 
 ### Observation (`Middleware` lifecycle hooks)
 
@@ -81,6 +104,22 @@ Grouped by extension shape:
 - `TracingMiddleware` — implements every lifecycle hook, recording a bounded
   ring buffer of `PhaseTrace` begin/end records plus per-phase `TraceCounts`,
   independent of the event stream.
+- `TranscriptSnapshotMiddleware` — mirrors provider-dispatched messages,
+  accepted response boundaries, usage and final tool outcomes into a shared
+  snapshot so callers can persist completed rounds after a later error.
+- `ToolOutcomeCaptureMiddleware` — writes concrete call arguments, success,
+  final visible result text and elapsed time to `ToolOutcomeSink`; register it
+  before result-transforming middleware so its reverse-order result hook sees
+  the transformed output.
+- `FailureScopeMiddleware` — correlates tool calls with their final results
+  and passes the original `ToolCall` to host classification without a second
+  call-id map. It owns per-run no-progress, classified-recovery, and recoverable
+  failure trackers, typed halts, and one-shot request nudges. Host policy also
+  supplies lifecycle callbacks for stop-latch batch/refusal/progress evidence.
+  Construct a **new driver per run** because its steering handle and
+  halt-summary slot are run specific.
+- `run_output_ladder` — the shared compact, persist-or-cap, disclose sequence
+  for tool results. The host supplies `OutputProcessor` and `OutputCapPolicy`.
 
 ## Files
 
@@ -91,9 +130,14 @@ Grouped by extension shape:
 | `resilience.rs` | Constructors and `ModelMiddleware` impls for `RetryMiddleware`, `TimeoutMiddleware`, `ModelFallbackMiddleware`, `RateLimitMiddleware`. |
 | `budget.rs` | Constructors and `Middleware` impl for `BudgetMiddleware`, plus `BudgetTracker`/`BudgetLimits` helper methods and the shared input-token estimator. |
 | `tool_policy.rs` | Constructors and `Middleware` impls for `ToolAllowlistMiddleware`, `ToolPolicyMiddleware`, `DynamicToolSelectionMiddleware`, `ContextualToolSelectionMiddleware`, `HumanApprovalMiddleware`. |
+| `tool_outcome_capture.rs` | Shared call-identity/timing recorder and standalone `ToolOutcomeCaptureMiddleware`. |
+| `transcript_snapshot.rs` | Shared transcript snapshot sink, live snapshot middleware, and bounded unanswered-step renderer. |
+| `failure_scope.rs` | Host-classified failure-scope driver over shared no-progress, classified and recoverable trackers. |
+| `output_cap.rs`, `output_ladder.rs` | Generic output-stage plan and the shared compaction/cap/disclosure runner. |
 | `context.rs` | Constructors and `Middleware` impls for `MessageTrimMiddleware`, `ContextCompressionMiddleware`, `MicrocompactMiddleware`, `PromptCacheGuardMiddleware` — note these structs are *defined* in `middleware/types.rs`, not here; this file only holds their behavior. See `middleware/README.md`. |
+| `context/overflow.rs`, `context/summary.rs` | Child modules of `context.rs`: overflow-recovery attempts (compact, route, truncate) and how a compaction batch becomes a summary (split-turn prefix, file lists). Behaviour documented in `docs/modules/harness/compaction.md`. |
 | `observe.rs` | Constructors and `Middleware` impls for `StructuredOutputValidatorMiddleware`, `DynamicPromptMiddleware`, `RedactionMiddleware`, `TracingMiddleware`, and (also structs defined in `middleware/types.rs`) `LoggingMiddleware`/`UsageAccountingMiddleware`. |
-| `test.rs` | Unit tests for every middleware in this directory (construction, hook behavior, event emission, edge cases like poisoned mutexes and concurrent budget reservations). |
+| `mod_tests.rs` | Unit tests for every middleware in this directory (construction, hook behavior, event emission, edge cases like poisoned mutexes and concurrent budget reservations). |
 
 ## Operational constraints
 
@@ -132,3 +176,21 @@ Grouped by extension shape:
 - **Wrap middleware in `resilience.rs` are responsible for their own retry
   budget.** `MiddlewareStack` does not cap how many times a `ModelMiddleware`
   calls `next.run(..)`.
+- **Per-call guidance goes through `push_ephemeral_instruction`.** Middleware
+  that adds a note to one request (a contents list, a nudge) should not push a
+  raw `Message::system`: on a model whose profile sets
+  `hoists_system_messages` (DeepSeek moves every system turn to the prompt
+  head) a new system message rewrites the cached prefix. The helper reads the
+  target profile the loop previews onto `RunContext::model_profile` and, for
+  such a model, appends the text to the tail tool result or user turn under a
+  `[harness note]` header instead.
+
+`EphemeralInstructionQueue` and its middleware deliver context-bound corrections
+to request copies without modifying transcript history. See
+[ephemeral instructions](ephemeral_instructions/README.md) for lifecycle and ordering.
+
+## Stop policies
+
+[StopHookMiddleware](stop_hooks/README.md) evaluates host-provided budget, goal
+and observer hooks after model calls. Accounting stays generic over host metrics;
+per-run state, ordering and once-only pause delivery belong to the harness.

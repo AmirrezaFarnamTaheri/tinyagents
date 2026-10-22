@@ -113,7 +113,7 @@ See [`compaction.md`](./compaction.md) for the full contract.
 | `render.rs` | `render_message_for_summary`. |
 | `trim.rs` | `trim_messages`/`trim_messages_with`/`trim_messages_to_token_budget_with`. |
 | `compaction.rs` | `find_cut_point`, `summarize_with_split`, `OverflowClassifier`, `CompactionContext`/`CompactionDecision`. |
-| `test.rs`, `compaction/test.rs` | Unit test coverage. |
+| `mod_tests.rs`, `compaction/compaction_tests.rs` | Unit test coverage. |
 
 ## Key invariants
 
@@ -124,6 +124,10 @@ See [`compaction.md`](./compaction.md) for the full contract.
   `keep_last` count or a `keep_recent_tokens` budget is therefore a
   *minimum*, not an exact value; `to_keep` is always a provider-acceptable
   slice.
+- **`pin_turn_user_message` keeps the turn's assignment out of the
+  summary.** When the kept tail has no user message, the most recent one is
+  moved to its front verbatim (size-capped), and the persisted
+  `CompactionRecord` names it in `details.pinned_user_index`.
 - **System messages are never placed in `to_summarize`** and are (by
   default) never dropped by trimming either.
 - **`ConcatSummarizer` renders through `render_message_for_summary`, not
@@ -138,6 +142,4 @@ See [`compaction.md`](./compaction.md) for the full contract.
 `tinyinference_llm::model::ModelProfile::max_input_tokens`.
 `token_estimation::estimate_slice_tokens` backs whole-slice estimates.
 Consumers are `middleware::library::context` (`ContextCompressionMiddleware`,
-`MicrocompactMiddleware`) and, when a session is attached, a
-`tinyagents_session::entry_tree::SessionCompactionSink` persisting
-`CompactionRecord`s as `CompactionEntry`s.
+`MicrocompactMiddleware`) and any host-provided `CompactionSink`.

@@ -110,6 +110,13 @@ pub struct ModelResolveRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_pin: Option<String>,
 
+    /// Advisory router hint from the definition, not a concrete model id.
+    ///
+    /// The host interprets this vocabulary. Middleware-selected exact model
+    /// overrides suppress the hint before resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_hint: Option<String>,
+
     /// Capabilities required by middleware for this provider call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_capabilities: Option<CapabilitySet>,
@@ -123,6 +130,7 @@ impl ModelResolveRequest {
             role: None,
             is_team_lead: false,
             model_pin: None,
+            model_hint: None,
             required_capabilities: None,
         }
     }
@@ -139,6 +147,12 @@ impl ModelResolveRequest {
     /// Sets the exact model id the agent's definition pinned.
     pub fn with_model_pin(mut self, model: impl Into<String>) -> Self {
         self.model_pin = Some(model.into());
+        self
+    }
+
+    /// Supply an advisory routing hint without synthesizing a model id.
+    pub fn with_model_hint(mut self, hint: impl Into<String>) -> Self {
+        self.model_hint = Some(hint.into());
         self
     }
 
@@ -214,6 +228,28 @@ pub trait ModelResolver<State: Send + Sync>: Send + Sync {
     /// should therefore be cheap and must not assume the answer is memoized by
     /// the caller.
     async fn resolve(&self, req: &ModelResolveRequest) -> Result<Arc<dyn ChatModel<State>>>;
+
+    /// Resolves an exact configured name without falling back to a default.
+    /// Used by the generic runtime to walk an explicit fallback chain. Hosts
+    /// with dynamic routing may leave this unsupported; named fallbacks then
+    /// cannot be selected through that resolver.
+    async fn resolve_named(&self, _name: &str) -> Result<Option<Arc<dyn ChatModel<State>>>> {
+        Ok(None)
+    }
+
+    /// Returns a cheap synchronous preview for middleware that shapes a
+    /// request from the target model profile. Network-backed resolvers should
+    /// leave this unavailable and use their normal resolution path.
+    fn preview(&self, _req: &ModelResolveRequest) -> Option<Arc<dyn ChatModel<State>>> {
+        None
+    }
+
+    /// The selected configured name, when the resolver can identify it
+    /// without changing its answer. This carries observability and fallback
+    /// identity alongside the executable model.
+    fn selected_name(&self, _req: &ModelResolveRequest) -> Option<String> {
+        None
+    }
 }
 
 // ── FixedModelResolver ────────────────────────────────────────────────────────
@@ -228,12 +264,21 @@ pub trait ModelResolver<State: Send + Sync>: Send + Sync {
 /// about product tiers.
 pub struct FixedModelResolver<State: Send + Sync> {
     model: Arc<dyn ChatModel<State>>,
+    name: Option<String>,
 }
 
 impl<State: Send + Sync> FixedModelResolver<State> {
     /// Wraps `model` as the answer to every resolution request.
     pub fn new(model: Arc<dyn ChatModel<State>>) -> Self {
-        Self { model }
+        Self { model, name: None }
+    }
+
+    /// Wraps one model while preserving its configured runtime name.
+    pub fn named(name: impl Into<String>, model: Arc<dyn ChatModel<State>>) -> Self {
+        Self {
+            model,
+            name: Some(name.into()),
+        }
     }
 
     /// The wrapped model.
@@ -248,6 +293,7 @@ impl<State: Send + Sync> Clone for FixedModelResolver<State> {
     fn clone(&self) -> Self {
         Self {
             model: Arc::clone(&self.model),
+            name: self.name.clone(),
         }
     }
 }
@@ -264,253 +310,144 @@ impl<State: Send + Sync> ModelResolver<State> for FixedModelResolver<State> {
     async fn resolve(&self, _req: &ModelResolveRequest) -> Result<Arc<dyn ChatModel<State>>> {
         Ok(Arc::clone(&self.model))
     }
+
+    async fn resolve_named(&self, name: &str) -> Result<Option<Arc<dyn ChatModel<State>>>> {
+        let matches = self.name.as_deref() == Some(name)
+            || self
+                .model
+                .profile()
+                .and_then(|profile| profile.model.as_deref())
+                == Some(name);
+        Ok(matches.then(|| Arc::clone(&self.model)))
+    }
+
+    fn preview(&self, _req: &ModelResolveRequest) -> Option<Arc<dyn ChatModel<State>>> {
+        Some(Arc::clone(&self.model))
+    }
+
+    fn selected_name(&self, _req: &ModelResolveRequest) -> Option<String> {
+        self.name.clone().or_else(|| {
+            self.model
+                .profile()
+                .and_then(|profile| profile.model.clone())
+        })
+    }
+}
+
+/// Resolves from models that a host has already constructed for one turn.
+///
+/// Team leads always use `lead` (the turn's selected model); delegated agents
+/// first resolve an exact definition pin, then a `hint:<name>` route, and use
+/// `primary` when neither route is available. Model construction and route
+/// names remain host-owned. In particular, this resolver does not inspect
+/// credentials, capabilities, or provider state.
+pub struct PrebuiltModelResolver<State: Send + Sync> {
+    primary: Arc<dyn ChatModel<State>>,
+    primary_name: Option<String>,
+    lead: Arc<dyn ChatModel<State>>,
+    routes: std::collections::HashMap<String, Arc<dyn ChatModel<State>>>,
+}
+
+impl<State: Send + Sync> PrebuiltModelResolver<State> {
+    /// Creates a resolver using `primary` as both the lead model and fallback.
+    pub fn new<I>(primary: Arc<dyn ChatModel<State>>, routes: I) -> Self
+    where
+        I: IntoIterator<Item = (String, Arc<dyn ChatModel<State>>)>,
+    {
+        Self {
+            lead: Arc::clone(&primary),
+            primary,
+            primary_name: None,
+            routes: routes.into_iter().collect(),
+        }
+    }
+
+    /// Sets a separately wrapped model for team leads.
+    pub fn with_lead_model(mut self, lead: Arc<dyn ChatModel<State>>) -> Self {
+        self.lead = lead;
+        self
+    }
+
+    /// Gives the primary model its exact configured name for fallback lookup.
+    pub fn with_primary_name(mut self, name: impl Into<String>) -> Self {
+        self.primary_name = Some(name.into());
+        self
+    }
+}
+
+impl<State: Send + Sync> std::fmt::Debug for PrebuiltModelResolver<State> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrebuiltModelResolver")
+            .field("route_count", &self.routes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl<State: Send + Sync> ModelResolver<State> for PrebuiltModelResolver<State> {
+    async fn resolve(&self, req: &ModelResolveRequest) -> Result<Arc<dyn ChatModel<State>>> {
+        if req.is_team_lead {
+            return Ok(Arc::clone(&self.lead));
+        }
+
+        let hinted_route = req
+            .model_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+            .map(|hint| format!("hint:{hint}"));
+        let route = req.model_pin().or(hinted_route.as_deref());
+        Ok(route
+            .and_then(|name| self.routes.get(name))
+            .cloned()
+            .unwrap_or_else(|| Arc::clone(&self.primary)))
+    }
+
+    async fn resolve_named(&self, name: &str) -> Result<Option<Arc<dyn ChatModel<State>>>> {
+        if self.primary_name.as_deref() == Some(name) {
+            return Ok(Some(Arc::clone(&self.primary)));
+        }
+        Ok(self.routes.get(name).cloned())
+    }
+
+    fn preview(&self, req: &ModelResolveRequest) -> Option<Arc<dyn ChatModel<State>>> {
+        if req.is_team_lead {
+            return Some(Arc::clone(&self.lead));
+        }
+        let hinted_route = req
+            .model_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+            .map(|hint| format!("hint:{hint}"));
+        let route = req.model_pin().or(hinted_route.as_deref());
+        Some(
+            route
+                .and_then(|name| self.routes.get(name))
+                .cloned()
+                .unwrap_or_else(|| Arc::clone(&self.primary)),
+        )
+    }
+
+    fn selected_name(&self, req: &ModelResolveRequest) -> Option<String> {
+        let hinted_route = req
+            .model_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+            .map(|hint| format!("hint:{hint}"));
+        let route = req.model_pin().or(hinted_route.as_deref());
+        if let Some(name) = route.filter(|name| self.routes.contains_key(*name)) {
+            return Some(name.to_owned());
+        }
+        self.primary_name.clone().or_else(|| {
+            self.primary
+                .profile()
+                .and_then(|profile| profile.model.clone())
+        })
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use tinyinference_llm::model::{ModelRequest, ModelResponse};
-
-    /// Minimal model double: replies with a fixed string so a resolved model can
-    /// be identified by the text it produces as well as by pointer identity.
-    struct EchoModel(&'static str);
-
-    #[async_trait]
-    impl<State: Send + Sync> ChatModel<State> for EchoModel {
-        async fn invoke(
-            &self,
-            _state: &State,
-            _request: ModelRequest,
-        ) -> tinyinference_llm::Result<ModelResponse> {
-            Ok(ModelResponse::assistant(self.0))
-        }
-    }
-
-    fn fixed(reply: &'static str) -> FixedModelResolver<()> {
-        FixedModelResolver::new(Arc::new(EchoModel(reply)))
-    }
-
-    // ── ModelResolveRequest invariants ───────────────────────────────────────
-
-    #[test]
-    fn new_request_has_no_role_and_is_not_lead() {
-        let req = ModelResolveRequest::new("planner");
-        assert_eq!(req.agent_id, "planner");
-        assert_eq!(req.role(), None);
-        assert!(!req.is_team_lead);
-        assert_eq!(req.model_pin(), None);
-    }
-
-    #[test]
-    fn builders_set_role_and_lead() {
-        let req = ModelResolveRequest::new("planner")
-            .with_role("researcher")
-            .as_team_lead();
-        assert_eq!(req.role(), Some("researcher"));
-        assert!(req.is_team_lead);
-    }
-
-    #[test]
-    fn model_pin_is_a_separate_channel_from_role() {
-        // The bug #89 exists to prevent: with no pin field, a wiring author
-        // puts the model id in `role`, the host reads it as an unknown role and
-        // silently falls back to a default. The two must never collapse into
-        // one string.
-        let req = ModelResolveRequest::new("planner")
-            .with_role("researcher")
-            .with_model_pin("claude-3-5-sonnet");
-        assert_eq!(req.role(), Some("researcher"));
-        assert_eq!(req.model_pin(), Some("claude-3-5-sonnet"));
-    }
-
-    #[test]
-    fn a_pin_can_be_set_without_a_role() {
-        // The common case for a user-authored agent: it pins a model and
-        // declares no role at all.
-        let req = ModelResolveRequest::new("planner").with_model_pin("local-llama");
-        assert_eq!(req.role(), None);
-        assert_eq!(req.model_pin(), Some("local-llama"));
-    }
-
-    #[test]
-    fn blank_model_pin_reads_as_absent() {
-        // `model = ""` in a definition means "no pin", not a model named "".
-        // Reaching a resolver as Some("") would fail the lookup and turn a
-        // cosmetic config blank into an unroutable turn.
-        for blank in ["", "   ", "\t\n"] {
-            let req = ModelResolveRequest::new("planner").with_model_pin(blank);
-            assert_eq!(
-                req.model_pin(),
-                None,
-                "blank pin {blank:?} must read as absent"
-            );
-        }
-    }
-
-    #[test]
-    fn model_pin_accessor_trims_surrounding_whitespace() {
-        let req = ModelResolveRequest::new("planner").with_model_pin("  gpt-4o  ");
-        assert_eq!(req.model_pin(), Some("gpt-4o"));
-    }
-
-    #[test]
-    fn blank_role_reads_as_absent() {
-        // A host mapping a missing field to `Some("")` must not select a
-        // role-specific routing branch keyed on the empty string.
-        assert_eq!(ModelResolveRequest::new("a").with_role("").role(), None);
-        assert_eq!(
-            ModelResolveRequest::new("a").with_role("  \t ").role(),
-            None
-        );
-    }
-
-    #[test]
-    fn role_accessor_trims_surrounding_whitespace() {
-        let req = ModelResolveRequest::new("a").with_role("  lead  ");
-        assert_eq!(req.role(), Some("lead"));
-        // The stored value is untouched — trimming is a read-side courtesy, not
-        // normalization the host's own round-trip has to anticipate.
-        assert_eq!(req.role.as_deref(), Some("  lead  "));
-    }
-
-    #[test]
-    fn default_request_is_empty_and_not_lead() {
-        let req = ModelResolveRequest::default();
-        assert!(req.agent_id.is_empty());
-        assert_eq!(req.role(), None);
-        assert!(!req.is_team_lead);
-        assert_eq!(req.model_pin(), None);
-    }
-
-    #[test]
-    fn request_round_trips_through_serde() {
-        let req = ModelResolveRequest::new("planner")
-            .with_role("researcher")
-            .with_model_pin("claude-3-5-sonnet")
-            .as_team_lead();
-        let json = serde_json::to_string(&req).expect("serialize");
-        let back: ModelResolveRequest = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, req);
-    }
-
-    #[test]
-    fn absent_role_is_omitted_and_restored() {
-        let req = ModelResolveRequest::new("planner");
-        let json = serde_json::to_string(&req).expect("serialize");
-        assert!(
-            !json.contains("role"),
-            "unset role must not serialize: {json}"
-        );
-        let back: ModelResolveRequest = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, req);
-    }
-
-    #[test]
-    fn absent_model_pin_is_omitted_and_restored() {
-        let req = ModelResolveRequest::new("planner");
-        let json = serde_json::to_string(&req).expect("serialize");
-        assert!(
-            !json.contains("model_pin"),
-            "unset model pin must not serialize: {json}"
-        );
-        let back: ModelResolveRequest = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, req);
-        assert_eq!(back.model_pin(), None);
-    }
-
-    #[test]
-    fn request_deserializes_from_agent_id_alone() {
-        // Hosts hand-writing this in config should not have to spell out
-        // defaults for the two optional facts.
-        let back: ModelResolveRequest =
-            serde_json::from_str(r#"{"agent_id":"planner"}"#).expect("deserialize");
-        assert_eq!(back, ModelResolveRequest::new("planner"));
-    }
-
-    // ── FixedModelResolver behaviour ─────────────────────────────────────────
-
-    #[tokio::test]
-    async fn fixed_resolver_returns_the_wrapped_model() {
-        let resolver = fixed("hello");
-        let model = resolver
-            .resolve(&ModelResolveRequest::new("planner"))
-            .await
-            .expect("resolve");
-        let response = model
-            .invoke(&(), ModelRequest::default())
-            .await
-            .expect("invoke");
-        assert_eq!(response.text(), "hello");
-    }
-
-    #[tokio::test]
-    async fn fixed_resolver_ignores_every_routing_field() {
-        let resolver = fixed("hello");
-        let lead = resolver
-            .resolve(
-                &ModelResolveRequest::new("lead")
-                    .with_role("planner")
-                    .as_team_lead(),
-            )
-            .await
-            .expect("resolve lead");
-        let worker = resolver
-            .resolve(&ModelResolveRequest::new("worker").with_role("scribe"))
-            .await
-            .expect("resolve worker");
-        // A pin is advisory: a host with exactly one model is entitled to
-        // ignore it, and must not be expected to look the id up.
-        let pinned = resolver
-            .resolve(&ModelResolveRequest::new("pinned").with_model_pin("gpt-4o"))
-            .await
-            .expect("resolve pinned");
-        assert!(
-            Arc::ptr_eq(&lead, &worker) && Arc::ptr_eq(&lead, &pinned),
-            "the fixed resolver must not route on agent id, role, lead status, or model pin"
-        );
-    }
-
-    #[tokio::test]
-    async fn resolved_model_shares_the_wrapped_allocation() {
-        // Resolution must hand back a handle to the same long-lived client, not
-        // a clone — a per-turn copy would discard its connection pool.
-        let resolver = fixed("hello");
-        let resolved = resolver
-            .resolve(&ModelResolveRequest::new("planner"))
-            .await
-            .expect("resolve");
-        assert!(Arc::ptr_eq(resolver.model(), &resolved));
-    }
-
-    #[tokio::test]
-    async fn clone_resolves_to_the_same_model() {
-        let resolver = fixed("hello");
-        let clone = resolver.clone();
-        let a = resolver
-            .resolve(&ModelResolveRequest::new("a"))
-            .await
-            .expect("resolve a");
-        let b = clone
-            .resolve(&ModelResolveRequest::new("b"))
-            .await
-            .expect("resolve b");
-        assert!(Arc::ptr_eq(&a, &b));
-    }
-
-    #[tokio::test]
-    async fn usable_behind_a_trait_object() {
-        // The runtime holds `Arc<dyn ModelResolver<State>>`, so object safety is
-        // part of the contract, not an implementation detail.
-        let resolver: Arc<dyn ModelResolver<()>> = Arc::new(fixed("dyn"));
-        let model = resolver
-            .resolve(&ModelResolveRequest::new("planner"))
-            .await
-            .expect("resolve");
-        let response = model
-            .invoke(&(), ModelRequest::default())
-            .await
-            .expect("invoke");
-        assert_eq!(response.text(), "dyn");
-    }
-}
+#[path = "model_resolver_tests.rs"]
+mod tests;

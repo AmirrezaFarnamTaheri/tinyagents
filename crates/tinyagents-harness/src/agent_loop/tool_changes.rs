@@ -19,6 +19,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use tinyinference_llm::message::{Message, SystemMessage};
+use tinyinference_llm::model::ModelProfile;
 use tinyinference_llm::tool::ToolSchema;
 
 /// Name of the [`SystemMessage::sections`] entry a tool-change patch writes
@@ -96,6 +97,32 @@ fn describe_delta(added: &[ToolSchema], removed: &[String]) -> String {
     lines.join(" ")
 }
 
+/// Whether a tool-change patch for a model with `profile` goes in place
+/// (appended as a tail record) rather than folded into the leading system
+/// message.
+///
+/// In place when the wire accepts a mid-conversation system message, and
+/// always for a model that hoists system turns to the prompt head
+/// ([`ModelProfile::hoists_system_messages`], e.g. DeepSeek): folding would
+/// rewrite the leading message, and with it the cached prefix, on every patch
+/// (#6962). A diff patch carries only sections and tool deltas, no `content`,
+/// so it renders no wire text; the OpenAI-compatible request builder drops
+/// such record-only system messages for a hoisting route, while the
+/// transcript keeps them for [`tinyinference_llm::message::replay_system_state`].
+/// With no profile previewed this folds, which is always correct, only less
+/// cache-friendly.
+pub(super) fn patch_inserts_in_place(profile: Option<&ModelProfile>) -> bool {
+    let insert = profile.is_some_and(|profile| {
+        profile.mid_conversation_system_messages || profile.hoists_system_messages
+    });
+    tracing::trace!(
+        insert,
+        hoists = profile.is_some_and(|profile| profile.hoists_system_messages),
+        "[tinyagents::loop] tool-change patch placement decided"
+    );
+    insert
+}
+
 /// Applies a tool-change `patch` to the working transcript.
 ///
 /// When `mid_conversation` is `true` (the resolved model's
@@ -167,4 +194,5 @@ fn fold_patch(leading: &mut SystemMessage, patch: SystemMessage) {
 }
 
 #[cfg(test)]
+#[path = "tool_changes/tool_changes_tests.rs"]
 mod test;

@@ -1,0 +1,463 @@
+//! Tests for the shared-registry adapter and its early-exit hook.
+
+use super::*;
+
+use crate::steering::SteeringHandle;
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use tinytools::{ToolContent, ToolPolicy};
+
+struct RecordingTool {
+    saw_context: AtomicBool,
+}
+
+#[async_trait]
+impl Tool for RecordingTool {
+    fn name(&self) -> &str {
+        "recording"
+    }
+
+    fn description(&self) -> &str {
+        "Preserves the canonical TinyTools contract."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object", "properties": {"fail": {"type": "boolean"}}})
+    }
+
+    fn policy(&self) -> ToolPolicy {
+        ToolPolicy::read_only().requiring_approval()
+    }
+
+    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        self.execute_with_context(args, ToolCallOptions::default(), None)
+            .await
+    }
+
+    async fn execute_with_context(
+        &self,
+        args: serde_json::Value,
+        options: ToolCallOptions,
+        context: Option<&dyn ToolRunContext>,
+    ) -> anyhow::Result<ToolResult> {
+        self.saw_context.store(
+            context.is_some() && options.prefer_markdown,
+            Ordering::SeqCst,
+        );
+        Ok(ToolResult {
+            content: vec![
+                ToolContent::Text {
+                    text: "plain content".to_string(),
+                },
+                ToolContent::Json {
+                    data: serde_json::json!({"preserved": true}),
+                },
+            ],
+            is_error: args["fail"].as_bool().unwrap_or(false),
+            markdown_formatted: Some("markdown content".to_string()),
+            ..ToolResult::default()
+        })
+    }
+}
+
+struct TestToolRunContext;
+impl ToolRunContext for TestToolRunContext {}
+
+#[tokio::test]
+async fn canonical_adapter_preserves_spec_policy_context_and_result() {
+    let seen_context = Arc::new(AtomicBool::new(false));
+    struct SharedRecordingTool(Arc<AtomicBool>);
+    #[async_trait]
+    impl Tool for SharedRecordingTool {
+        fn name(&self) -> &str {
+            "recording"
+        }
+        fn description(&self) -> &str {
+            "Preserves the canonical TinyTools contract."
+        }
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        fn policy(&self) -> ToolPolicy {
+            ToolPolicy::read_only().requiring_approval()
+        }
+        async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+            self.execute_with_context(args, ToolCallOptions::default(), None)
+                .await
+        }
+        async fn execute_with_context(
+            &self,
+            args: serde_json::Value,
+            options: ToolCallOptions,
+            context: Option<&dyn ToolRunContext>,
+        ) -> anyhow::Result<ToolResult> {
+            self.0.store(
+                context.is_some() && options.prefer_markdown,
+                Ordering::SeqCst,
+            );
+            Ok(ToolResult {
+                content: vec![
+                    ToolContent::Text {
+                        text: "plain content".into(),
+                    },
+                    ToolContent::Json {
+                        data: serde_json::json!({"preserved": true}),
+                    },
+                ],
+                is_error: args["fail"].as_bool().unwrap_or(false),
+                markdown_formatted: Some("markdown content".into()),
+                ..ToolResult::default()
+            })
+        }
+        async fn indirect_target_async(
+            &self,
+            _args: &serde_json::Value,
+        ) -> anyhow::Result<Option<tinytools::IndirectCall>> {
+            Ok(Some(
+                tinytools::ToolSubject::named("shared_async_target").into(),
+            ))
+        }
+    }
+    let sets: Vec<Arc<Vec<Box<dyn Tool>>>> = vec![Arc::new(vec![Box::new(SharedRecordingTool(
+        seen_context.clone(),
+    ))])];
+    let adapter = CanonicalSharedToolAdapter::for_name(sets, "recording").expect("registered tool");
+
+    assert_eq!(
+        adapter
+            .indirect_target_async(&serde_json::json!({}))
+            .await
+            .expect("shared target resolution succeeds")
+            .map(|call| call.target.name),
+        Some("shared_async_target".to_owned())
+    );
+
+    assert_eq!(adapter.name(), "recording");
+    assert_eq!(
+        adapter.description(),
+        "Preserves the canonical TinyTools contract."
+    );
+    assert_eq!(
+        adapter.parameters_schema(),
+        serde_json::json!({"type": "object"})
+    );
+    assert_eq!(
+        adapter.policy(),
+        ToolPolicy::read_only().requiring_approval()
+    );
+
+    let result = adapter
+        .execute_with_context(
+            serde_json::json!({"fail": true}),
+            ToolCallOptions::prefer_markdown(),
+            Some(&TestToolRunContext),
+        )
+        .await
+        .expect("canonical result");
+    assert!(seen_context.load(Ordering::SeqCst));
+    assert!(result.is_error);
+    assert_eq!(
+        result.markdown_formatted.as_deref(),
+        Some("markdown content")
+    );
+    assert_eq!(result.content.len(), 2);
+    assert!(matches!(result.content[0], ToolContent::Text { ref text } if text == "plain content"));
+    assert!(
+        matches!(result.content[1], ToolContent::Json { ref data } if data == &serde_json::json!({"preserved": true}))
+    );
+}
+
+#[tokio::test]
+async fn canonical_adapter_fails_closed_when_the_registered_tool_is_gone() {
+    let adapter = CanonicalSharedToolAdapter {
+        sets: Vec::new(),
+        name: "missing".to_string(),
+        description: "missing".to_string(),
+        parameters_schema: serde_json::json!({"type": "object"}),
+        early_exit: None,
+        force_deferred: false,
+        exec_scope: None,
+    };
+
+    let result = adapter
+        .execute(serde_json::json!({}))
+        .await
+        .expect("reported failure");
+    assert!(result.is_error);
+    assert_eq!(result.output(), "unknown tool 'missing'");
+}
+
+struct InjectedArgumentTool;
+
+#[async_trait]
+impl Tool for InjectedArgumentTool {
+    fn name(&self) -> &str {
+        "injected"
+    }
+
+    fn description(&self) -> &str {
+        "Declares a host-owned call identity."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    fn injected_arguments(&self) -> Vec<tinytools::ToolInjectedArgument> {
+        vec![tinytools::ToolInjectedArgument::tool_call_id("call_id")]
+    }
+
+    async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::default())
+    }
+}
+
+#[test]
+fn canonical_adapter_forwards_injected_argument_declarations() {
+    let sets: Vec<Arc<Vec<Box<dyn Tool>>>> = vec![Arc::new(vec![Box::new(InjectedArgumentTool)])];
+    let adapter = CanonicalSharedToolAdapter::for_name(sets, "injected").expect("registered tool");
+
+    assert_eq!(
+        adapter.injected_arguments(),
+        vec![tinytools::ToolInjectedArgument::tool_call_id("call_id")]
+    );
+}
+
+struct BehaviorTool;
+
+#[async_trait]
+impl Tool for BehaviorTool {
+    fn name(&self) -> &str {
+        "behavior"
+    }
+
+    fn description(&self) -> &str {
+        "Declares host-visible behavior."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    fn supports_markdown(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, args: &serde_json::Value) -> bool {
+        args["safe"].as_bool().unwrap_or(false)
+    }
+
+    fn timeout_policy(&self, _args: &serde_json::Value) -> tinytools::ToolTimeout {
+        tinytools::ToolTimeout::Unbounded
+    }
+
+    fn return_direct(&self) -> bool {
+        true
+    }
+
+    fn family(&self) -> Option<&str> {
+        Some("behaviors")
+    }
+
+    fn tags(&self) -> Vec<String> {
+        vec!["pack:behaviors".into()]
+    }
+
+    fn indirect_target(&self, args: &serde_json::Value) -> Option<tinytools::IndirectCall> {
+        args["action"]
+            .as_str()
+            .map(|name| tinytools::ToolSubject::named(name).into())
+    }
+
+    async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::default())
+    }
+}
+
+#[test]
+fn canonical_adapter_forwards_behavior_bearing_tool_methods() {
+    let sets: Vec<Arc<Vec<Box<dyn Tool>>>> = vec![Arc::new(vec![Box::new(BehaviorTool)])];
+    let adapter = CanonicalSharedToolAdapter::for_name(sets, "behavior").expect("registered tool");
+
+    assert!(adapter.supports_markdown());
+    assert!(adapter.is_concurrency_safe(&serde_json::json!({"safe": true})));
+    assert!(!adapter.is_concurrency_safe(&serde_json::json!({"safe": false})));
+    assert_eq!(
+        adapter.timeout_policy(&serde_json::json!({})),
+        tinytools::ToolTimeout::Unbounded
+    );
+    assert!(adapter.return_direct());
+}
+
+#[test]
+fn canonical_adapter_forwards_tool_rule_metadata() {
+    let sets: Vec<Arc<Vec<Box<dyn Tool>>>> = vec![Arc::new(vec![Box::new(BehaviorTool)])];
+    let adapter = CanonicalSharedToolAdapter::for_name(sets, "behavior").expect("registered tool");
+
+    assert_eq!(adapter.family(), Some("behaviors"));
+    assert_eq!(adapter.tags(), ["pack:behaviors"]);
+    assert_eq!(
+        adapter.indirect_target(&serde_json::json!({ "action": "GMAIL_DELETE_EMAIL" })),
+        Some(tinytools::ToolSubject::named("GMAIL_DELETE_EMAIL").into())
+    );
+}
+
+#[tokio::test]
+async fn early_exit_only_fires_after_a_successful_canonical_result() {
+    let sets: Vec<Arc<Vec<Box<dyn Tool>>>> = vec![Arc::new(vec![Box::new(RecordingTool {
+        saw_context: AtomicBool::new(false),
+    })])];
+    let hook = EarlyExitHook::new(SteeringHandle::allow_all());
+    let adapter = CanonicalSharedToolAdapter::for_name(sets, "recording")
+        .expect("registered tool")
+        .with_early_exit(hook.clone());
+
+    let failed = adapter
+        .execute(serde_json::json!({"fail": true}))
+        .await
+        .expect("reported failure");
+    assert!(failed.is_error);
+    assert!(
+        hook.take().is_none(),
+        "reported tool errors must not pause the run"
+    );
+
+    let successful = adapter
+        .execute(serde_json::json!({"fail": false}))
+        .await
+        .expect("success");
+    assert!(!successful.is_error);
+    let early_exit = hook
+        .take()
+        .expect("successful early-exit tool pauses the run");
+    assert_eq!(early_exit.tool, "recording");
+    assert_eq!(early_exit.question, "markdown content");
+}
+
+struct ExposedTool(&'static str, tinytools::ToolExposure);
+
+#[async_trait]
+impl Tool for ExposedTool {
+    fn name(&self) -> &str {
+        self.0
+    }
+
+    fn description(&self) -> &str {
+        "exposure probe"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    fn exposure(&self) -> tinytools::ToolExposure {
+        self.1
+    }
+
+    async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::default())
+    }
+}
+
+/// The host decides what a belt advertises; the harness only needs to know
+/// which admitted registrations are searchable rather than advertised. A
+/// `Hidden` tool that reached registration was named by the belt, so it is
+/// advertised; `Deferred` stays deferred.
+#[test]
+fn adapter_advertises_admitted_hidden_tools_and_keeps_deferred_ones_deferred() {
+    let set: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![
+        Box::new(ExposedTool("direct", tinytools::ToolExposure::Direct)),
+        Box::new(ExposedTool("hidden", tinytools::ToolExposure::Hidden)),
+        Box::new(ExposedTool("deferred", tinytools::ToolExposure::Deferred)),
+    ]);
+    let exposure = |name: &str| {
+        CanonicalSharedToolAdapter::for_name(vec![set.clone()], name)
+            .expect("registered")
+            .exposure()
+    };
+    assert_eq!(exposure("direct"), tinytools::ToolExposure::Direct);
+    assert_eq!(exposure("hidden"), tinytools::ToolExposure::Direct);
+    assert_eq!(exposure("deferred"), tinytools::ToolExposure::Deferred);
+}
+
+struct ExposureProbe {
+    exposure: tinytools::ToolExposure,
+}
+
+#[async_trait]
+impl Tool for ExposureProbe {
+    fn name(&self) -> &str {
+        "exposed"
+    }
+    fn description(&self) -> &str {
+        "exposure probe"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+    fn exposure(&self) -> tinytools::ToolExposure {
+        self.exposure
+    }
+    async fn execute(&self, _: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("ok"))
+    }
+}
+
+#[test]
+fn session_deferral_only_ever_subtracts_exposure() {
+    use tinytools::ToolExposure::{Deferred, Direct, Hidden};
+    let exposure = |declared, deferred| {
+        let sets = vec![Arc::new(vec![
+            Box::new(ExposureProbe { exposure: declared }) as Box<dyn Tool>,
+        ])];
+        CanonicalSharedToolAdapter::for_name(sets, "exposed")
+            .unwrap()
+            .deferred(deferred)
+            .exposure()
+    };
+    assert_eq!(exposure(Direct, false), Direct);
+    assert_eq!(
+        exposure(Direct, true),
+        Deferred,
+        "a direct tool moves behind search"
+    );
+    assert_eq!(exposure(Deferred, true), Deferred);
+    assert_eq!(
+        exposure(Hidden, true),
+        Hidden,
+        "deferral never reveals a hidden tool"
+    );
+    assert_eq!(
+        exposure(Hidden, false),
+        Direct,
+        "a hand-named hidden tool is callable"
+    );
+}
+
+struct ScopeCounter(std::sync::atomic::AtomicUsize);
+
+impl ToolExecScope for ScopeCounter {
+    fn scope<'a>(
+        &'a self,
+        _: Option<&'a dyn ToolRunContext>,
+        execution: ToolExecution<'a>,
+    ) -> ToolExecution<'a> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        execution
+    }
+}
+
+#[tokio::test]
+async fn exec_scope_wraps_each_execution() {
+    let sets = vec![Arc::new(vec![Box::new(ExposureProbe {
+        exposure: tinytools::ToolExposure::Direct,
+    }) as Box<dyn Tool>])];
+    let scope = Arc::new(ScopeCounter(std::sync::atomic::AtomicUsize::new(0)));
+    let adapter = CanonicalSharedToolAdapter::for_name(sets, "exposed")
+        .unwrap()
+        .with_exec_scope(scope.clone());
+    adapter.execute(serde_json::json!({})).await.unwrap();
+    adapter.execute(serde_json::json!({})).await.unwrap();
+    assert_eq!(scope.0.load(Ordering::SeqCst), 2);
+}

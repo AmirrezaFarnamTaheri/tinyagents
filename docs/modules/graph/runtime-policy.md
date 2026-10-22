@@ -119,7 +119,7 @@ Caching is a two-part opt-in:
   `Update: Serialize + DeserializeOwned` codec) derives a key from the state
   snapshot and the activation's `send_arg`, with an optional TTL;
 - a backend on the graph: `CompiledGraph::with_task_cache(Arc<dyn TaskCache>)`
-  (`InMemoryTaskCache`, or `SqliteTaskCache` under the `sqlite` feature).
+  (`InMemoryTaskCache`, or `DriverTaskCache`).
 
 Without a backend every cache policy is inert. With one, a hit replays the
 stored `Update` without invoking the handler and emits

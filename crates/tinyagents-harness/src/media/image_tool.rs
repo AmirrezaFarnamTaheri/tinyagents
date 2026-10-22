@@ -23,7 +23,7 @@ pub const GENERATE_IMAGE_TOOL_NAME: &str = "generate_image";
 const IMAGE_TIMEOUT_MS: u64 = 300_000;
 
 /// Generates images with an [`ImageGenerator`] and saves them to the run's
-/// workspace.
+/// output blob store.
 ///
 /// The result lists the saved file paths. A billed call that produced nothing
 /// is reported as an error that tells the model not to retry, because a retry
@@ -47,7 +47,7 @@ impl GenerateImageTool {
             name: GENERATE_IMAGE_TOOL_NAME.to_owned(),
             description: "Generate or edit images from a text prompt. Pass reference images \
                           (URLs or workspace file paths) to edit, restyle, or keep a subject \
-                          consistent. Saves each image into the workspace and returns its path. \
+                          consistent. Stores each image as an artifact and returns its key. \
                           Billed per call: do not call again after an error that says it was billed."
                 .to_owned(),
             permission: PermissionLevel::Write,
@@ -153,8 +153,8 @@ impl GenerateImageTool {
                 Err(message) => return ToolResult::error(message),
             }
         }
-        let dir = match self.output.dir(workspace) {
-            Ok(dir) => dir,
+        let prefix = match self.output.prefix() {
+            Ok(prefix) => prefix,
             Err(message) => return ToolResult::error(message),
         };
 
@@ -211,13 +211,20 @@ impl GenerateImageTool {
             };
             match self
                 .output
-                .persist(&dir, &format!("{stem}-{index}"), ext, &image.data)
+                .persist(
+                    &prefix,
+                    &format!("{stem}-{index}"),
+                    ext,
+                    &image.data,
+                    image.media_type.split(';').next().map_or("", str::trim),
+                )
+                .await
             {
                 Ok(path) => {
-                    lines.push(format!("- {}", path.display()));
+                    lines.push(format!("- {path}"));
                     artifacts.push(json!({
                         "type": "image",
-                        "path": path.display().to_string(),
+                        "path": path,
                         "media_type": image.media_type,
                         "bytes": image.data.len(),
                     }));

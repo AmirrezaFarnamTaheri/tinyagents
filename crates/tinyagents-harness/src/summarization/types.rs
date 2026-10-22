@@ -4,11 +4,35 @@
 //! to record — are expressed as data types so they can be inspected, tested,
 //! and audited without coupling to any particular LLM provider.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use tinyinference_llm::message::Message;
+use tinyinference_llm::model::ChatModel;
+
+/// An LLM-backed [`Summarizer`] that condenses messages with the active model.
+///
+/// The model id is retained for provenance, while the wrapped model carries
+/// the actual provider configuration.
+pub struct ModelSummarizer {
+    pub(super) model: Arc<dyn ChatModel<()>>,
+    /// Model id, kept for logging and provenance.
+    pub(super) model_id: String,
+    /// Threshold reported in summary provenance; the policy owns the trigger.
+    pub(super) threshold_fraction: f64,
+}
+
+impl std::fmt::Debug for ModelSummarizer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModelSummarizer")
+            .field("model_id", &self.model_id)
+            .field("threshold_fraction", &self.threshold_fraction)
+            .finish_non_exhaustive()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Token estimation
@@ -257,6 +281,12 @@ pub struct SummaryRecord {
 
     /// Provenance metadata linking this summary back to its source messages.
     pub provenance: CompressionProvenance,
+
+    /// Provider-reported usage of the summarization call(s) that produced
+    /// [`Self::summary`], when the summarizer made a model call and the
+    /// provider reported it. `None` for deterministic summarizers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<tinyinference_llm::usage::Usage>,
 }
 
 // ---------------------------------------------------------------------------
@@ -282,14 +312,18 @@ pub trait Summarizer: Send + Sync {
     /// compaction of a run), so an LLM-backed implementation can *refine* the
     /// running summary instead of re-deriving it from scratch every time.
     ///
-    /// The default implementation ignores
-    /// [`SummaryRequest::previous_summary`] and delegates to [`Self::summarize`],
-    /// so every existing implementor (in particular [`ConcatSummarizer`))
-    /// keeps compiling and behaving exactly as before. Override this method
-    /// directly (instead of, not in addition to, `summarize`) to thread the
-    /// previous summary into a real prompt.
+    /// The default implementation prepends a previous summary as a system
+    /// message before delegating to [`Self::summarize`]. Override this method
+    /// to pass prior context through a specialized prompt.
     async fn summarize_request(&self, request: &SummaryRequest) -> Result<SummaryRecord> {
-        self.summarize(&request.messages).await
+        if let Some(previous) = request.previous_summary.as_deref() {
+            let mut messages = Vec::with_capacity(request.messages.len() + 1);
+            messages.push(Message::system(previous));
+            messages.extend(request.messages.iter().cloned());
+            self.summarize(&messages).await
+        } else {
+            self.summarize(&request.messages).await
+        }
     }
 
     /// Merges two or more per-half [`SummaryRecord`]s produced by
@@ -331,6 +365,10 @@ pub trait Summarizer: Send + Sync {
                 summary_token_estimate,
                 reason: "merged split-turn summaries (default concatenation)".to_string(),
             },
+            usage: summaries
+                .iter()
+                .filter_map(|record| record.usage)
+                .reduce(|sum, usage| sum + usage),
         })
     }
 }
@@ -346,15 +384,40 @@ pub struct SummaryRequest {
     /// run's transcript, when one exists. `None` for the first compaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_summary: Option<String>,
+    /// What the messages are, so a summarizer can pick the right prompt.
+    #[serde(default)]
+    pub kind: SummaryKind,
+}
+
+/// What a [`SummaryRequest`]'s messages are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummaryKind {
+    /// Older history, summarized as a standalone checkpoint.
+    #[default]
+    Full,
+    /// The beginning of a turn whose remainder stays verbatim after the
+    /// summary (a compaction cut landed inside the turn): capture what was
+    /// asked and what has been done so far, briefly.
+    TurnPrefix,
 }
 
 impl SummaryRequest {
+    /// Builds a [`SummaryKind::TurnPrefix`] request for `messages`.
+    pub fn turn_prefix(messages: Vec<Message>) -> Self {
+        Self {
+            kind: SummaryKind::TurnPrefix,
+            ..Self::new(messages)
+        }
+    }
+
     /// Builds a request with no previous summary (the common, first-compaction
     /// case).
     pub fn new(messages: Vec<Message>) -> Self {
         Self {
             messages,
             previous_summary: None,
+            kind: SummaryKind::Full,
         }
     }
 
@@ -444,10 +507,64 @@ pub struct SummarizationPolicy {
     pub context_window: Option<u64>,
 
     /// Fraction of [`context_window`][Self::context_window] that must be
-    /// reached before summarization triggers. Defaults to `0.9` (90%). Ignored
+    /// reached before summarization triggers. Defaults to `0.9` (90%) for a
+    /// bare policy; [`crate::summarization::summarization_policy`] uses
+    /// `min(80% of the window, 350k tokens)` instead. Ignored
     /// when `context_window` is `None`.
     #[serde(default = "default_threshold_fraction")]
     pub threshold_fraction: f64,
+
+    /// Keep at least this many estimated tokens of the most recent
+    /// non-system messages verbatim, instead of a fixed
+    /// [`keep_last`][Self::keep_last] message count.
+    ///
+    /// When set, [`plan`][SummarizationPolicy::plan] cuts with
+    /// [`find_cut_point`][crate::summarization::find_cut_point] and
+    /// `keep_last` is ignored. A count says nothing about size: eight
+    /// messages of a tool loop can be a few hundred tokens or most of the
+    /// window. `None` (the default) keeps the count-based split.
+    #[serde(default)]
+    pub keep_recent_tokens: Option<u64>,
+
+    /// Keep the turn's originating user message verbatim across a compaction.
+    ///
+    /// A long tool-driven turn crosses the threshold mid-turn, and its only
+    /// user message — the assignment being worked on — is the oldest message
+    /// in it, so the split folds it into the summary. When this is set and
+    /// the kept tail holds no user message, [`plan`][SummarizationPolicy::plan]
+    /// moves the most recent user message out of the summarized head to the
+    /// front of the kept tail, verbatim up to
+    /// [`PINNED_USER_MESSAGE_MAX_TOKENS`] (truncated with a marker beyond).
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub pin_turn_user_message: bool,
+}
+
+/// Size cap, in estimated tokens, of a user message pinned by
+/// [`SummarizationPolicy::pin_turn_user_message`]. A larger message is cut to
+/// this size with a truncation marker, so a pasted document cannot pin most of
+/// the window in place.
+pub const PINNED_USER_MESSAGE_MAX_TOKENS: u64 = 8_192;
+
+/// The result of [`SummarizationPolicy::plan_split`]: the split itself plus
+/// where it was taken, in the coordinates of the non-system messages of the
+/// slice that was planned.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompactionPlan {
+    /// The messages to fold into a summary, in order. Never contains a system
+    /// message or the pinned user message.
+    pub to_summarize: Vec<Message>,
+    /// System messages, then the pinned user message (when one was pinned),
+    /// then the recent tail kept verbatim.
+    pub to_keep: Vec<Message>,
+    /// Index, into the non-system messages, of the first message of the
+    /// recent tail. Everything before it was summarized, except
+    /// [`Self::pinned`].
+    pub cut: usize,
+    /// Index, into the non-system messages, of the user message moved from
+    /// the summarized head to the front of the kept tail, when one was.
+    /// Always `< cut`.
+    pub pinned: Option<usize>,
 }
 
 /// The default [`SummarizationPolicy::threshold_fraction`] (90% of the context
@@ -463,8 +580,39 @@ impl Default for SummarizationPolicy {
             keep_last: 0,
             context_window: None,
             threshold_fraction: default_threshold_fraction(),
+            keep_recent_tokens: None,
+            pin_turn_user_message: false,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Summary placement
+// ---------------------------------------------------------------------------
+
+/// Where a compaction summary is placed in the rebuilt transcript.
+///
+/// Either way the summary sits *after* the leading system prompt and *before*
+/// the kept recent messages; the variants differ only in the role it carries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummaryPlacement {
+    /// A `user`-role message opening with
+    /// [`crate::summarization::CHECKPOINT_PREFIX`], a reference-only marker
+    /// telling the model the content is background data, not instructions.
+    /// It sits after the system prompt and before the kept messages.
+    ///
+    /// The default: the system prompt and tool declarations stay
+    /// byte-identical across a compaction, so the provider's prefix cache
+    /// for them survives, and the summary cannot be mistaken for a new
+    /// system instruction.
+    #[default]
+    User,
+    /// A `system`-role message carrying the same marker (the original
+    /// placement). Kept for hosts that relied on it; it adds a second system
+    /// message after the prompt, which churns the cacheable prefix on every
+    /// compaction.
+    System,
 }
 
 // ---------------------------------------------------------------------------
@@ -511,20 +659,26 @@ impl CompactionReason {
 /// [`CompactionSink`] is attached to the run, handed to it for persistence.
 ///
 /// Mirrors pi's `CompactionEntry{summary, firstKeptEntryId, tokensBefore,
-/// usage, details}` (`docs/runtime-comparison/pi.md` §4.5); the session
-/// crate's `tinyagents_session::entry_tree::CompactionEntry` is the durable,
-/// tree-anchored counterpart that a session-backed [`CompactionSink`] writes
-/// this record into, translating [`Self::first_kept_index`] (a position in
-/// the message slice compaction operated over) into that entry tree's
-/// `EntryId`.
+/// usage, details}` (`docs/runtime-comparison/pi.md` §4.5). A host that needs
+/// durable records can persist this value through [`CompactionSink`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CompactionRecord {
     /// The replacement summary text installed as the new leading context.
     pub summary: String,
+    /// Role used when restoring this checkpoint. Older records used system.
+    #[serde(default = "legacy_compaction_placement")]
+    pub placement: SummaryPlacement,
     /// Index, into the non-system message slice compaction operated over, of
     /// the first message that survives verbatim (everything before it was
     /// folded into [`Self::summary`]). Matches [`crate::summarization::CutPoint::index`] when the
     /// record was produced from a [`crate::summarization::CutPoint`].
+    ///
+    /// One exception: when the policy pinned a user message
+    /// ([`SummarizationPolicy::pin_turn_user_message`]), that message lies
+    /// before this index yet was kept verbatim, right after the summary. Its
+    /// index (same coordinates) is in [`Self::details`] as
+    /// `pinned_user_index`; a sink rebuilding the compacted transcript must
+    /// restore it there.
     pub first_kept_index: usize,
     /// Estimated total tokens of the transcript immediately before
     /// compaction.
@@ -545,20 +699,22 @@ pub struct CompactionRecord {
     pub reason: CompactionReason,
 }
 
-/// A durable sink a host attaches to a [`crate::context::RunContext`] so
-/// every [`CompactionRecord`] a run produces is persisted somewhere durable
-/// (typically a session's `tinyagents_session::entry_tree::EntryTree`),
+fn legacy_compaction_placement() -> SummaryPlacement {
+    SummaryPlacement::System
+}
+
+/// A durable sink a host attaches to a [`crate::context::RunContext`] to
+/// persist [`CompactionRecord`]s from compactions with a trusted live boundary
+/// through a host-provided store,
 /// instead of only living as long as the in-process
 /// [`crate::middleware::ContextCompressionMiddleware::records`] buffer.
 ///
-/// `tinyagents-harness` cannot depend on `tinyagents-session` (the dependency
-/// runs the other way), so this trait — not a concrete `Arc<EntryTree>` slot
-/// — is what [`crate::context::RunContext::compaction_sink`] holds; a
-/// session-backed implementation lives in `tinyagents-session`.
+/// The harness does not prescribe the persistence backend, so this trait is
+/// what [`crate::context::RunContext::compaction_sink`] holds.
 pub trait CompactionSink: Send + Sync {
     /// Persists `record`. Implementations should be idempotent-safe to call
-    /// once per compaction (the compaction step calls this exactly once per
-    /// successful compaction) and should not block the run indefinitely — a
+    /// once per record received (the compaction step calls this at most once
+    /// for each successful compaction) and should not block the run indefinitely — a
     /// slow or failing sink should return promptly with an error rather than
     /// stall the agent loop.
     fn persist(&self, record: &CompactionRecord) -> Result<()>;

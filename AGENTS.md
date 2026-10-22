@@ -7,23 +7,35 @@ compatibility facade crate: consumers depend directly on the focused package
 that owns an API. The public packages are `crates/tinyagents-graph/` (durable
 typed state graphs), `crates/tinyagents-harness/` (provider-neutral model
 calls, tools, middleware, and streaming), `crates/tinyagents-registry/` (the named
-capability catalog), `crates/tinyagents-session/` (durable session data), and
+capability catalog), `crates/tinyagents-session/` (durable session data),
+`crates/tinyagents-tasks/` (graph-independent detached-task registry,
+task stores and orchestration controls), and
 `crates/tinyagents-orchestration/` (direct and durable subagent invocation,
 tools, sessions, lifecycle logic, and focused tests).
-`crates/tinyagents-tracing/` supplies shared opt-in tracing macros, while
+`crates/tinyagents-harness-tools/` owns reusable harness tool implementations
+and their stateful support: goals, todos, skills, time, clarification, plan
+exit, per-call binding, thread locks, and feature-gated subagent tool shells.
 `crates/tinyagents-integration-tests/` owns cross-crate tests and examples.
+The workspace also has `crates/tinyagents-runtime/`, `crates/tinyagents-definition/`
+and `crates/tinyagents-live/`.
 
 Prefer small, focused modules that do one thing extremely well. New feature
 areas should live in module directories instead of accumulating broad,
 multi-purpose files. Within each module directory, keep type definitions in a
-dedicated `types.rs` file and keep module-local unit tests in a dedicated
-`test.rs` file. The module root should wire the pieces together and expose the
+dedicated `types.rs` file and keep module-local unit tests in a sibling
+`<module>_tests.rs` file. The module root should wire the pieces together and expose the
 smallest useful API.
 
 Cargo features are package-local. `tinyagents-harness` exposes `sqlite`,
-`tools`, `multimodal`, and `tracing`; `tinyagents-graph` exposes `sqlite` and
-`tracing`; registry and session expose `tracing`. Tracing instrumentation is
-compiled out by default.
+`multimodal`, `png-optimize`, `media`, `claude-code`, `langfuse`,
+`storage-drivers`, and `tracing`; `tinyagents-harness-tools` exposes default
+`todos`, `goals`, and `skills`, plus opt-in `subagents`; `tinyagents-graph`
+exposes `sqlite`, `storage-drivers`, and `tracing`; session exposes
+`storage-drivers` and `tracing`; registry exposes `tracing`. The
+`storage-drivers` features put each store on `tinystoragedrivers` ports. The harness's own
+`tracing` instrumentation is always compiled in; the `tracing` features forward
+to `tinytools-agent/tracing`, which enables that crate's `debug!`/`warn!`
+diagnostics (native-call parsing, malformed arguments).
 
 Integration tests are in `crates/tinyagents-integration-tests/tests/`, covering serialization, graph routing,
 registry binding, streaming,
@@ -100,3 +112,25 @@ examples or docs when public APIs, architecture, or expected usage changes.
 Always make small, focused commits. Each commit should cover one logical change,
 build independently, and avoid mixing formatting, refactors, and behavior
 changes unless they are inseparable.
+
+## Tests live in `*_tests.rs` files
+
+- Unit tests are never inline. Do not write a `#[cfg(test)] mod tests { ... }`
+  block in a source file. Put the tests in a sibling `<module>_tests.rs`
+  (`mod_tests.rs` beside a `mod.rs`, `lib_tests.rs` beside `lib.rs`) and declare
+  it at the bottom of the module:
+
+  ```rust
+  #[cfg(test)]
+  #[path = "foo_tests.rs"]
+  mod tests;
+  ```
+
+- The test file starts with `use super::*;` and carries no `#[cfg(test)]` of its
+  own. It is still a child module, so it reaches private items exactly as an
+  inline module did.
+- Name test files `<module>_tests.rs`; a second group for the same module is
+  `<module>_<topic>_tests.rs`. Never `test.rs`, `tests.rs` or `<module>_test.rs`.
+- Integration tests stay in the crate's `tests/` directory.
+- OpenHuman's `scripts/externalize-inline-tests.mjs <repo-root> --write` moves
+  inline test modules out mechanically; without `--write` it only reports.

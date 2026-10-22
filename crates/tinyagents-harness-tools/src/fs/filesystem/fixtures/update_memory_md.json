@@ -1,0 +1,40 @@
+{
+  "description": "Append or update sections in MEMORY.md or SKILL.md workspace files. Use 'append' to add new notes at the end, or 'replace_section' to overwrite the body under a named '## Section' heading.",
+  "exposure": "Direct",
+  "name": "update_memory_md",
+  "permission_level": "Write",
+  "schema": {
+    "properties": {
+      "action": {
+        "description": "'append' adds content at the end; 'replace_section' replaces the body of the named section.",
+        "enum": [
+          "append",
+          "replace_section"
+        ],
+        "type": "string"
+      },
+      "content": {
+        "description": "The markdown text to write.",
+        "type": "string"
+      },
+      "file": {
+        "description": "Which workspace markdown file to modify.",
+        "enum": [
+          "MEMORY.md",
+          "SKILL.md"
+        ],
+        "type": "string"
+      },
+      "section_title": {
+        "description": "Required for 'replace_section': the heading text (without '## ').",
+        "type": "string"
+      }
+    },
+    "required": [
+      "file",
+      "action",
+      "content"
+    ],
+    "type": "object"
+  }
+}

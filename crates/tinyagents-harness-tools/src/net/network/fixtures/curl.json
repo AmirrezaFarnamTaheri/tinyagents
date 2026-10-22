@@ -1,0 +1,27 @@
+{
+  "description": "Download a file from an http(s) URL into the workspace. The body is streamed to disk with a hard byte ceiling. Same allowlist as `http_request`. Returns the saved path, bytes written, content-type, and SHA-256 of the file.",
+  "exposure": "Deferred",
+  "name": "curl",
+  "permission_level": "Write",
+  "schema": {
+    "properties": {
+      "dest_path": {
+        "description": "Destination path relative to the downloads root inside the workspace. No '..' or absolute paths. If omitted, the filename is inferred from the URL.",
+        "type": "string"
+      },
+      "headers": {
+        "default": {},
+        "description": "Optional HTTP headers (e.g. {\"Authorization\": \"Bearer …\"})",
+        "type": "object"
+      },
+      "url": {
+        "description": "HTTP or HTTPS URL of the file to download",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "type": "object"
+  }
+}

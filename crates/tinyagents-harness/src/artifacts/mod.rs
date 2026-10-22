@@ -1,4 +1,4 @@
-//! Filesystem offload for oversized worker artifacts on long-horizon runs.
+//! Blob-store offload for oversized worker artifacts on long-horizon runs.
 //!
 //! ## The problem
 //!
@@ -37,44 +37,53 @@
 //!
 //! ## Hardening
 //!
-//! [`resolve_artifact_path`] is fail-closed. Absolute paths, `..` traversal, and
-//! anything escaping the convention root are refused; when an
+//! [`resolve_artifact_key`] is fail-closed. Absolute names, drive prefixes, `..`
+//! traversal and control characters are refused; when an
 //! [`ArtifactPathPolicy`] is supplied, so is anything reaching the host's
-//! internal state.
-//!
-//! The lexical checks cannot see symlinks, because the target does not exist
-//! when they run. So the real parent directory is re-validated after
-//! `create_dir_all` and before the write — that is the first moment the
-//! link-resolved location can be checked at all.
+//! internal state. The artifacts live on a tinystoragedrivers blob store, not
+//! the filesystem, so the key is the whole address and there is no symlink to
+//! follow out of the namespace.
 //!
 //! ## What the host supplies
 //!
 //! Two policies, both of which a redistributed crate cannot decide for itself:
 //! [`ArtifactPathPolicy`] (which paths are off limits) and [`ArtifactRedactor`]
-//! (what is scrubbed before bytes hit disk). See [`policy`].
+//! (what is scrubbed before bytes are stored). See [`policy`].
 //!
 //! ## Logging
 //!
-//! Every write emits `[artifact] wrote worker artifact under the artifact root`,
+//! Every write emits `[artifact] stored worker artifact on the blob store`,
 //! and every path a handoff carries emits `[artifact] handoff carried an
 //! artifact path`, so a run journal shows both ends of a pointer.
 
+mod contract;
 mod ops;
 mod paths;
 pub mod policy;
+pub mod request_truncation;
+pub mod tool_results;
 mod types;
 
+pub use contract::{
+    ARTIFACT_OFFLOAD_HEADING, render_artifact_offload_contract, should_render_offload_contract,
+};
 pub use ops::{
     ArtifactOffload, HANDOFF_STAGE_CONSUMED, HANDOFF_STAGE_RECORDED, build_abstract,
     effective_offload_threshold, extract_artifact_paths, note_artifact_handoff,
-    offload_oversized_result, render_artifact_pointer, should_offload,
+    offload_oversized_result, offload_oversized_result_to_fs, render_artifact_pointer,
+    should_offload,
 };
-pub use paths::{relative_to_root, resolve_artifact_path, sanitize_component};
+pub use paths::{resolve_artifact_key, sanitize_component};
 pub use policy::{ArtifactPathPolicy, ArtifactRedactor, NoRedaction, OpenPathPolicy, Redacted};
+pub use request_truncation::{
+    RequestTruncation, reducible_tool_result_bytes, truncate_older_tool_results,
+    truncate_tool_results,
+};
 pub use types::{
     ABSTRACT_BUDGET_CHARS, ARTIFACT_POINTER_PREFIX, ArtifactKind, DEFAULT_OFFLOAD_THRESHOLD_BYTES,
     OUTPUTS_DIR, OffloadError, OffloadedArtifact, SCRATCH_DIR,
 };
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;

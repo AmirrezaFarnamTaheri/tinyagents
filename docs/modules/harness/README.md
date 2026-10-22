@@ -167,7 +167,7 @@ crates/tinyagents-harness/src/
   retry.rs
   run_queue/
     mod.rs
-    test.rs
+    mod_tests.rs
     types.rs
   runtime.rs
   steering.rs
@@ -240,9 +240,13 @@ Feature details:
 - [Prompt feature](prompt.md)
 - [Tool feature](tool.md)
 - [Tool execution context and rich returns (B1/B2)](tool-context.md)
+- [Nested tool calls (C9)](nested-tool-calls.md)
 - [Tool exposure, discovery, and schema budgets](tool-discovery.md)
+- [Tool rules: allow / deny / hide / approval patterns](tool-rules.md)
 - [Tool dialects](tool-dialect.md)
 - [Middleware feature](middleware.md)
+- [Repeat-progress guard](repeat-progress.md)
+- [Terminal outcome and turn/message lifecycle events](terminal-outcome.md)
 - [Sub-agent and orchestrator steering](subagent-steering.md)
 - [Structured output feature](structured-output.md)
 - [Limits, retry, fallback, and rate limiting](limits-retry.md)
@@ -419,3 +423,14 @@ and durable state when configured.
 Continues in [`runtime.md`](runtime.md) (tool registry, agent loop,
 middleware, host-owned state, and stores) and [`observability-overview.md`](observability-overview.md)
 (structured output, events/streaming, errors, testkit, milestones).
+
+Ephemeral corrections use `EphemeralInstructionQueue`: producers bind each
+instruction to a context instance, and its middleware consumes the queue once
+on the next model-request copy. Terminal hooks clear pending corrections;
+admission reclaims dropped contexts. Corrections never enter durable history.
+See [the queue lifecycle](../../../crates/tinyagents-harness/src/middleware/library/ephemeral_instructions/README.md).
+
+## After-model stop policies
+
+The [stop-hook contract](stop-hooks.md) provides ordered policies over generic
+completed-call metrics, with per-context accounting and pause delivery.

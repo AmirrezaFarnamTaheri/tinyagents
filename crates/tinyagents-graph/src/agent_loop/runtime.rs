@@ -116,11 +116,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
 {
     fn call<'a>(
         &'a self,
-        _ctx: &'a mut RunContext<Ctx>,
+        ctx: &'a mut RunContext<Ctx>,
         state: &'a State,
         request: ModelRequest,
     ) -> BoxModelFuture<'a> {
         Box::pin(async move {
+            // Reached only when the wrap onion elected to call the provider.
+            ctx.mark_provider_started();
             self.model
                 .invoke(state, request)
                 .await
@@ -207,6 +209,10 @@ where
     if ctx.cancellation.is_cancelled() {
         return Err(TinyAgentsError::Cancelled);
     }
+    // Everything on the transcript when the loop is first entered is input (or
+    // a resumed run's already-announced history); only later appends are
+    // announced. A no-op after the first activation.
+    phases::lifecycle_seed(ctx, loop_state.messages.len());
     match apply_pending_steering(ctx, &mut loop_state.messages)? {
         SteeringOutcome::Cancel => return Err(TinyAgentsError::Cancelled),
         SteeringOutcome::Pause => {
@@ -249,6 +255,12 @@ where
     if let Some(format) = &harness.policy().default_response_format {
         request.response_format = Some(format.clone());
     }
+    // Same run-policy reasoning default the direct loop attaches.
+    if let Some(reasoning) = harness.policy().default_reasoning.as_ref()
+        && !reasoning.is_empty()
+    {
+        request.reasoning = Some(reasoning.clone());
+    }
 
     // The structured plan depends on the resolved model's profile, but the
     // model is not resolved until the `model` node (mirroring the direct
@@ -257,10 +269,7 @@ where
     // strategy choice; an explicit `ResponseFormat::JsonSchema` is
     // unaffected either way. This is a documented simplification relative to
     // the direct loop, which resolves the model first.
-    let profile = harness
-        .models()
-        .resolve_request(&request, None, None)
-        .and_then(|binding| binding.model.profile().cloned());
+    let profile = harness.preview_model_profile_for_request(&request);
     let structured = resolve_structured_plan(&mut request, profile.as_ref());
 
     loop_state.pending_request = Some(request);
@@ -271,7 +280,7 @@ where
 /// The `model` node body: dispatches the request [`plan_node`] built,
 /// records usage, appends the assistant message, and routes to `tools` or
 /// `settle`.
-pub(crate) async fn model_node<State, Ctx>(
+async fn model_node_inner<State, Ctx>(
     harness: &AgentHarness<State, Ctx>,
     app_state: &State,
     ctx: &mut RunContext<Ctx>,
@@ -298,6 +307,8 @@ where
             tinyagents_harness::limits::LimitBehavior::StopWithPartial
         ) {
             loop_state.finished = true;
+            loop_state.limit_stop = true;
+            loop_state.limit_kind = Some(tinyagents_harness::events::LimitKind::ModelCalls);
             if loop_state.final_text.is_none() {
                 loop_state.final_text = Some(last_assistant_text(&loop_state.messages));
             }
@@ -306,42 +317,139 @@ where
         return Err(TinyAgentsError::LimitExceeded(error.to_string()));
     }
 
+    phases::lifecycle_seed(ctx, loop_state.messages.len());
+    phases::lifecycle_resume(ctx, loop_state.turn, None);
+    let entry_len = loop_state.messages.len();
     let request = loop_state
         .pending_request
         .take()
         .ok_or_else(|| TinyAgentsError::Validation("model node ran with no pending plan".into()))?;
 
-    let binding = harness
-        .models()
-        .resolve_request(&request, None, None)
-        .ok_or_else(|| {
-            TinyAgentsError::ModelNotFound(
-                request.model.clone().unwrap_or_else(|| "<default>".into()),
-            )
-        })?;
-    let model_name = binding.resolved.name.clone();
+    let binding = harness.resolve_model_for_request(ctx, &request).await?;
     let call_id = CallId::new(format!("{}-model-{}", ctx.run_id(), run.model_calls + 1));
 
     let mut request = request;
+    let resolution_cache = Arc::new(std::sync::Mutex::new(Some((
+        request.model.clone(),
+        request.model_hints.clone(),
+        request.required_capabilities.clone(),
+        binding,
+    ))));
+    // Mirror the direct loop: `before_model` middleware reads the target
+    // model's profile (e.g. to avoid new system messages on a model that
+    // hoists them, #6962).
+    ctx.model_profile = resolution_cache
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|(_, _, _, (_, model))| model.profile().cloned());
+    let profile_cache = resolution_cache.clone();
     harness
         .middleware()
-        .run_before_model(ctx, app_state, &mut request)
+        .run_before_model_with_profile(
+            ctx,
+            app_state,
+            &mut request,
+            harness,
+            move |harness, run_ctx, request| {
+                let profile_cache = profile_cache.clone();
+                Box::pin(async move {
+                    let key = (
+                        request.model.clone(),
+                        request.model_hints.clone(),
+                        request.required_capabilities.clone(),
+                    );
+                    if let Some((cached_model, cached_hints, cached_capabilities, binding)) =
+                        profile_cache.lock().unwrap().as_ref()
+                        && *cached_model == key.0
+                        && *cached_hints == key.1
+                        && *cached_capabilities == key.2
+                    {
+                        return Ok(binding.1.profile().cloned());
+                    }
+                    let binding = harness.resolve_model_for_request(run_ctx, request).await?;
+                    let profile = binding.1.profile().cloned();
+                    *profile_cache.lock().unwrap() = Some((key.0, key.1, key.2, binding));
+                    Ok(profile)
+                })
+            },
+        )
         .await?;
+
+    // Middleware may select a different registered model or add required
+    // capabilities. Resolve again so graph execution dispatches the request
+    // that middleware actually prepared, just like the direct loop.
+    let key = (
+        request.model.clone(),
+        request.model_hints.clone(),
+        request.required_capabilities.clone(),
+    );
+    let binding = resolution_cache.lock().unwrap().take().and_then(
+        |(cached_model, cached_hints, cached_capabilities, binding)| {
+            (cached_model == key.0 && cached_hints == key.1 && cached_capabilities == key.2)
+                .then_some(binding)
+        },
+    );
+    let binding = match binding {
+        Some(binding) => binding,
+        None => harness.resolve_model_for_request(ctx, &request).await?,
+    };
+    ctx.model_profile = binding.1.profile().cloned();
+    tinyagents_harness::middleware::library::rehome_ephemeral_system_instructions(
+        &mut request,
+        ctx.model_profile.as_ref(),
+    );
+    let model_name = binding
+        .0
+        .clone()
+        .unwrap_or_else(|| request.model.clone().unwrap_or_else(|| "<default>".into()));
+
+    // Mirror the direct loop: a named effort picks up the resolved model's
+    // tuned `thinking_level_map` entry, unless an explicit budget is pinned.
+    if let Some(profile) = binding.1.profile()
+        && let Some(reasoning) = request.reasoning.as_ref()
+        && reasoning.budget_tokens.is_none()
+        && let Some(effort) = reasoning.effort
+        && let Some(mapped) = profile.thinking_level_map.get(effort.as_str())
+    {
+        request.reasoning = Some(mapped.clone());
+    }
+
+    // Same point as the direct loop: pending appends (steering) are announced,
+    // the previous turn closed, and this one opened, just before `ModelStarted`.
+    let turn = phases::lifecycle_start_turn(harness, ctx, &loop_state.messages);
+    tracing::debug!(
+        target: "tinyagents::agent_loop",
+        run_id = %ctx.run_id(),
+        turn,
+        "[graph_loop] turn started"
+    );
 
     let started_record = ctx.emit(AgentEvent::ModelStarted {
         call_id: call_id.clone(),
         model: model_name.clone(),
     });
     status.set_last_event(started_record.id);
-
+    status.active_model_call = Some(call_id.clone());
+    ctx.active_model_call = Some(call_id.clone());
+    ctx.begin_model_call();
     let base = DirectModelBase {
-        model: binding.model.as_ref(),
+        model: binding.1.as_ref(),
     };
-    let (mut response, wrap_control) = harness
+    let wrapped = match harness
         .middleware()
         .run_wrapped_model(ctx, app_state, request, &base)
-        .await?
-        .into_response_with_control();
+        .await
+    {
+        Ok(wrapped) => wrapped,
+        Err(error) => {
+            status.active_model_call = None;
+            ctx.active_model_call = None;
+            ctx.mark_model_call_failed();
+            return Err(error);
+        }
+    };
+    let (mut response, wrap_control) = wrapped.into_response_with_control();
     if let Some(control) = wrap_control {
         ctx.request_control(control);
     }
@@ -349,6 +457,8 @@ where
     run.model_calls += 1;
     run.steps += 1;
     status.model_calls = run.model_calls;
+    status.active_model_call = None;
+    ctx.active_model_call = None;
     if let Some(usage) = response.usage {
         run.usage.record(usage);
         loop_state.usage = run.usage;
@@ -378,6 +488,7 @@ where
             response.message.clone(),
         ));
     loop_state.turn += 1;
+    phases::lifecycle_flush(harness, ctx, &loop_state.messages);
 
     let tool_calls = response.tool_calls().to_vec();
     loop_state.pending_tool_calls = tool_calls.clone();
@@ -394,7 +505,9 @@ where
     // has the real tool-routing decision to fall through to instead of an
     // arbitrary default.
     if let Some(control) = ctx.take_control() {
-        return apply_control(ctx, &mut loop_state, control, node::MODEL, route);
+        let result = apply_control(ctx, &mut loop_state, control, node::MODEL, route);
+        retract_on_interrupt(harness, ctx, &result, &loop_state.messages, entry_len, true);
+        return result;
     }
     // Stash the response for `settle` to extract structured output from.
     // Reusing `pending_request`'s sibling field would need a new field; keep
@@ -411,12 +524,63 @@ where
 /// the call site above without over-cloning it into `LoopState`.
 struct ModelOutcomeShadow<'a>(#[allow(dead_code)] &'a ModelResponse);
 
+/// The `model` node: [`model_node_inner`], closing the turn it opened if it
+/// fails. `GraphLoopDriver` closes on every exit as well, but `LoopIter` and
+/// the compiled graph propagate a node error with no epilogue.
+pub(crate) async fn model_node<State, Ctx>(
+    harness: &AgentHarness<State, Ctx>,
+    app_state: &State,
+    ctx: &mut RunContext<Ctx>,
+    run: &mut AgentRun,
+    status: &mut HarnessRunStatus,
+    loop_state: LoopState,
+) -> Result<NodeResult<LoopState>>
+where
+    State: Send + Sync,
+    Ctx: Send + Sync,
+{
+    let entry = loop_state.messages.clone();
+    let result = model_node_inner(harness, app_state, ctx, run, status, loop_state).await;
+    if result.is_err() {
+        phases::lifecycle_close_turn(harness, ctx, &entry);
+    }
+    result
+}
+
+/// The `tools` node: [`tools_node_inner`], announcing the results of calls that
+/// ran before a failure and closing the turn if it fails.
+pub(crate) async fn tools_node<State, Ctx>(
+    harness: &AgentHarness<State, Ctx>,
+    app_state: &State,
+    ctx: &mut RunContext<Ctx>,
+    run: &mut AgentRun,
+    status: &mut HarnessRunStatus,
+    loop_state: LoopState,
+) -> Result<NodeResult<LoopState>>
+where
+    State: Send + Sync,
+    Ctx: Send + Sync,
+{
+    let entry = loop_state.messages.clone();
+    let result = tools_node_inner(harness, app_state, ctx, run, status, loop_state).await;
+    if result.is_err() {
+        // A batch error leaves the partial transcript on the run.
+        let messages = if run.messages.len() > entry.len() {
+            &run.messages
+        } else {
+            &entry
+        };
+        phases::lifecycle_close_turn(harness, ctx, messages);
+    }
+    result
+}
+
 /// The `tools` node body: executes the batch [`model_node`] requested via
 /// [`phases::execute_tool_batch`] (the exact same admission /
 /// serial-or-concurrent execution / middleware pipeline the direct loop
 /// uses — see that function's docs), then routes back to `plan` for the next
 /// turn.
-pub(crate) async fn tools_node<State, Ctx>(
+async fn tools_node_inner<State, Ctx>(
     harness: &AgentHarness<State, Ctx>,
     app_state: &State,
     ctx: &mut RunContext<Ctx>,
@@ -428,6 +592,11 @@ where
     State: Send + Sync,
     Ctx: Send + Sync,
 {
+    phases::lifecycle_seed(ctx, loop_state.messages.len());
+    let entry_len = loop_state.messages.len();
+    // The turn that issued these calls began at (or before) the assistant
+    // message; a fresh runtime resuming an interrupted batch has no open turn.
+    phases::lifecycle_resume(ctx, loop_state.turn, Some(entry_len.saturating_sub(1)));
     let calls = std::mem::take(&mut loop_state.pending_tool_calls);
     let outcome = phases::execute_tool_batch(
         harness,
@@ -438,7 +607,37 @@ where
         &mut loop_state.messages,
         calls,
     )
-    .await?;
+    .await;
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error)
+            if matches!(
+                harness.policy().limits.behavior,
+                tinyagents_harness::limits::LimitBehavior::StopWithPartial
+            ) && matches!(error, TinyAgentsError::LimitExceeded(_))
+                && ctx.peek_last_limit()
+                    == Some(tinyagents_harness::events::LimitKind::ToolCalls) =>
+        {
+            // Only the tool-cap admission announces `LimitReached(ToolCalls)`
+            // (and `record_tool_call` cleared any earlier kind first), so a
+            // `LimitExceeded` raised by middleware is not a partial stop.
+            loop_state.limit_stop = true;
+            loop_state.limit_kind = Some(tinyagents_harness::events::LimitKind::ToolCalls);
+            loop_state.finished = true;
+            if loop_state.final_text.is_none() {
+                loop_state.final_text = Some(last_assistant_text(&loop_state.messages));
+            }
+            return Ok(goto(loop_state, node::SETTLE));
+        }
+        Err(error) => {
+            // Results of calls that ran before the failure are on the node's
+            // transcript, which the error path would otherwise drop; keep them
+            // on the run, as the direct loop does, so the driver's final
+            // lifecycle close announces and counts them.
+            run.messages = loop_state.messages.clone();
+            return Err(error);
+        }
+    };
     loop_state.tool_calls = run.tool_calls;
     loop_state.executed_tools = run.executed_tools.clone();
     let _ = outcome;
@@ -448,8 +647,24 @@ where
     }
 
     if let Some(control) = ctx.take_control() {
-        return apply_control(ctx, &mut loop_state, control, node::TOOLS, node::PLAN);
+        let result = apply_control(ctx, &mut loop_state, control, node::TOOLS, node::PLAN);
+        // The tool turn stays open on an interrupt: the re-run closes it with the
+        // results it produces (a fresh runtime re-opens it via `lifecycle_resume`).
+        if !retract_on_interrupt(
+            harness,
+            ctx,
+            &result,
+            &loop_state.messages,
+            entry_len,
+            false,
+        ) {
+            // Every tool result of this batch is on the transcript: announce
+            // them and close the turn, as the direct loop does after its batch.
+            phases::lifecycle_close_turn(harness, ctx, &loop_state.messages);
+        }
+        return result;
     }
+    phases::lifecycle_close_turn(harness, ctx, &loop_state.messages);
 
     Ok(goto(loop_state, node::PLAN))
 }
@@ -457,8 +672,40 @@ where
 /// The `settle` node body: extracts/validates structured output when the
 /// turn planned one, drives the output-validation retry loop
 /// (`RunPolicy::output_retry`), and finishes the run.
+/// An interrupted node's state is discarded and the node re-runs from its entry
+/// state on resume, so the appends it already announced are retracted: the
+/// re-run announces them again, and events never name a message the kept
+/// transcript lacks.
+fn retract_on_interrupt<State: Send + Sync, Ctx: Send + Sync>(
+    harness: &AgentHarness<State, Ctx>,
+    ctx: &mut RunContext<Ctx>,
+    result: &Result<NodeResult<LoopState>>,
+    messages: &[tinyinference_llm::message::Message],
+    entry_len: usize,
+    close_turn: bool,
+) -> bool {
+    if !matches!(result, Ok(NodeResult::Interrupt(_))) {
+        return false;
+    }
+    tracing::debug!(
+        target: "tinyagents::agent_loop",
+        run_id = %ctx.run_id(),
+        entry_len,
+        "[graph_loop] node interrupted; retracting its announced appends"
+    );
+    phases::lifecycle_retract(ctx, entry_len);
+    // A model node's turn has no results to wait for, and a fresh runtime
+    // cannot carry this tracker's open turn over, so close it. A tools node
+    // leaves its turn open for the re-run to close with the real results.
+    if close_turn {
+        phases::lifecycle_close_turn(harness, ctx, &messages[..entry_len.min(messages.len())]);
+    }
+    true
+}
+
 pub(crate) async fn settle_node<State, Ctx>(
     harness: &AgentHarness<State, Ctx>,
+    ctx: &mut RunContext<Ctx>,
     run: &mut AgentRun,
     mut loop_state: LoopState,
 ) -> Result<NodeResult<LoopState>>
@@ -466,6 +713,11 @@ where
     State: Send + Sync,
     Ctx: Send + Sync,
 {
+    phases::lifecycle_seed(ctx, loop_state.messages.len());
+    // The final assistant message is the last append of its turn; close the
+    // turn before any output-retry prompt is pushed (that prompt is announced
+    // with the next turn's start).
+    phases::lifecycle_close_turn(harness, ctx, &loop_state.messages);
     if let Some(plan) = loop_state.pending_structured.take() {
         let extractor = StructuredExtractor::new(
             plan.strategy.clone(),

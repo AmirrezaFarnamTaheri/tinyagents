@@ -23,6 +23,13 @@ loop.
   `SummarizationPolicy::plan` decides the split between `to_summarize` and
   `to_keep`; a `Summarizer` then condenses the former into a `SummaryRecord`
   carrying `CompressionProvenance`.
+- **Dispatch tracking** (`dispatch.rs`): summarizer calls bypass the run
+  context's provider-dispatch marker. `ContextCompressionMiddleware` scopes each
+  summarization with `track_dispatch`, `ModelSummarizer` calls `mark_dispatched`
+  right before it invokes its model, and the middleware then sets the run's
+  `provider_started`, so a summarizer that fails without usage after dispatching
+  still reports `TerminalOutcome::provider_started`. A rejection before dispatch
+  does not.
 - **Tool-call pairing** (`pairing.rs`) is the structural safety net both of
   the above rely on: a naive length-based cut point routinely separates an
   assistant tool-call turn from the tool results answering it, producing a
@@ -96,8 +103,11 @@ loop.
 | `render.rs` | `render_message_for_summary`. |
 | `trim.rs` | `trim_messages`/`trim_messages_with`/`trim_messages_to_token_budget_with`. |
 | `compaction.rs` | `find_cut_point`, `summarize_with_split`, `OverflowClassifier`, `CompactionContext`/`CompactionDecision`. |
-| `test.rs` | Coverage for token estimation, trim strategies, pairing repair, policy triggering/planning, and `ConcatSummarizer`. |
-| `compaction/test.rs` | Coverage for cut points, split-turn merge, iterative summaries, `OverflowClassifier`. |
+| `response_overflow.rs` | `detect_response_overflow`, `ResponseOverflowDetection`: overflow read from a successful response (usage above the window, zero-output `length` stop, opt-in short `length` stop). |
+| `file_ops.rs` | `FileOpExtractor`, `DefaultFileOpExtractor`, `FileOperations`, and the `<read-files>` / `<modified-files>` section writer/parser carried by compaction summaries. |
+| `split_turn.rs` | `split_turn_start`, `summarize_split_turn`: a cut inside a turn summarizes the turn prefix with its own `SummaryKind::TurnPrefix` request. |
+| `mod_tests.rs` | Coverage for token estimation, trim strategies, pairing repair, policy triggering/planning, and `ConcatSummarizer`. |
+| `compaction/compaction_tests.rs` | Coverage for cut points, split-turn merge, iterative summaries, `OverflowClassifier`. |
 
 ## Key invariants
 
@@ -110,6 +120,15 @@ loop.
   `len - keep_last` index.** It always routes through
   `find_safe_cutoff_point`, so `keep_last` is a *minimum*, not an exact
   count, and `to_keep` is always a provider-acceptable slice.
+- **`keep_recent_tokens` replaces the `keep_last` count when set.** The tail
+  is then cut by `find_cut_point` (pairing-repaired, never empty).
+- **`pin_turn_user_message` keeps the turn's assignment verbatim.** When the
+  kept tail holds no user message, `plan` moves the most recent one out of the
+  summarized head to the front of the tail (capped at
+  `PINNED_USER_MESSAGE_MAX_TOKENS`, truncated with a marker beyond).
+  `plan_split` reports its index; `ContextCompressionMiddleware` re-applies it
+  with the fold and records it as `details.pinned_user_index` on the
+  `CompactionRecord`, and the `FallbackTrim` front-drop keeps it too.
 - **System messages are never placed in `to_summarize`** and are (by
   default) never dropped by trimming either — they carry persistent
   instructions.
@@ -117,6 +136,16 @@ loop.
   `Message::text()`**, specifically so a tool-driven run's compacted history
   keeps its tool calls/results/reasoning instead of collapsing to empty
   strings.
+- **`ModelSummarizer` fences the transcript and asks last.** Its user message
+  is `<transcript>…</transcript>` (after any `<previous_summary>`), then the
+  instruction. A bare transcript that ends on a tool result reads as a live
+  agent loop, and a model continues it with its next tool call. The request
+  declares no tools, so that call arrives as plain-text markup (DeepSeek V4:
+  `<｜DSML｜invoke …>`).
+- **A tool call is never accepted as a summary.** A reply the tool-call
+  grammars parse as a call is retried once, then returned as an error, so
+  `FaultTolerantCachingSummarizer` falls back to its deterministic trim
+  instead of installing one stray command as the whole compacted history.
 - This module never calls into the agent loop or decides *when* to invoke a
   `Summarizer` on its own — `should_summarize`/`plan` are pure decisions the
   caller (the agent loop, a middleware) acts on.

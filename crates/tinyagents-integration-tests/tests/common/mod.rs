@@ -5,3 +5,4 @@
 //! separate test binary) wherever it is needed.
 
 pub mod live;
+pub mod storage;

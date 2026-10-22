@@ -27,43 +27,12 @@ use tinyinference_llm::usage::Usage;
 // ── Scripted response helpers ─────────────────────────────────────────────────
 
 fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> ModelResponse {
-    ModelResponse {
-        message: AssistantMessage {
-            id: Some(format!("msg-{id}")),
-            content: Vec::new(),
-            tool_calls: vec![ToolCall::new(id, name, arguments)],
-            usage: Some(Usage::new(6, 2)),
-            origin: None,
-        },
-        usage: Some(Usage::new(6, 2)),
-        finish_reason: Some("tool_calls".into()),
-        raw: None,
-        resolved_model: None,
-        continue_turn: None,
-        served_from_cache: false,
-        correlation: None,
-        resolved_route: None,
-    }
+    tinyagents_harness::testkit::tool_call_response(ToolCall::new(id, name, arguments))
+        .with_usage(Usage::new(6, 2))
 }
 
 fn text_response(text: &str) -> ModelResponse {
-    ModelResponse {
-        message: AssistantMessage {
-            id: None,
-            content: vec![ContentBlock::Text(text.into())],
-            tool_calls: Vec::new(),
-            usage: Some(Usage::new(3, 1)),
-            origin: None,
-        },
-        usage: Some(Usage::new(3, 1)),
-        finish_reason: Some("stop".into()),
-        raw: None,
-        resolved_model: None,
-        continue_turn: None,
-        served_from_cache: false,
-        correlation: None,
-        resolved_route: None,
-    }
+    tinyagents_harness::testkit::text_response(text).with_usage(Usage::new(3, 1))
 }
 
 /// Finds the single recorded [`AgentEvent::UnknownToolCall`], asserting the
@@ -93,10 +62,12 @@ fn single_unknown_tool_event(events: &[AgentEvent]) -> (String, String) {
 #[tokio::test]
 async fn fail_policy_errors_on_unregistered_tool() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_tool_call("missing", json!({}))),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_tool_call("missing", json!({}))),
+        ),
+    ));
     // `ReturnToolError` is the default now (a hallucinated tool name is a
     // routine model mistake), so a hard stop has to be asked for.
     harness.with_policy(RunPolicy {
@@ -120,13 +91,15 @@ async fn fail_policy_errors_on_unregistered_tool() {
 #[tokio::test]
 async fn return_tool_error_recovers_and_emits_event() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
-            tool_call_response("c1", "missing", json!({})),
-            text_response("recovered"),
-        ])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                tool_call_response("c1", "missing", json!({})),
+                text_response("recovered"),
+            ])),
+        ),
+    ));
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::ReturnToolError,
         ..RunPolicy::default()
@@ -162,13 +135,15 @@ async fn return_tool_error_preserves_original_arguments() {
     let original = json!({ "query": "weather", "n": 3 });
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
-            tool_call_response("c1", "search", original.clone()),
-            text_response("recovered"),
-        ])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                tool_call_response("c1", "search", original.clone()),
+                text_response("recovered"),
+            ])),
+        ),
+    ));
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::ReturnToolError,
         ..RunPolicy::default()
@@ -204,13 +179,15 @@ async fn rewrite_retargets_to_real_tool() {
     let fake = Arc::new(FakeTool::returning("lookup", "out"));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
-            tool_call_response("c1", "missing", json!({})),
-            text_response("done"),
-        ])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                tool_call_response("c1", "missing", json!({})),
+                text_response("done"),
+            ])),
+        ),
+    ));
     harness.register_tool(fake.clone());
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::Rewrite {
@@ -241,13 +218,15 @@ async fn rewrite_retargets_to_real_tool() {
 #[tokio::test]
 async fn rewrite_to_missing_target_falls_back_to_tool_error() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
-            tool_call_response("c1", "missing", json!({})),
-            text_response("recovered"),
-        ])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                tool_call_response("c1", "missing", json!({})),
+                text_response("recovered"),
+            ])),
+        ),
+    ));
     // Rewrite target "nope" is itself unregistered → fall back to tool-error.
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::Rewrite {
@@ -290,10 +269,12 @@ async fn recovery_is_bounded_by_tool_call_limit() {
     // MockModel::with_tool_call repeats the same unknown call on every
     // invocation, so without a bound the loop would spin forever.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_tool_call("missing", json!({}))),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_tool_call("missing", json!({}))),
+        ),
+    ));
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::ReturnToolError,
         limits: RunLimits::default().with_max_tool_calls(3),

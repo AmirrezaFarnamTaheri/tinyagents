@@ -59,3 +59,24 @@ Dynamic prompts may use:
 Dynamic prompts should not access global state implicitly. Time, random ids, and
 external data should come from `RunContext` or configured providers so tests can
 remain deterministic.
+
+## Stable object ordering
+
+PromptBuilder fingerprints serialize JSON objects with recursively sorted keys,
+including objects inside arrays. This preserves the existing default
+serde_json fingerprint bytes when a downstream dependency enables
+serde_json/preserve_order. Equal object contents produce equal fingerprints
+regardless of insertion order. Arrays retain their order; changing an array's
+order still changes the fingerprint.
+
+The same rule applies when the harness turns tool schemas or assistant tool
+calls into prompt text: compact signatures and argument notes, skill disclosure,
+deferred search results, and text-mode call replay. Caller-owned schemas and
+arguments are not mutated. Scalars use serde_json's normal encoding; this is
+sorted-key serialization, not RFC 8785 numeric canonicalization.
+
+These guarantees cover harness fingerprints and prompt renderers, not provider
+wire serializers. Enabling insertion-ordered JSON can also enlarge public
+result representations and trigger enum-size lint failures. This ordering fix
+does not change those representations or establish complete Mongo/harness
+production feature compatibility.

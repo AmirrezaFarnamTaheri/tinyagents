@@ -13,16 +13,10 @@
 //! at superstep boundaries only — never mid-node — so resuming always reruns a
 //! node from its start.
 
-mod file;
-#[cfg(feature = "sqlite")]
-mod sqlite;
+mod drivers;
 mod types;
 
-pub use file::FileCheckpointer;
-#[cfg(feature = "sqlite")]
-pub use sqlite::SqliteCheckpointer;
-#[cfg(feature = "sqlite")]
-pub(crate) use sqlite::prepare_connection;
+pub use drivers::DriverCheckpointer;
 pub use types::{
     BarrierArrivals, CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointConfig, CheckpointMetadata,
     CheckpointSource, CheckpointTuple, CompletedTask, DURABLE_TASK_CHANNEL_PREFIX, DurabilityMode,
@@ -130,7 +124,7 @@ where
     ///
     /// Composed from [`Checkpointer::list`] + [`Checkpointer::get`] so every
     /// backend inherits it; override for a cheaper scoped query — both
-    /// [`FileCheckpointer`] and [`SqliteCheckpointer`](crate::SqliteCheckpointer)
+    /// `FileCheckpointer` and `SqliteCheckpointer`
     /// do, because the default costs a full thread scan per call and
     /// [`Checkpointer::state_history`] issues one per lineage hop.
     async fn get_scoped(
@@ -201,7 +195,7 @@ where
     /// keeps compiling and behaving exactly as before without overriding it.
     ///
     /// A backend that can share one transaction across both statements
-    /// should override this to do so — [`SqliteCheckpointer`] does, so a
+    /// should override this to do so — `SqliteCheckpointer` did, so a
     /// crash between the two writes is impossible rather than merely
     /// unlikely: either both are durable or neither is.
     async fn put_with_writes(
@@ -209,11 +203,7 @@ where
         checkpoint: Checkpoint<State>,
         writes: &[PendingWrite],
     ) -> Result<CheckpointId> {
-        let config = CheckpointConfig {
-            thread_id: checkpoint.thread_id.clone(),
-            checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
-            namespace: checkpoint.namespace.clone(),
-        };
+        let config = checkpoint.config();
         let id = self.put(checkpoint).await?;
         self.put_writes(&config, writes).await?;
         Ok(id)
@@ -342,20 +332,8 @@ where
         else {
             return Ok(None);
         };
-        let resolved = CheckpointConfig {
-            thread_id: checkpoint.thread_id.clone(),
-            checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
-            namespace: checkpoint.namespace.clone(),
-        };
-        let parent_config =
-            checkpoint
-                .parent_checkpoint_id
-                .as_ref()
-                .map(|parent| CheckpointConfig {
-                    thread_id: checkpoint.thread_id.clone(),
-                    checkpoint_id: Some(parent.clone()),
-                    namespace: checkpoint.namespace.clone(),
-                });
+        let resolved = checkpoint.config();
+        let parent_config = checkpoint.parent_config();
         let pending_writes = self.resolved_writes(&resolved, &checkpoint).await?;
         Ok(Some(CheckpointTuple {
             config: resolved,
@@ -407,7 +385,7 @@ where
     /// record at itself or at one of its descendants. With `limit == None` an
     /// unguarded walk then never terminates — it does not merely return a wrong
     /// answer, it hangs the caller. Revisiting an id ends the walk.
-    /// [`FileCheckpointer`] has always had this guard (its in-memory `remove`
+    /// `FileCheckpointer` had always had this guard (its in-memory `remove`
     /// doubles as one); this makes it uniform.
     async fn state_history(
         &self,
@@ -870,4 +848,5 @@ pub(crate) fn require_checkpoint_id(config: &CheckpointConfig) -> Result<String>
 }
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;

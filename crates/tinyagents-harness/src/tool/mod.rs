@@ -4,15 +4,22 @@
 //! concerns: name lookup, provider-schema projection, timeout settings, error
 //! routing, and the explicit recursive-dispatch handoff.
 
+mod binding;
 pub mod deferred;
 pub mod discover;
 pub mod effects;
+pub mod nested;
+mod progress;
 mod prompt;
+mod rules;
 mod schema;
 mod schema_compact;
 mod schema_prepare;
+mod schema_walk;
 pub mod select;
+pub mod shared;
 mod signature;
+mod snapshot;
 mod timeout;
 pub mod toolset;
 mod types;
@@ -23,18 +30,33 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
+pub use binding::{BoundToolCall, ToolCallBinding};
 pub use deferred::*;
 pub use effects::{
     LedgerFailure, ToolEffect, ToolEffectLedger, ToolEffectSettle, ToolEffectStart,
     ToolEffectStatus,
 };
+pub use nested::NestedToolRunner;
+pub(crate) use progress::{ToolProgressGate, ToolProgressLimits};
 pub use prompt::*;
+pub use rules::ToolRulePolicy;
+pub(crate) use rules::{CallGate, ToolGate};
 pub use schema::*;
 pub use schema_compact::*;
 pub use schema_prepare::*;
+pub use schema_walk::*;
 pub use select::*;
+pub use shared::{
+    CanonicalSharedToolAdapter, EarlyExit, EarlyExitHook, ToolExecScope, ToolExecution,
+};
 pub use signature::*;
+pub use snapshot::{
+    ToolSnapshot, ToolSnapshotError, ToolSnapshotExtension, ToolSnapshotExtensions,
+};
 pub use timeout::*;
+
+/// Name of the generic skill disclosure and indirect-call tool.
+pub const USE_SKILL_TOOL: &str = "use_skill";
 pub use toolset::{ToolExposureExplanation, ToolSet};
 pub use types::ToolExecutionContext;
 
@@ -48,6 +70,25 @@ pub use types::ToolExecutionContext;
 pub trait ToolDispatch<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
     /// Canonical declaration exposed to the model and policy layer.
     fn tool(&self) -> Arc<dyn tinytools::Tool>;
+
+    /// Binds any mutable, indirect target to this admitted call.
+    ///
+    /// The harness invokes this once after argument preparation and validation,
+    /// then uses the returned dispatch for policy, authorization, and execution.
+    /// Implementations without call-scoped targets can keep the default.
+    fn bind_call(
+        &self,
+        _arguments: &Value,
+    ) -> anyhow::Result<Option<Arc<dyn ToolDispatch<State, Ctx>>>> {
+        Ok(None)
+    }
+
+    /// Returns the concrete target and effective arguments for call-rule
+    /// checks after an indirect call is bound. The dispatcher declaration is
+    /// still checked independently.
+    fn admission_target(&self) -> Option<(&dyn tinytools::Tool, &Value)> {
+        None
+    }
 
     /// Classifies output for the host security boundary.
     ///
@@ -84,6 +125,12 @@ pub trait ToolDispatch<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
 
     /// Executes with the full typed parent run when the dispatch needs it.
     ///
+    /// The loop scopes the call's progress gate around the future this method
+    /// returns, so a dispatch that builds a [`ToolExecutionContext`] must do so
+    /// **inside** this future (as the canonical dispatch does); a context built
+    /// earlier or on another task carries no progress sink — and no nested-call
+    /// runner, so `ToolExecutionContext::call_tool` fails for that tool.
+    ///
     /// `call_id` is the admitted call's id — the one the transcript row and
     /// the `ToolStarted`/`ToolCompleted` events carry — so a dispatch that
     /// builds a [`ToolExecutionContext`] hands the tool the real id (B1).
@@ -107,6 +154,21 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for Canonica
         self.tool.clone()
     }
 
+    fn bind_call(
+        &self,
+        arguments: &Value,
+    ) -> anyhow::Result<Option<Arc<dyn ToolDispatch<State, Ctx>>>> {
+        let Some(extension) = self
+            .tool
+            .host_extension()
+            .and_then(|extension| extension.downcast_ref::<ToolCallBinding>())
+        else {
+            return Ok(None);
+        };
+        let bound = extension.bind(self.tool.clone(), arguments);
+        Ok(Some(Arc::new(BoundCanonicalDispatch { bound })))
+    }
+
     async fn execute(
         &self,
         _state: &State,
@@ -117,6 +179,36 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for Canonica
     ) -> anyhow::Result<tinytools::ToolResult> {
         let context = ToolExecutionContext::from_run_context(parent, call_id);
         self.tool
+            .execute_with_context(arguments, options, Some(&context))
+            .await
+    }
+}
+
+struct BoundCanonicalDispatch {
+    bound: Arc<dyn BoundToolCall>,
+}
+
+#[async_trait]
+impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for BoundCanonicalDispatch {
+    fn tool(&self) -> Arc<dyn tinytools::Tool> {
+        self.bound.tool()
+    }
+
+    fn admission_target(&self) -> Option<(&dyn tinytools::Tool, &Value)> {
+        self.bound.admission_target()
+    }
+
+    async fn execute(
+        &self,
+        _state: &State,
+        call_id: crate::ids::CallId,
+        arguments: Value,
+        options: tinytools::ToolCallOptions,
+        parent: &crate::context::RunContext<Ctx>,
+    ) -> anyhow::Result<tinytools::ToolResult> {
+        let context = ToolExecutionContext::from_run_context(parent, call_id);
+        self.bound
+            .tool()
             .execute_with_context(arguments, options, Some(&context))
             .await
     }
@@ -401,8 +493,23 @@ pub(crate) fn provider_schema(tool: &dyn tinytools::Tool) -> tinyinference_llm::
 }
 
 #[cfg(test)]
+#[path = "canonical_tests.rs"]
 mod canonical_test;
+
 #[cfg(test)]
+#[path = "context_tests.rs"]
 mod context_test;
 #[cfg(test)]
+#[path = "schema_walk_tests.rs"]
+mod schema_walk_test;
+#[cfg(test)]
+#[path = "timeout_tests.rs"]
 mod timeout_test;
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "binding_tests.rs"]
+mod binding_tests;

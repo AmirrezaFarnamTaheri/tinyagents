@@ -1,36 +1,41 @@
-# `tinyagents-orchestration` — subagent orchestration
+# `tinyagents-orchestration` — subagent lifecycle
 
-This crate is the single home for TinyAgents subagent behavior. It builds on
-the lower-level harness and runtime crates without making those crates depend
-on orchestration policy.
+This crate owns the host-neutral policy and lifecycle for asynchronous
+subagents. Hosts provide planning, execution, persistence, authorization, and
+product effects.
 
 ## Public surface
 
-- `subagent::SubAgent` runs an `AgentHarness` as a child with inherited
-  lineage, cancellation, events, host authority, and recursion limits.
-- `subagent::SubAgentTool` starts a child asynchronously through typed
-  parent-context tool dispatch and immediately returns a stable job id.
-- `subagent::SubAgentJobRegistry` records queued, running, completed, failed,
-  and cancelled jobs. `SubAgentJobsTool` queries them and
-  `SubAgentMessageTool` sends messages to live children.
-- `subagent::SubAgentSession` reuses one child and its transcript across turns.
 - `subagent::SubagentDriver` coordinates durable resume, preparation,
-  execution, pause, and terminal persistence through host-supplied traits.
+  execution, pauses, retries, and terminal persistence through host-supplied
+  traits.
+- `subagent::SubAgentJobRegistry` records spawned jobs and supports status,
+  cancellation, steering, messages, and descendant settlement. The
+  `DriverSubAgentTool` in `tinyagents-harness-tools` starts jobs and returns a
+  task reference immediately; registry wait and detached wait APIs are
+  separate host-facing operations.
+- Detached lifecycle helpers in `subagent::detached` support completion
+  routing and settlement, including `wait_all_detached_with_owners` for
+  headless hosts.
+- `subagent::SpawnPolicy` / `SpawnAdmission` bound child fan-out, and
+  `SubAgentPolicy`, `SubAgentBudget`, and `SubAgentOutput` define execution
+  policy and accounting.
+- `DriverSubagentSessionStore` persists reusable child-session identity and
+  history through a host document-store port.
+- `steering` provides lane-checked control of live child runs.
 
-The direct invocation implementation and its tool-focused tests live in
-`subagent/invocation/`. Durable lifecycle files live beside it in `subagent/`.
-End-to-end and live subagent tests live in the crate-level `tests/` directory,
-and `tests/live_orchestrator_subagents.rs` exercises network-backed job-based
-delegation.
+## Status vocabularies
+
+`OrchestrationTaskStatus` in `tinyagents-tasks` is the canonical durable task
+status. `DetachedSubagentStatus`, `SubAgentJobStatus`, `SubagentOutcomeKind`,
+`AgentRunStatus`, transcript status, and completion status retain their
+role-specific payloads and serialized forms, with conversions documented in
+`tinyagents-tasks`.
 
 ## Boundaries
 
-The crate does not own teams or workflow DAGs. Graph-specific node lowering
-remains in `tinyagents-graph`, while provider calls, tool dispatch mechanics,
-events, and run contexts remain in `tinyagents-harness`. This crate composes
-those primitives into child-agent behavior.
-
-Hosts remain responsible for agent definitions, model selection, credentials,
-workspace policy, durable storage implementations, and authorization. Hosted
-child invocations always re-enter through the exact capability bundle carried
-by their parent context.
+This crate owns async subagent lifecycle only. Generic graph execution stays
+in `tinyagents-graph`; tool dispatch, events, and run contexts stay in
+`tinyagents-harness`. Hosts remain responsible for agent definitions, model
+selection, credentials, workspace policy, storage implementations, and
+authorization.

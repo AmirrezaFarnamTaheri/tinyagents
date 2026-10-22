@@ -1,0 +1,249 @@
+//! Fail-closed tool admission and registration onto an [`AgentHarness`].
+//!
+//! The host decides *which* tools exist and how each is wrapped; this module
+//! owns the generic rules for which candidates register: de-duplication by
+//! name, an allowlist whose empty set denies everything, thread-scoped tools
+//! dropped on thread-less turns, and spawn/delegate tools withheld from
+//! sub-agent runs by default. A host may grant bounded nested spawning for a
+//! turn; those tools still need to pass the ordinary allowlist, and the host
+//! remains responsible for enforcing the depth ceiling when a child executes.
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use tinyagents_harness::runtime::AgentHarness;
+use tinyagents_harness::tool::ToolDispatch;
+use tinyagents_harness::{
+    context::RunContext,
+    middleware::{PolicyDecision, ToolCallPolicy},
+};
+use tinyinference_llm::tool::ToolCall;
+use tinytools::{Tool, ToolSpec};
+
+/// A deny-by-default host belt that may delegate allowed calls to host policy.
+pub struct HostOnlyToolPolicy<C: Send + Sync + 'static> {
+    allowed: HashSet<String>,
+    host: Option<Arc<dyn ToolCallPolicy<C>>>,
+}
+
+impl<C: Send + Sync + 'static> HostOnlyToolPolicy<C> {
+    pub fn new(
+        allowed: impl IntoIterator<Item = String>,
+        host: Option<Arc<dyn ToolCallPolicy<C>>>,
+    ) -> Self {
+        Self {
+            allowed: allowed.into_iter().collect(),
+            host,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl<C: Send + Sync + 'static> ToolCallPolicy<C> for HostOnlyToolPolicy<C> {
+    fn name(&self) -> &str {
+        "host_only"
+    }
+
+    async fn check(&self, ctx: &RunContext<C>, call: &ToolCall) -> PolicyDecision {
+        if !self.allowed.contains(&call.name) {
+            return PolicyDecision::deny(format!(
+                "tool `{}` is not in this host-only belt",
+                call.name
+            ));
+        }
+        match &self.host {
+            Some(host) => host.check(ctx, call).await,
+            None => PolicyDecision::Allow,
+        }
+    }
+}
+
+/// Keeps the first declaration for each name, preserving order and allocation.
+pub fn dedup_visible_tool_specs(specs: Vec<Arc<ToolSpec>>) -> Vec<Arc<ToolSpec>> {
+    let mut names = HashSet::new();
+    specs
+        .into_iter()
+        .filter(|spec| names.insert(spec.name.clone()))
+        .collect()
+}
+
+/// Removes synthesized declarations shadowed by durable declarations.
+pub fn drop_synthesized_name_collisions(
+    durable: &[Arc<ToolSpec>],
+    synthesized: Vec<Arc<ToolSpec>>,
+) -> Vec<Arc<ToolSpec>> {
+    let durable_names: HashSet<&str> = durable.iter().map(|spec| spec.name.as_str()).collect();
+    synthesized
+        .into_iter()
+        .filter(|spec| !durable_names.contains(spec.name.as_str()))
+        .collect()
+}
+
+/// How one admitted tool is registered on the harness.
+pub enum ToolRegistration<State, C> {
+    /// A plain tool.
+    Tool(Arc<dyn Tool>),
+    /// A tool that needs the typed parent run.
+    Dispatch(Arc<dyn ToolDispatch<State, C>>),
+}
+
+/// Depth and ceiling supplied by a host that explicitly permits nested
+/// sub-agent creation for this turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NestedSpawnDepth {
+    depth: usize,
+    max_depth: usize,
+}
+
+impl NestedSpawnDepth {
+    /// Creates a depth grant only when the current depth is within its ceiling.
+    pub fn try_new(depth: usize, max_depth: usize) -> Option<Self> {
+        (depth <= max_depth).then_some(Self { depth, max_depth })
+    }
+
+    /// Returns whether one more child fits within the host's ceiling.
+    pub fn allows_child(self) -> bool {
+        self.depth
+            .checked_add(1)
+            .is_some_and(|child_depth| child_depth <= self.max_depth)
+    }
+}
+
+/// Admission rules for one turn's tool registration.
+#[derive(Clone, Default)]
+pub struct ToolAdmission {
+    /// `None` admits every candidate; `Some(set)` admits exactly its members,
+    /// so `Some(empty)` is an explicit deny-all.
+    pub allowed: Option<HashSet<String>>,
+    /// Whether the turn runs as a sub-agent.
+    pub is_subagent_run: bool,
+    /// Whether the turn has a chat thread.
+    pub has_thread: bool,
+    /// Names of tools that cannot run without a thread.
+    pub thread_scoped: HashSet<String>,
+    /// Names of spawn/delegate tools denied to sub-agents unless the host
+    /// supplies a [`NestedSpawnDepth`] grant that permits another child.
+    /// These tools must also pass `allowed`; the grant does not expand that
+    /// allowlist.
+    pub spawn_tools: HashSet<String>,
+    /// Explicit host grant for bounded nested spawning. `None` keeps the
+    /// default leaf-subagent behavior.
+    pub nested_spawn_depth: Option<NestedSpawnDepth>,
+}
+
+/// The outcome of [`plan_registration`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RegistrationPlan {
+    /// De-duplicated candidates, in first-seen order, after thread filtering.
+    pub candidates: Vec<String>,
+    /// The subset of `candidates` that register, in the same order.
+    pub admitted: Vec<String>,
+    /// Spawn tools an allowlist tried to readmit on a sub-agent run.
+    pub spawn_refused: Vec<String>,
+}
+
+/// Deterministic changes between two synthesized tool-name surfaces.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToolSurfaceDiff {
+    /// Newly synthesized names, sorted for stable observation.
+    pub added: Vec<String>,
+    /// Revoked names, sorted for stable observation.
+    pub removed: Vec<String>,
+    /// Names present in both surfaces, sorted for stable observation.
+    pub retained: Vec<String>,
+}
+
+/// Computes a stable visibility diff for a synthesized tool refresh.
+pub fn tool_surface_diff(previous: &HashSet<String>, next: &HashSet<String>) -> ToolSurfaceDiff {
+    let mut diff = ToolSurfaceDiff {
+        added: next.difference(previous).cloned().collect(),
+        removed: previous.difference(next).cloned().collect(),
+        retained: previous.intersection(next).cloned().collect(),
+    };
+    diff.added.sort();
+    diff.removed.sort();
+    diff.retained.sort();
+    diff
+}
+
+/// Decides which of `names` register under `admission`.
+pub fn plan_registration<I, S>(names: I, admission: &ToolAdmission) -> RegistrationPlan
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut seen = HashSet::new();
+    let mut plan = RegistrationPlan::default();
+    for name in names {
+        let name = name.as_ref();
+        if !seen.insert(name.to_string()) {
+            continue;
+        }
+        if !admission.has_thread && admission.thread_scoped.contains(name) {
+            tracing::debug!(
+                tool = name,
+                "[tool-registration] dropped thread-scoped tool"
+            );
+            continue;
+        }
+        plan.candidates.push(name.to_string());
+        let allowed = admission
+            .allowed
+            .as_ref()
+            .is_none_or(|set| set.contains(name));
+        if !allowed {
+            continue;
+        }
+        if admission.is_subagent_run
+            && admission.spawn_tools.contains(name)
+            && !admission
+                .nested_spawn_depth
+                .is_some_and(NestedSpawnDepth::allows_child)
+        {
+            tracing::warn!(
+                tool = name,
+                "[tool-registration] refused spawn tool on sub-agent"
+            );
+            plan.spawn_refused.push(name.to_string());
+            continue;
+        }
+        plan.admitted.push(name.to_string());
+    }
+    plan
+}
+
+/// Registers every admitted tool onto `harness`, asking `build` how to wrap
+/// each. Names `build` returns `None` for are skipped. Returns the number
+/// registered together with the plan.
+pub fn register_admitted<State, C, I, S>(
+    harness: &mut AgentHarness<State, C>,
+    names: I,
+    admission: &ToolAdmission,
+    mut build: impl FnMut(&str) -> Option<ToolRegistration<State, C>>,
+) -> (usize, RegistrationPlan)
+where
+    State: Send + Sync + 'static,
+    C: Send + Sync + 'static,
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let plan = plan_registration(names, admission);
+    let mut count = 0;
+    for name in &plan.admitted {
+        match build(name) {
+            Some(ToolRegistration::Tool(tool)) => {
+                harness.register_tool(tool);
+            }
+            Some(ToolRegistration::Dispatch(dispatch)) => {
+                harness.register_tool_dispatch(dispatch);
+            }
+            None => continue,
+        }
+        count += 1;
+    }
+    (count, plan)
+}
+
+#[cfg(test)]
+#[path = "tool_registration_tests.rs"]
+mod tests;

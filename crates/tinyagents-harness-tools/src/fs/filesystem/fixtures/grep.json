@@ -1,0 +1,33 @@
+{
+  "description": "Search file contents in the workspace with a regular expression. Returns up to `max_matches` matches (default 200) as `path:line:text` lines.",
+  "exposure": "Direct",
+  "name": "grep",
+  "permission_level": "ReadOnly",
+  "schema": {
+    "properties": {
+      "case_insensitive": {
+        "default": false,
+        "description": "If true, compile the regex with the `i` flag.",
+        "type": "boolean"
+      },
+      "max_matches": {
+        "description": "Cap on matches returned (default 200).",
+        "minimum": 1,
+        "type": "integer"
+      },
+      "path": {
+        "default": ".",
+        "description": "Optional sub-path to restrict the search to (relative to workspace).",
+        "type": "string"
+      },
+      "pattern": {
+        "description": "Regular expression (Rust `regex` crate syntax).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "pattern"
+    ],
+    "type": "object"
+  }
+}

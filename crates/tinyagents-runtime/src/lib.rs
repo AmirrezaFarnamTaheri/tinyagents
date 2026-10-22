@@ -6,24 +6,43 @@
 //! crate deliberately has no host configuration or product dependencies.
 
 mod builder;
+mod capability_projection;
+pub use tinyagents_hooks::command as command_hooks;
 mod driver;
 mod error;
 mod hooks;
+mod identity;
+mod managed_tools;
+mod permanent_tool;
 mod prefix;
 mod session;
-mod tools;
+mod summary;
+pub use summary::turn_summary;
+mod tool_registration;
+pub mod transcript;
+pub mod turn_driver;
 mod types;
 
 pub use builder::SessionBuilder;
+pub use capability_projection::{project_descriptors, register_admitted_projected};
 pub use driver::{DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, SessionDriver};
 pub use error::RuntimeError;
-pub use hooks::{NoopSessionHooks, SessionHooks};
+pub use hooks::PostCommitSink;
+pub use hooks::{FnSessionHooks, NoopSessionHooks, SessionHookFuture, SessionHooks};
+pub use identity::SessionIdentityResolver;
+pub use managed_tools::{ManagedToolNames, refresh_prefix, reject_synthesized_collisions};
+pub use permanent_tool::PermanentTool;
 pub use prefix::PrefixSnapshot;
 pub use session::Session;
 pub use tinyagents_session::transcript::TranscriptPartial;
-pub use tools::ToolSnapshot;
+pub use tool_registration::{
+    HostOnlyToolPolicy, NestedSpawnDepth, RegistrationPlan, ToolAdmission, ToolRegistration,
+    ToolSurfaceDiff, dedup_visible_tool_specs, drop_synthesized_name_collisions, plan_registration,
+    register_admitted, tool_surface_diff,
+};
 pub use types::{
-    CommitReceipt, ResumeMode, ResumePreparation, SessionResume, SessionStateView, SessionTerminal,
+    CommitReceipt, PostCommitObservation, ResolvedSessionStores, ResumeMode, ResumePreparation,
+    SessionIdentity, SessionIdentityRequest, SessionResume, SessionStateView, SessionTerminal,
     SessionTurnOutcome, SessionTurnRequest, TranscriptCommitReceipt, TranscriptDelta,
     TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
@@ -34,6 +53,9 @@ pub use types::{
 /// It is object-safe so a host can keep its conversion and metadata ownership
 /// outside this reusable runtime.  The runtime never narrows transcript data
 /// itself; a codec must explicitly decide how every field is represented.
+/// The default reconciliation assumes decoded messages retain positional
+/// correspondence with durable rows; codecs that reorder, combine, or split
+/// rows must override [`Self::reconcile`] to preserve their associations.
 pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
     /// Decodes a durable transcript for model execution.
     fn decode_history(
@@ -42,12 +64,16 @@ pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
     ) -> Result<Vec<tinyinference_llm::message::Message>, RuntimeError>;
 
     /// Reconciles a model-history transition with the prior lossless durable
-    /// rows. `prior` is authoritative for fields absent from inference
-    /// messages (provider metadata, raw arguments, reasoning, ids, and host
-    /// extensions): unchanged model positions must retain their corresponding
-    /// raw row, including when `next` is a compaction replacement. The returned
-    /// rows are the complete next logical durable set; the history layer writes
-    /// its delta atomically. `options` is captured after `before_turn` mutates
+    /// rows. `prior` is the lossless durable row set aligned with `previous`,
+    /// authoritative for fields absent from inference messages (provider
+    /// metadata, raw arguments, reasoning, ids, and host extensions): unchanged
+    /// model positions must retain their corresponding raw row, including
+    /// when `next` is a compaction replacement. Replay-only repairs can omit
+    /// rows from this correspondence; those source rows remain in the session's
+    /// unmodified write baseline and are preserved in a sealed generation if
+    /// the repaired history commits as a replacement. The returned rows are
+    /// the complete next logical durable set; the history layer writes its
+    /// delta atomically. `options` is captured after `before_turn` mutates
     /// the explicit turn options and before the driver consumes `RunContext`.
     fn reconcile(
         &self,
@@ -55,7 +81,15 @@ pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
         previous: &[tinyinference_llm::message::Message],
         next: &[tinyinference_llm::message::Message],
         options: &TranscriptTurnOptions<C>,
-    ) -> Result<Vec<tinyagents_session::transcript::TranscriptMessage>, RuntimeError>;
+    ) -> Result<Vec<tinyagents_session::transcript::TranscriptMessage>, RuntimeError> {
+        Ok(crate::transcript::reconcile_native_transcript(
+            prior,
+            previous,
+            next,
+            options.request_id.as_deref(),
+        )
+        .rows)
+    }
 
     /// Returns host-derived provider usage for this transition, if available.
     ///
@@ -75,4 +109,10 @@ pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
 }
 
 #[cfg(test)]
+#[path = "codec_tests.rs"]
+mod codec_tests;
+#[cfg(test)]
+#[path = "lib_tests.rs"]
 mod test;
+#[cfg(test)]
+mod test_store;

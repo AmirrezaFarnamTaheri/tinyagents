@@ -12,7 +12,7 @@ Status: partially present.
 
 TinyAgents graph has `Send`, `Command`, reducers, interrupts, parallel execution,
 and max concurrency. OpenHuman still added `run_parallel_fanout` to provide an
-ordered, bounded map/reduce helper for council runs and `spawn_parallel_agents`.
+ordered, bounded map/reduce helper for council runs.
 
 Implement:
 
@@ -34,7 +34,7 @@ Implement:
 Acceptance criteria:
 
 - OpenHuman can delete most of `run_parallel_fanout` and use the SDK helper.
-- `spawn_parallel_agents` can be expressed as graph configuration plus
+- Parallel-agent dispatch can be expressed as graph configuration plus
   OpenHuman policy adapters.
 - Results remain deterministic in input order even when workers complete out of
   order.

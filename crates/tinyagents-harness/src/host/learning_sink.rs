@@ -90,6 +90,10 @@ pub struct TurnSummary {
     #[serde(default)]
     pub tools_invoked: Vec<String>,
 
+    /// Content-free outcomes for completed tool calls.
+    #[serde(default)]
+    pub tool_outcomes: Vec<ToolOutcomeRecord>,
+
     /// Token usage accumulated by the turn, for sinks that weight or budget
     /// what they learn from.
     #[serde(default)]
@@ -106,6 +110,7 @@ impl TurnSummary {
             input: String::new(),
             output: String::new(),
             tools_invoked: Vec::new(),
+            tool_outcomes: Vec::new(),
             usage: Usage::default(),
         }
     }
@@ -145,10 +150,51 @@ impl TurnSummary {
         self
     }
 
+    /// Records the result metadata for one completed invocation.
+    pub fn record_tool_outcome(&mut self, outcome: ToolOutcomeRecord) {
+        self.record_tool(&outcome.name);
+        self.tool_outcomes.push(outcome);
+    }
+
     /// Whether the turn invoked any tool. Cheaper than inspecting the vector at
     /// call sites that only branch on "did this turn act, or merely talk".
     pub fn used_tools(&self) -> bool {
         !self.tools_invoked.is_empty()
+    }
+}
+
+/// Content-free outcome for one tool invocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolOutcomeRecord {
+    /// Tool name.
+    pub name: String,
+    /// SHA-256 digest of serialized arguments, never the arguments themselves.
+    pub args_digest: String,
+    /// Whether the tool reported success.
+    pub success: bool,
+    /// Classified failure, absent on success.
+    pub failure_class: Option<String>,
+    /// Execution duration in milliseconds.
+    pub duration_ms: u64,
+}
+
+/// Classify a failure message without retaining its text.
+pub fn classify_tool_failure(output: &str) -> &'static str {
+    let lower = output.to_lowercase();
+    if lower.contains("timeout") {
+        "timeout"
+    } else if lower.contains("not found") || lower.contains("no such file") {
+        "not_found"
+    } else if lower.contains("permission") || lower.contains("denied") {
+        "permission_denied"
+    } else if lower.contains("connection") || lower.contains("network") {
+        "connection_error"
+    } else if lower.contains("parse") || lower.contains("invalid") || lower.contains("syntax") {
+        "parse_error"
+    } else if lower.contains("unknown tool") {
+        "unknown_tool"
+    } else {
+        "error"
     }
 }
 
@@ -206,90 +252,5 @@ impl LearningSink for NoopLearningSink {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sample() -> TurnSummary {
-        TurnSummary::new("thread-1", "agent-a")
-            .with_text("hello", "hi")
-            .with_tool("search")
-    }
-
-    #[test]
-    fn new_starts_empty_except_identity() {
-        let summary = TurnSummary::new("thread-1", "agent-a");
-        assert_eq!(summary.thread_id.as_str(), "thread-1");
-        assert_eq!(summary.agent_id, "agent-a");
-        assert!(summary.input.is_empty());
-        assert!(summary.output.is_empty());
-        assert!(!summary.used_tools());
-        assert_eq!(summary.usage, Usage::default());
-    }
-
-    #[test]
-    fn record_tool_trims_and_drops_blanks() {
-        let mut summary = TurnSummary::new("t", "a");
-        summary.record_tool("  search  ");
-        summary.record_tool("   ");
-        summary.record_tool("");
-        assert_eq!(summary.tools_invoked, vec!["search".to_string()]);
-    }
-
-    #[test]
-    fn record_tool_keeps_first_invocation_order_without_duplicates() {
-        let mut summary = TurnSummary::new("t", "a");
-        for name in ["search", "read", "search", " read ", "write"] {
-            summary.record_tool(name);
-        }
-        assert_eq!(summary.tools_invoked, vec!["search", "read", "write"]);
-        assert!(summary.used_tools());
-    }
-
-    #[test]
-    fn summary_round_trips_through_json() {
-        let summary = sample().with_usage(Usage {
-            input_tokens: 12,
-            output_tokens: 3,
-            total_tokens: 15,
-            ..Usage::default()
-        });
-        let json = serde_json::to_string(&summary).expect("serializable");
-        let decoded: TurnSummary = serde_json::from_str(&json).expect("deserializable");
-        assert_eq!(decoded, summary);
-    }
-
-    #[test]
-    fn summary_deserializes_with_optional_fields_absent() {
-        let decoded: TurnSummary =
-            serde_json::from_str(r#"{"thread_id":"t","agent_id":"a","input":"","output":""}"#)
-                .expect("defaults fill in");
-        assert!(decoded.tools_invoked.is_empty());
-        assert_eq!(decoded.usage, Usage::default());
-    }
-
-    #[tokio::test]
-    async fn noop_sink_accepts_a_summary() {
-        let sink = NoopLearningSink::new();
-        assert!(sink.on_turn_complete(&sample()).await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn noop_sink_never_fails_and_keeps_no_state() {
-        let sink = NoopLearningSink;
-        for i in 0..3 {
-            let summary = TurnSummary::new(format!("thread-{i}"), "agent-a");
-            assert!(sink.on_turn_complete(&summary).await.is_ok());
-        }
-        // Copy semantics: the sink holds nothing, so a clone is interchangeable.
-        let clone = sink;
-        assert!(clone.on_turn_complete(&sample()).await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn noop_sink_is_usable_as_a_trait_object() {
-        // The runtime stores this capability as `Option<Arc<dyn LearningSink>>`;
-        // this pins that the default impl is object-safe in that position.
-        let sink: std::sync::Arc<dyn LearningSink> = std::sync::Arc::new(NoopLearningSink);
-        assert!(sink.on_turn_complete(&sample()).await.is_ok());
-    }
-}
+#[path = "learning_sink_tests.rs"]
+mod tests;

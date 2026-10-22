@@ -123,6 +123,7 @@ Event kinds should include:
 
 - `run.started`
 - `run.completed`
+- `turn.started` / `turn.completed` / `message.appended` (see [terminal outcome and turn lifecycle](terminal-outcome.md))
 - `run.failed`
 - `model.started`
 - `model.delta`
@@ -140,6 +141,7 @@ Event kinds should include:
 - `summary.created`
 - `cache.hit`
 - `cache.miss`
+- `cache.prompt_miss`
 - `usage.recorded`
 - `cost.recorded`
 - `retry.scheduled`
@@ -154,6 +156,22 @@ Event kinds should include:
 - `graph.run.completed`
 - `graph.run.failed`
 - `graph.checkpoint.saved`
+
+## Physical Provider Dispatches
+
+`observability::physical_dispatch::ObservedChatModel` wraps a concrete provider
+and calls `PhysicalDispatchObserver::on_start` only after the caller's budget
+wrapper has admitted the request. Its terminal callback reports provider
+usage, model and finish reason without prompts, outputs, raw errors, or provider
+metadata. Dropping an in-flight invocation or unfinished stream reports
+cancellation exactly once. Streaming calls remain streaming and finish only on
+a terminal stream item.
+
+`ModelBudget::wrap_model` installs a task-local adapter automatically. A scoped
+turn observer receives one `TurnObservation::ModelDispatch` for each provider
+invocation while the existing logical `TurnObservation::Model` event remains
+available for compatibility. Calls refused before provider admission produce
+no physical dispatch event.
 
 ## Latency Metrics
 

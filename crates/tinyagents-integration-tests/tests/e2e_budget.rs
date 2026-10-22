@@ -123,8 +123,9 @@ async fn token_budget_blocks_multi_call_run() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", Arc::new(model))
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(model)),
+        ))
         .register_tool(Arc::new(FakeTool::returning("noop", "ok")))
         .push_middleware(Arc::new(mw));
 
@@ -183,8 +184,9 @@ async fn shared_tracker_rolls_up_and_blocks_across_runs() {
     ]);
     let mut harness_a: AgentHarness<()> = AgentHarness::new();
     harness_a
-        .register_model("mock", Arc::new(model_a))
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(model_a)),
+        ))
         .register_tool(Arc::new(FakeTool::returning("noop", "ok")))
         .push_middleware(Arc::new(
             BudgetMiddleware::new(limits).with_tracker(tracker.clone()),
@@ -213,8 +215,9 @@ async fn shared_tracker_rolls_up_and_blocks_across_runs() {
     ]);
     let mut harness_b: AgentHarness<()> = AgentHarness::new();
     harness_b
-        .register_model("mock", Arc::new(model_b))
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(model_b)),
+        ))
         .register_tool(Arc::new(FakeTool::returning("noop", "ok")))
         .push_middleware(Arc::new(
             BudgetMiddleware::new(limits).with_tracker(tracker.clone()),
@@ -317,8 +320,8 @@ async fn cost_pricing_records_and_enforces_money_budget() {
         "a CostRecorded event must be emitted when priced cost is positive"
     );
     assert!(
-        any_event(&recorder, |e| matches!(e, AgentEvent::UsageRecorded { .. })),
-        "a UsageRecorded event accompanies the recorded usage"
+        !any_event(&recorder, |e| matches!(e, AgentEvent::UsageRecorded { .. })),
+        "the budget middleware must not emit UsageRecorded: the agent loop already does, once per model call"
     );
 
     // A1: the next preflight now requests `JumpTo(End)` (graceful stop)
@@ -363,8 +366,9 @@ async fn below_threshold_run_completes_without_exceeding() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", Arc::new(model))
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(model)),
+        ))
         .register_tool(Arc::new(FakeTool::returning("noop", "ok")))
         .push_middleware(Arc::new(mw));
 
@@ -396,6 +400,45 @@ async fn below_threshold_run_completes_without_exceeding() {
     );
 }
 
+// ── Usage is recorded once per model call ──────────────────────────────────────
+
+/// With the budget middleware installed, each model call yields exactly one
+/// `UsageRecorded` event. The loop records a call's usage itself; the
+/// middleware used to emit a second, identical event, so journals held twice
+/// the model calls and any total or cache-hit sum built from them doubled.
+#[tokio::test]
+async fn budget_middleware_does_not_double_record_usage() {
+    let recorder = EventRecorder::new();
+    let model = MockModel::with_responses(vec![
+        tool_call_response("d1", "noop", 5, 0),
+        text_response("done", 5, 0),
+    ]);
+    let mw = BudgetMiddleware::new(BudgetLimits {
+        max_total_tokens: Some(100),
+        ..Default::default()
+    });
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(model)),
+        ))
+        .register_tool(Arc::new(FakeTool::returning("noop", "ok")))
+        .push_middleware(Arc::new(mw));
+
+    let ctx = RunContext::new(RunConfig::new("budget-once"), ()).with_events(recorder.sink());
+    let run = harness
+        .invoke_in_context(&(), ctx, vec![Message::user("go")])
+        .await
+        .expect("the run completes");
+
+    let usage_events = recorder
+        .events()
+        .iter()
+        .filter(|e| matches!(e, AgentEvent::UsageRecorded { .. }))
+        .count();
+    assert_eq!(usage_events, run.model_calls);
+}
+
 // ── Test 5: input-token reservation blocks an oversized call in a live run ─────
 
 /// With `max_input_tokens` set, the preflight estimates the request's input
@@ -413,8 +456,12 @@ async fn input_reservation_blocks_oversized_call_in_a_live_run() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", Arc::new(MockModel::constant("unused")))
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "mock",
+                Arc::new(MockModel::constant("unused")),
+            ),
+        ))
         .push_middleware(Arc::new(mw));
 
     // A long prompt estimates well over the 5-token input reservation budget.
@@ -454,11 +501,12 @@ async fn fitting_call_emits_reserved_and_reconciled_events() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model(
-            "mock",
-            Arc::new(MockModel::with_responses(vec![text_response("done", 3, 1)])),
-        )
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "mock",
+                Arc::new(MockModel::with_responses(vec![text_response("done", 3, 1)])),
+            ),
+        ))
         .push_middleware(Arc::new(mw));
 
     let ctx = RunContext::new(RunConfig::new("reserve-ok"), ()).with_events(recorder.sink());

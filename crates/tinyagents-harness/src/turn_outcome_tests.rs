@@ -1,0 +1,216 @@
+use super::*;
+
+#[test]
+fn deferred_terminal_emits_stop_before_finalization() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    DeferredTurnTerminal {
+        run_id: RunId::new("run"),
+        events,
+    }
+    .finish(Some(crate::turn_stop::TurnStop::wind_down()), 4);
+    let events = listener.events();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        events[0].event,
+        AgentEvent::TurnStopped { turn: 4, .. }
+    ));
+    assert!(matches!(events[1].event, AgentEvent::RunFinalized { .. }));
+}
+
+#[test]
+fn deferred_terminal_failure_emits_failure_before_finalization() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    DeferredTurnTerminal {
+        run_id: RunId::new("run"),
+        events,
+    }
+    .finish_cancelled();
+    let events = listener.events();
+    assert_eq!(events.len(), 2);
+    assert!(
+        matches!(&events[0].event, AgentEvent::RunFailed { error, .. } if error == "turn cancelled after harness completion")
+    );
+    assert!(matches!(events[1].event, AgentEvent::RunFinalized { .. }));
+}
+
+#[test]
+fn deferred_terminal_failure_uses_content_free_error_and_outcome() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    DeferredTurnTerminal {
+        run_id: RunId::new("run-failed"),
+        events,
+    }
+    .finish_failed();
+    let events = listener.events();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        &events[0].event,
+        AgentEvent::RunFailed { run_id, error, outcome: Some(outcome) }
+            if run_id.as_str() == "run-failed"
+                && error == "host turn failed after harness completion"
+                && outcome == &TerminalOutcome::new(
+                    TerminalReason::Internal,
+                    "host turn failed after harness completion"
+                )
+    ));
+    assert!(matches!(
+        &events[1].event,
+        AgentEvent::RunFinalized { run_id } if run_id.as_str() == "run-failed"
+    ));
+}
+
+#[test]
+fn tool_call_outcome_equality_covers_every_observed_field() {
+    let original = ToolCallOutcome {
+        call_id: "call-1".into(),
+        name: "read_file".into(),
+        arguments: serde_json::json!({"path": "notes.txt"}),
+        success: false,
+        content: "denied".into(),
+        duration_ms: 17,
+    };
+    assert_eq!(original, original.clone());
+
+    let mut changed = original.clone();
+    changed.call_id.push_str("-changed");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.name.push_str("_changed");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.arguments["path"] = serde_json::json!("other.txt");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.success = true;
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.content.push_str(" changed");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.duration_ms += 1;
+    assert_ne!(original, changed);
+}
+use tinyinference_llm::message::{AssistantMessage, ContentBlock};
+use tinyinference_llm::tool::ToolCall;
+
+fn response(finish_reason: &str, text: &str) -> ModelResponse {
+    let content = if text.is_empty() {
+        vec![ContentBlock::Thinking {
+            text: "still weighing the approach".into(),
+            signature: None,
+        }]
+    } else {
+        vec![ContentBlock::Text(text.to_string())]
+    };
+    ModelResponse {
+        message: AssistantMessage {
+            id: None,
+            content,
+            tool_calls: Vec::new(),
+            usage: None,
+            origin: None,
+        },
+        usage: None,
+        finish_reason: Some(finish_reason.to_string()),
+        raw: None,
+        resolved_model: None,
+        continue_turn: None,
+        served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
+    }
+}
+
+#[test]
+fn a_length_stop_with_only_reasoning_ran_out_of_output_budget() {
+    assert!(ended_out_of_output_budget(Some(&response("length", ""))));
+}
+
+#[test]
+fn every_provider_length_stop_spelling_ran_out_of_output_budget() {
+    for reason in ["max_tokens", "MAX_TOKENS"] {
+        assert!(ended_out_of_output_budget(Some(&response(reason, ""))));
+    }
+}
+
+#[test]
+fn the_halt_summary_survives_a_poisoned_slot() {
+    let slot = new_halt_summary_slot();
+    *slot.lock().unwrap() = Some("stalled".into());
+    let poisoner = Arc::clone(&slot);
+    let _ = std::thread::spawn(move || {
+        let _guard = poisoner.lock().unwrap();
+        panic!("poison");
+    })
+    .join();
+    assert_eq!(take_halt_summary(&slot).as_deref(), Some("stalled"));
+}
+
+#[test]
+fn a_length_stop_with_visible_text_is_a_real_answer() {
+    assert!(!ended_out_of_output_budget(Some(&response(
+        "length",
+        "partial answer"
+    ))));
+}
+
+#[test]
+fn a_normal_blank_stop_or_no_final_response_is_not_truncation() {
+    assert!(!ended_out_of_output_budget(Some(&response("stop", ""))));
+    assert!(!ended_out_of_output_budget(None));
+}
+
+#[test]
+fn a_length_stop_that_requests_a_tool_is_not_truncation() {
+    let mut r = response("length", "");
+    r.message.tool_calls = vec![ToolCall::new("c", "t", serde_json::json!({}))];
+    assert!(!ended_out_of_output_budget(Some(&r)));
+}
+
+#[test]
+fn the_sink_drains_once_and_survives_a_poisoned_lock() {
+    let sink = new_tool_outcome_sink();
+    sink.lock().expect("lock").push(ToolCallOutcome {
+        call_id: "c1".into(),
+        name: "t".into(),
+        arguments: serde_json::json!({"a": 1}),
+        success: true,
+        content: "ok".into(),
+        duration_ms: 3,
+    });
+    let poisoner = Arc::clone(&sink);
+    let _ = std::thread::spawn(move || {
+        let _guard = poisoner.lock().expect("lock");
+        panic!("poison the sink");
+    })
+    .join();
+    let drained = drain_tool_outcomes(&sink);
+    assert_eq!(drained.len(), 1);
+    assert_eq!(drained[0].call_id, "c1");
+    assert!(drain_tool_outcomes(&sink).is_empty());
+}
+
+#[test]
+fn the_halt_summary_is_taken_exactly_once() {
+    let slot = new_halt_summary_slot();
+    assert_eq!(take_halt_summary(&slot), None);
+    *slot.lock().expect("lock") = Some("repeated failure".into());
+    assert_eq!(
+        take_halt_summary(&slot).as_deref(),
+        Some("repeated failure")
+    );
+    assert_eq!(take_halt_summary(&slot), None);
+}

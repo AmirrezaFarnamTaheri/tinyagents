@@ -16,6 +16,7 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
+use super::GenerationEnrichment;
 use crate::cost::CostTotals;
 use crate::ids::{CallId, ComponentId, EventId, ExecutionStatus, HarnessPhase, RunId, ThreadId};
 use tinyinference_llm::message::MessageDelta;
@@ -96,6 +97,18 @@ pub enum AgentEvent {
         output: Option<serde_json::Value>,
     },
 
+    /// Content-free provider, pricing, and estimate metadata for one call.
+    ///
+    /// Hosts emit this after the facts are known. It may precede
+    /// [`AgentEvent::ModelCompleted`] in durable observations; the trace
+    /// collector retains it only while that exact call is still open.
+    GenerationEnriched {
+        /// Call identity, scoped by the enclosing observation's run.
+        call_id: CallId,
+        /// Validated host metadata for this model generation.
+        enrichment: GenerationEnrichment,
+    },
+
     /// The agent loop fixed the run's **pre-middleware** tool surface: how
     /// many schemas were assembled from the registry (direct tools plus the
     /// bridge tools when any tool is deferred), how many are deferred behind
@@ -112,15 +125,14 @@ pub enum AgentEvent {
     /// request actually sent.
     ToolsAdvertised {
         /// Count of `Direct`-exposure tool schemas assembled before per-turn
-        /// middleware runs. Does **not** include the two intrinsic
-        /// `tool_search`/`tool_call` bridge schemas added to the wire set
-        /// when `deferred > 0` — those are implied by `deferred` being
-        /// nonzero, not double-counted here.
+        /// middleware runs. Does **not** include the intrinsic `tool_search`
+        /// bridge schema added to the wire set when `deferred > 0` — it is
+        /// implied by `deferred` being nonzero, not double-counted here.
         direct: usize,
-        /// Tools reachable only through `tool_search` / `tool_call`.
+        /// Tools reachable only through `tool_search` (called by their own name).
         deferred: usize,
         /// Compact-JSON size of the actual pre-middleware wire schema set
-        /// (the `direct` schemas plus the two bridge schemas when
+        /// (the `direct` schemas plus the bridge schema when
         /// `deferred > 0`), not of whatever a specific request's
         /// `before_model` pass narrows or grows it to.
         schema_bytes: usize,
@@ -159,13 +171,13 @@ pub enum AgentEvent {
         latency_ms: u64,
     },
 
-    /// The model invoked a deferred tool through the intrinsic `tool_call`
-    /// bridge; the call was unwrapped to `tool_name` before admission, so the
-    /// following `ToolStarted` names the real tool.
+    /// The model called a deferred tool by its own name (it was reachable
+    /// only through `tool_search`, never on the request's `tools`). Emitted at
+    /// admission, before the `ToolStarted` for the same call.
     DeferredToolCall {
-        /// Identifier of the bridge call (shared with the unwrapped call).
+        /// Identifier of the model's tool call.
         call_id: CallId,
-        /// The real tool the call was unwrapped to.
+        /// The deferred tool that was called.
         tool_name: String,
     },
 
@@ -236,6 +248,13 @@ pub enum AgentEvent {
         /// instead of waiting for [`AgentEvent::ToolCompleted`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<serde_json::Value>,
+        /// The call whose tool made this one through
+        /// `ToolExecutionContext::call_tool` — the **immediate** parent, which
+        /// is itself nested when this call is two or more levels deep (id
+        /// `p1/1/1` has parent `p1/1`). `None` for a call the model issued.
+        /// A nested call's `call_id` is `<parent call id>/<n>`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_call_id: Option<CallId>,
     },
 
     /// A tool invocation returned.
@@ -288,6 +307,13 @@ pub enum AgentEvent {
         /// tool's deliberate host-facing channel, not captured I/O.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         metadata: Option<serde_json::Value>,
+        /// The call whose tool made this one through
+        /// `ToolExecutionContext::call_tool` — the **immediate** parent, which
+        /// is itself nested when this call is two or more levels deep (id
+        /// `p1/1/1` has parent `p1/1`). `None` for a call the model issued.
+        /// A nested call's `call_id` is `<parent call id>/<n>`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_call_id: Option<CallId>,
     },
 
     /// A tool invocation failed and the run is propagating the error rather
@@ -320,6 +346,13 @@ pub enum AgentEvent {
         duration_ms: Option<u64>,
         /// Human-readable failure description.
         error: String,
+        /// The call whose tool made this one through
+        /// `ToolExecutionContext::call_tool` — the **immediate** parent, which
+        /// is itself nested when this call is two or more levels deep (id
+        /// `p1/1/1` has parent `p1/1`). `None` for a call the model issued.
+        /// A nested call's `call_id` is `<parent call id>/<n>`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_call_id: Option<CallId>,
     },
 
     /// A resumed run reconciled an unresolved tool-effect-ledger row left
@@ -469,12 +502,22 @@ pub enum AgentEvent {
     MiddlewareStarted {
         /// Registered name of the middleware.
         name: String,
+        /// The tool call this layer wraps, set only by the tool-wrap onion.
+        /// Wrapped calls of one batch run concurrently, so their events
+        /// interleave; pair a `Started` with its `Completed` and attribute
+        /// both to a call by this id, never by event order.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<CallId>,
     },
 
     /// A middleware hook finished executing.
     MiddlewareCompleted {
         /// Registered name of the middleware.
         name: String,
+        /// The tool call this layer wrapped; see
+        /// [`AgentEvent::MiddlewareStarted::call_id`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<CallId>,
     },
 
     /// A response-cache lookup served the model call from the local
@@ -487,6 +530,17 @@ pub enum AgentEvent {
         key: String,
     },
 
+    /// A model response was served from a cache without an exposed cache key.
+    ///
+    /// This records the cache fact for adapters that do not own the harness
+    /// response-cache key. The provider was not invoked for this response.
+    /// Adapters must omit cached provider charges from [`AgentEvent::UsageRecorded`];
+    /// this event has no call linkage for that run-level aggregate.
+    ModelResponseCached {
+        /// Identifier for the model call satisfied by the cached response.
+        call_id: CallId,
+    },
+
     /// A response-cache lookup missed, so the provider is being invoked and the
     /// result will be stored under `key`.
     CacheMiss {
@@ -494,6 +548,25 @@ pub enum AgentEvent {
         call_id: CallId,
         /// The stable cache key (see [`crate::cache::cache_key`]).
         key: String,
+    },
+
+    /// A model call's provider prompt cache read back far less than the
+    /// previous call of the same conversation had put in it, so the
+    /// difference was re-billed as fresh input. Reported by
+    /// [`PromptCacheGuardMiddleware`][crate::middleware::PromptCacheGuardMiddleware]
+    /// from `usage.cache_read_tokens`; shortfalls within the noise floor
+    /// (see [`crate::cache::DEFAULT_CACHE_MISS_NOISE_FLOOR_TOKENS`]) are not
+    /// reported. Distinct from [`Self::CacheMiss`], which is a *response*-cache
+    /// lookup miss.
+    PromptCacheMiss {
+        /// Identifier for the model call whose usage showed the miss.
+        call_id: CallId,
+        /// Prompt tokens that should have been cache reads.
+        expected_cached_tokens: u64,
+        /// Tokens the provider actually read from cache.
+        cached_tokens: u64,
+        /// `expected_cached_tokens - cached_tokens`, re-billed as input.
+        wasted_input_tokens: u64,
     },
 
     /// A failed call has been scheduled for retry.
@@ -564,10 +637,28 @@ pub enum AgentEvent {
         depth: usize,
     },
 
+    /// Links a sub-agent lifecycle span to the child's exact run identity.
+    /// Kept additive so existing consumers can continue matching the legacy
+    /// name/depth lifecycle events without source changes.
+    SubAgentRunStarted {
+        /// Name of the sub-agent being invoked.
+        name: String,
+        /// Depth of the child run in the recursion tree.
+        depth: usize,
+        /// Exact identity used by observations emitted from the child run.
+        run_id: RunId,
+    },
+
+    /// Marks the successful completion of the linked child run.
+    SubAgentRunCompleted {
+        /// Exact identity used by observations emitted from the child run.
+        run_id: RunId,
+    },
+
     /// An existing sub-agent was *reused* for a follow-up turn rather than
     /// reconstructed, carrying the prior conversation context forward.
     ///
-    /// Emitted by `SubAgentSession` in `tinyagents-orchestration` on every send
+    /// Emitted by the host session lifecycle on every continuation
     /// after the first (i.e. `turn >= 1`), so post-completion reuse — the
     /// orchestrator → sub-agent → human input → *same* sub-agent pattern — is
     /// visible in the event stream and distinguishable from a fresh
@@ -628,6 +719,15 @@ pub enum AgentEvent {
         tokens_before: u64,
         /// Estimated total tokens of the transcript after compaction.
         tokens_after: u64,
+        /// Provider usage of the summarization call(s), when the summarizer
+        /// made a model call and the provider reported it. The summarizer
+        /// runs outside the run's own model calls, so this is the only place
+        /// its spend reaches the event stream.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<tinyinference_llm::usage::Usage>,
+        /// Wall-clock milliseconds the summarization took, when it ran.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        latency_ms: Option<u64>,
     },
 
     /// The final turn's structured-output extraction failed schema
@@ -652,13 +752,94 @@ pub enum AgentEvent {
     /// finish, `Followup` at a natural finish. Emitted once per boundary
     /// with the number of messages applied; `Collect` items never produce
     /// this event because they are not applied to the transcript. Payload
-    /// text is deliberately not carried (events are payload-free by default).
+    /// text is carried only under the capture policy (see `messages`).
     QueuedMessageApplied {
         /// Which lane the messages came from.
         lane: crate::run_queue::QueueLane,
         /// How many messages were appended at this boundary (`1` under
         /// [`QueueMode::OneAtATime`][crate::run_queue::QueueMode::OneAtATime]).
         count: usize,
+        /// Transcript index of the first applied message; the applied messages
+        /// occupy `first_index..first_index + count`.
+        #[serde(default)]
+        first_index: usize,
+        /// The applied messages, serialized, captured per message: `tool`
+        /// messages when
+        /// [`PayloadCapture::tool_io`][crate::runtime::PayloadCapture::tool_io]
+        /// is enabled, all others when
+        /// [`PayloadCapture::model_io`][crate::runtime::PayloadCapture::model_io]
+        /// is. One slot per applied message (`null` for an uncaptured one) so
+        /// slots line up with `first_index..first_index + count`; empty when
+        /// nothing in the batch is captured, including the default payload-free
+        /// mode.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        messages: Vec<serde_json::Value>,
+    },
+
+    /// A model turn began: the loop is about to dispatch the model call
+    /// numbered `turn`. A turn is one model call plus the tool batch it
+    /// requested; `turn` is 1-based and counts model-call attempts, so a
+    /// recovery retry of an unusable reply opens a new turn. Paired with
+    /// [`AgentEvent::TurnCompleted`].
+    TurnStarted {
+        /// 1-based turn number within the run.
+        turn: u32,
+    },
+
+    /// A model turn ended: its tool batch (if any) has been folded into the
+    /// transcript, or the turn produced the final answer, or the run ended
+    /// mid-turn. Always follows a [`AgentEvent::TurnStarted`] with the same
+    /// `turn`.
+    TurnCompleted {
+        /// 1-based turn number within the run.
+        turn: u32,
+        /// How many tool-result messages the turn added to the transcript.
+        tool_result_count: usize,
+        /// The call ids those tool results answer, in transcript order.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tool_call_ids: Vec<CallId>,
+    },
+
+    /// A message was appended to the run's working transcript (assistant
+    /// reply, tool result, nudge, steering injection, queued message, ...).
+    /// Emitted in transcript order at turn boundaries and run exit, so a
+    /// consumer can mirror the transcript from events alone. The seed input
+    /// messages are not announced.
+    MessageAppended {
+        /// Message role: `system`, `user`, `assistant`, `tool` or `custom`.
+        role: String,
+        /// Position of the message in the working transcript.
+        index: usize,
+        /// For `tool` messages, the call id the result answers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<CallId>,
+        /// The serialized message, captured only when the capture policy
+        /// allows it (`model_io`, or `tool_io` for `tool` messages). `None` in
+        /// the default payload-free mode.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<serde_json::Value>,
+    },
+
+    /// The message at `index` (and any announced after it) was removed from the
+    /// working transcript — for example an unusable assistant reply dropped
+    /// before a retry or a recovery nudge. Emitted highest index first, so
+    /// applying them in order to a mirror is a sequence of pops. Always
+    /// precedes the [`AgentEvent::MessageAppended`] of whatever replaces it.
+    MessageRetracted {
+        /// Position the removed message held in the working transcript.
+        index: usize,
+    },
+
+    /// The working transcript was rewritten in place (not by appending or
+    /// popping): a tool-set change folded into, or inserted before, the
+    /// leading system message. The transcript now holds `len` messages; a
+    /// mirror should treat its copy as stale and resynchronise. Later
+    /// [`AgentEvent::MessageAppended`] indices count from this new length.
+    TranscriptRewritten {
+        /// Message count after the rewrite.
+        len: usize,
+        /// Why it was rewritten (a stable snake_case label).
+        reason: String,
     },
 
     /// A graph routing decision produced a named route.
@@ -755,16 +936,45 @@ pub enum AgentEvent {
     /// Defined for future emit when memory wiring lands.
     MemorySaved,
 
-    /// A long-running tool reported incremental progress before completing.
+    /// Legacy message-only progress shape. **The agent loop does not emit this
+    /// variant**; it emits [`AgentEvent::ToolProgressDetail`]. It is kept so
+    /// existing enum literals compile, and shares the `tool.progress` wire kind.
     ///
-    /// Defined for future emit: a tool that streams progress can surface it
-    /// here so UIs render activity between [`AgentEvent::ToolStarted`] and
-    /// [`AgentEvent::ToolCompleted`].
+    /// The ordering and flooding guarantees below describe the emitted
+    /// [`AgentEvent::ToolProgressDetail`]. Ordering guarantee: every progress event for a call falls between that call's
+    /// [`AgentEvent::ToolStarted`] and its terminal
+    /// [`AgentEvent::ToolCompleted`] / [`AgentEvent::ToolFailed`]; an update the
+    /// tool reports after the call has returned is dropped, never emitted late.
+    /// Calls in one concurrent batch interleave their progress freely. A tool
+    /// that floods is coalesced (see `crate::tool::ToolProgressLimits`), so the
+    /// stream is a faithful but possibly thinned view of what the tool reported.
     ToolProgress {
         /// Identifier for the in-flight tool call.
         call_id: CallId,
         /// Human-readable progress message.
         message: String,
+    },
+
+    /// A running tool reported incremental progress before completing, with
+    /// optional fraction and partial output. This is the variant the agent loop
+    /// emits (through [`tinytools::ToolRunContext::report_progress`]).
+    ///
+    /// The gate clamps `fraction` to `0.0..=1.0` (and drops NaN) before
+    /// emitting. The legacy [`AgentEvent::ToolProgress`] shape stays unchanged
+    /// so downstream enum literals continue to compile.
+    ToolProgressDetail {
+        /// Identifier for the in-flight tool call.
+        call_id: CallId,
+        /// Human-readable progress message; empty when the update carried only
+        /// a fraction or partial output.
+        #[serde(default)]
+        message: String,
+        /// Completion in `0.0..=1.0`, when the tool reported one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fraction: Option<f32>,
+        /// Partial output reported so far, passed through verbatim.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        partial: Option<serde_json::Value>,
     },
 
     /// An application-defined event a tool (or any holder of the run's
@@ -821,10 +1031,16 @@ pub enum AgentEvent {
     /// without correlating against [`AgentEvent::ModelCompleted`].
     StreamClosed,
 
-    /// A harness run finished successfully.
+    /// A harness run finished: it returned a result to the caller. A run
+    /// that stopped on a `StopWithPartial` cap also completes; its `outcome`
+    /// says so (`LimitReached`).
     RunCompleted {
         /// Identifier for the run that completed.
         run_id: RunId,
+        /// How the run ended, structured. `None` for events produced before
+        /// this field existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<crate::terminal::TerminalOutcome>,
     },
 
     /// A harness run ended with an unrecoverable error.
@@ -833,6 +1049,32 @@ pub enum AgentEvent {
         run_id: RunId,
         /// Human-readable error description.
         error: String,
+        /// Why the run failed, structured. `outcome.message` mirrors `error`.
+        /// `None` for events produced before this field existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<crate::terminal::TerminalOutcome>,
+    },
+
+    /// The host durably committed the result of a run.
+    ///
+    /// This follows a terminal event and allows exporters to extend an
+    /// already-closed run span to include host persistence, without changing
+    /// its terminal status or inventing an outcome.
+    RunFinalized {
+        /// Identity of the run whose host-side persistence finished.
+        run_id: RunId,
+    },
+
+    /// A completed turn was stopped early by a typed harness stop cause.
+    ///
+    /// This may be emitted after `RunCompleted`; the run identity and lineage
+    /// come from the enclosing observation record. `turn` is the 1-based
+    /// model-attempt ordinal within that run.
+    TurnStopped {
+        /// 1-based model-attempt ordinal for the stopped turn.
+        turn: u32,
+        /// Content-free reason that stopped the turn.
+        stop: crate::turn_stop::TurnStop,
     },
 }
 
@@ -871,6 +1113,7 @@ impl AgentEvent {
             AgentEvent::ModelStarted { .. } => "model.started",
             AgentEvent::ModelDelta { .. } => "model.delta",
             AgentEvent::ModelCompleted { .. } => "model.completed",
+            AgentEvent::GenerationEnriched { .. } => "generation.enriched",
             AgentEvent::ControlApplied { .. } => "control.applied",
             AgentEvent::ToolsAdvertised { .. } => "tool.advertised",
             AgentEvent::ToolSearched { .. } => "tool.searched",
@@ -898,7 +1141,9 @@ impl AgentEvent {
             AgentEvent::MiddlewareStarted { .. } => "middleware.started",
             AgentEvent::MiddlewareCompleted { .. } => "middleware.completed",
             AgentEvent::CacheHit { .. } => "cache.hit",
+            AgentEvent::ModelResponseCached { .. } => "model.response_cached",
             AgentEvent::CacheMiss { .. } => "cache.miss",
+            AgentEvent::PromptCacheMiss { .. } => "cache.prompt_miss",
             AgentEvent::RetryScheduled { .. } => "retry.scheduled",
             AgentEvent::RateLimitWaited { .. } => "rate_limit.waited",
             AgentEvent::FallbackSelected { .. } => "model.fallback_selected",
@@ -906,25 +1151,36 @@ impl AgentEvent {
             AgentEvent::FallbackSkipped { .. } => "model.fallback_skipped",
             AgentEvent::SubAgentStarted { .. } => "subagent.started",
             AgentEvent::SubAgentCompleted { .. } => "subagent.completed",
+            AgentEvent::SubAgentRunStarted { .. } => "subagent.run.started",
+            AgentEvent::SubAgentRunCompleted { .. } => "subagent.run.completed",
             AgentEvent::SubAgentReused { .. } => "subagent.reused",
             AgentEvent::Steered { .. } => "agent.steered",
             AgentEvent::Compressed { .. } => "context.compressed",
             AgentEvent::Compacted { .. } => "context.compacted",
             AgentEvent::OutputRetry { .. } => "output.retry",
             AgentEvent::QueuedMessageApplied { .. } => "queue.applied",
+            AgentEvent::TurnStarted { .. } => "turn.started",
+            AgentEvent::TurnCompleted { .. } => "turn.completed",
+            AgentEvent::MessageAppended { .. } => "message.appended",
+            AgentEvent::MessageRetracted { .. } => "message.retracted",
+            AgentEvent::TranscriptRewritten { .. } => "transcript.rewritten",
             AgentEvent::RouteSelected { .. } => "route.selected",
             AgentEvent::UsageRecorded { .. } => "usage.recorded",
             AgentEvent::CostRecorded { .. } => "cost.recorded",
             AgentEvent::LimitReached { .. } => "limit.reached",
             AgentEvent::MemoryLoaded => "memory.loaded",
             AgentEvent::MemorySaved => "memory.saved",
-            AgentEvent::ToolProgress { .. } => "tool.progress",
+            AgentEvent::ToolProgress { .. } | AgentEvent::ToolProgressDetail { .. } => {
+                "tool.progress"
+            }
             AgentEvent::Custom { .. } => "custom",
             AgentEvent::MiddlewareFailed { .. } => "middleware.failed",
             AgentEvent::HandoffTransformApplied { .. } => "handoff.transform_applied",
             AgentEvent::StreamClosed => "stream.closed",
             AgentEvent::RunCompleted { .. } => "run.completed",
             AgentEvent::RunFailed { .. } => "run.failed",
+            AgentEvent::RunFinalized { .. } => "run.finalized",
+            AgentEvent::TurnStopped { .. } => "turn.stopped",
         }
     }
 }
