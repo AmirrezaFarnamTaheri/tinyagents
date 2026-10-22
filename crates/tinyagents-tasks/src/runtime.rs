@@ -365,8 +365,10 @@ where
     ///
     /// Each task's metadata is captured before its terminal runtime entry is
     /// pruned. A timeout leaves the current and later runtimes registered.
-    /// On the first registry error, later ids are left untouched. `None` waits
-    /// without a deadline.
+    /// Every id is checked before any wait, so an unknown or foreign id fails
+    /// the batch without pruning anything; a repeated id gets the same result.
+    /// On a registry error while waiting, later ids are left untouched. `None`
+    /// waits without a deadline.
     pub async fn wait_many(
         &self,
         task_ids: &[TaskId],
@@ -376,18 +378,33 @@ where
         Vec<DetachedTaskBatchWaitItem<Metadata, Status>>,
         DetachedTaskBatchWaitError,
     > {
-        let deadline = timeout.map(|duration| Instant::now() + duration);
-        let mut results = Vec::with_capacity(task_ids.len());
+        // Check every id before waiting on any: a terminal wait prunes its
+        // entry, so an error on a later id would drop an earlier finished
+        // task's result with nobody holding it.
+        let mut metadata = Vec::with_capacity(task_ids.len());
         for task_id in task_ids {
-            let metadata = match self.metadata_for(task_id, owner_id) {
-                Ok(metadata) => metadata,
+            match self.metadata_for(task_id, owner_id) {
+                Ok(found) => metadata.push(found),
                 Err(error) => {
                     return Err(DetachedTaskBatchWaitError {
                         task_id: task_id.clone(),
                         error,
                     });
                 }
-            };
+            }
+        }
+        let deadline = timeout.map(|duration| Instant::now() + duration);
+        let mut results: Vec<DetachedTaskBatchWaitItem<Metadata, Status>> =
+            Vec::with_capacity(task_ids.len());
+        for (task_id, metadata) in task_ids.iter().zip(metadata) {
+            // A repeated id was pruned by its first terminal wait.
+            if let Some(earlier) = results.iter().find(|item| {
+                &item.task_id == task_id
+                    && matches!(item.outcome, DetachedTaskWaitOutcome::Terminal(_))
+            }) {
+                results.push(earlier.clone());
+                continue;
+            }
             let remaining =
                 deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
             match self.wait_until(task_id, owner_id, remaining).await {
