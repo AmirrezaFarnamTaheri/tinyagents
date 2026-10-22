@@ -142,6 +142,64 @@ async fn completed_execution_is_not_reported_as_cancelled_during_checkin() {
     ));
 }
 
+#[tokio::test]
+async fn cancelled_parallel_turn_remains_visible_until_cleanup_finishes() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let checkin_started = Arc::new(tokio::sync::Notify::new());
+    let release_checkin = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release_checkin.clone()),
+        hold_checkin: true,
+        checkin_started: Some(checkin_started.clone()),
+        ..Host::default()
+    });
+    let runner = Arc::new(runner(
+        host,
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+    let mut parallel_request = request(QueueDisposition::Parallel, false);
+    parallel_request.request_id = "first".into();
+    let scope = parallel_request.scope.clone();
+    let run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(parallel_request).await })
+    };
+
+    started.notified().await;
+    assert_eq!(
+        runner
+            .cancel_requests(&scope, "thread-a", Some("first"))
+            .await,
+        ["first"]
+    );
+    checkin_started.notified().await;
+    assert_eq!(
+        runner
+            .live_turns()
+            .await
+            .iter()
+            .map(|turn| (turn.request_id.as_str(), turn.parallel))
+            .collect::<Vec<_>>(),
+        [("first", true)]
+    );
+    assert!(
+        runner
+            .cancel_requests(&scope, "thread-a", Some("first"))
+            .await
+            .is_empty()
+    );
+
+    release_checkin.notify_one();
+    assert!(matches!(
+        run.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    assert!(runner.live_turns().await.is_empty());
+}
+
 #[derive(Default)]
 struct Ingress(Mutex<Vec<IngressStage>>);
 
