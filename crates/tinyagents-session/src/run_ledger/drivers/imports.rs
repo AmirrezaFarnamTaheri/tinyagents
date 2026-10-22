@@ -91,7 +91,7 @@ impl DriverRunLedger {
             telemetry: ImportCounts::new(import.telemetry.len(), import.telemetry.len()),
         };
         let receipt = AgentImportReceipt {
-            fingerprint: import.source_fingerprint,
+            fingerprint: import.source_fingerprint.clone(),
             report,
         };
         let receipt_doc = serde_json::to_value(&receipt).map_err(StorageError::from)?;
