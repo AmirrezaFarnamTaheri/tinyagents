@@ -283,6 +283,64 @@ async fn cancelled_parallel_turn_remains_visible_until_cleanup_finishes() {
 }
 
 #[tokio::test]
+async fn primary_cancel_result_is_reported_once_until_cleanup_finishes() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let checkin_started = Arc::new(tokio::sync::Notify::new());
+    let release_checkin = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release_checkin.clone()),
+        hold_checkin: true,
+        checkin_started: Some(checkin_started.clone()),
+        ..Host::default()
+    });
+    let runner = Arc::new(runner(
+        host,
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+    let mut primary_request = request(QueueDisposition::Interrupt, false);
+    primary_request.request_id = "first".into();
+    let scope = primary_request.scope.clone();
+    let run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(primary_request).await })
+    };
+
+    started.notified().await;
+    assert_eq!(
+        runner
+            .cancel_requests(&scope, "thread-a", Some("first"))
+            .await,
+        ["first"]
+    );
+    checkin_started.notified().await;
+    assert!(
+        runner
+            .cancel_requests(&scope, "thread-a", Some("first"))
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        runner
+            .live_turns()
+            .await
+            .iter()
+            .map(|turn| turn.request_id.as_str())
+            .collect::<Vec<_>>(),
+        ["first"]
+    );
+
+    release_checkin.notify_one();
+    assert!(matches!(
+        run.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    assert!(runner.live_turns().await.is_empty());
+}
+
+#[tokio::test]
 async fn custom_queue_item_shares_runner_queue_and_preserves_complete_request() {
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
