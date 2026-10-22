@@ -56,6 +56,8 @@ pub enum SteeringTarget {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "command")]
 #[non_exhaustive]
+// Keep the public command payload ergonomic and preserve its serde shape.
+#[allow(clippy::large_enum_variant)]
 pub enum SteeringCommand {
     /// Cooperatively pause the run: the loop stops issuing further model and
     /// tool work at the next checkpoint, and **stays** paused until a
