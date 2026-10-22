@@ -191,7 +191,7 @@ async fn settled_records_reopen_without_their_result_and_stay_deduped() {
         router.tombstone("waited").unwrap();
     }
     let router = open_sqlite_router(&path);
-    let store = router.store.clone();
+    let store = router.store();
     let pending = router.pending_for("p");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].task_id, "live");
