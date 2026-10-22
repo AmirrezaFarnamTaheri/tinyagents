@@ -129,7 +129,6 @@ pub(crate) mod model_call;
 mod model_switch;
 mod model_turn;
 mod nested;
-pub mod phases;
 mod response_recovery;
 mod run_loop;
 pub(crate) mod stream;

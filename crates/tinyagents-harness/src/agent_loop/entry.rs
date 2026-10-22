@@ -23,33 +23,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentBaseCall<State, Ctx>
     ) -> BoxAgentFuture<'a> {
         Box::pin(async move {
             ctx.streaming = request.streaming;
-            match self.harness.policy.execution {
-                crate::runtime::LoopExecution::Graph => match self.harness.loop_driver.clone() {
-                    Some(driver) => {
-                        driver
-                            .drive(
-                                self.harness,
-                                state,
-                                ctx,
-                                run,
-                                status,
-                                request.input,
-                                request.streaming,
-                            )
-                            .await
-                    }
-                    None => Err(TinyAgentsError::Validation(
-                        "RunPolicy::execution is LoopExecution::Graph but no LoopDriver is \
-                         installed; call AgentHarness::with_loop_driver first"
-                            .to_string(),
-                    )),
-                },
-                crate::runtime::LoopExecution::Direct => {
-                    self.harness
-                        .run_loop(state, ctx, run, status, request.input, request.streaming)
-                        .await
-                }
-            }
+            self.harness
+                .run_loop(state, ctx, run, status, request.input, request.streaming)
+                .await
         })
     }
 }
