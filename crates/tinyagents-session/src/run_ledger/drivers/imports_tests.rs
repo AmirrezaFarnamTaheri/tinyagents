@@ -1,18 +1,14 @@
 use super::*;
-use crate::run_ledger::import::{AgentFamilyImport, LegacyLedgerRows};
+use crate::run_ledger::import::{AgentFamilyImport, AgentFamilyImportReport, LegacyLedgerRows};
 use crate::run_ledger::port::RunLedgerStore;
 use crate::testkit::MemoryStorage;
 use chrono::{DateTime, Utc};
 use serde_json::json;
-use tinystoragedrivers_api::StorageBackend;
 
 fn ledger() -> DriverRunLedger {
     let backend = MemoryStorage::new();
     let scope = Scope::new("legacy-import").unwrap();
-    DriverRunLedger::new(ScopedStorage::new(
-        backend.for_scope(&scope).unwrap(),
-        scope,
-    ))
+    DriverRunLedger::new(backend.for_scope(&scope).unwrap())
 }
 
 fn time(value: &str) -> chrono::DateTime<Utc> {
