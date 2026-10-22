@@ -60,4 +60,20 @@ existing sinks. When one generation failure retires queued requests, the runner
 rewrites each classification message to match that request's queued failure
 message while preserving its class and details.
 
+## Host inspection and cancellation
+
+`live_turns` returns identity-only `LiveTurn` records for active primary and
+parallel turns. Hosts can filter these records by `ScopeKey` and thread to
+prepare cancellation notes without receiving runner-owned tokens. Use
+`cancel_requests` to cancel matching turns and receive the request IDs it
+actually stopped; when an unscoped cancellation matches multiple turns, the
+primary request ID comes first, followed by parallel request IDs in
+lexicographic order. The existing `cancel` method remains a boolean wrapper
+for callers that only need to know whether anything matched.
+
+`queue_snapshot` copies the active primary queue without consuming it. Items
+are tagged by lane in Steer, Followup, Collect order, with FIFO order preserved
+within each lane. Hosts can render or classify pending work from the snapshot
+and still leave subsequent draining to the runner.
+
 Focused unit coverage lives in `mod_tests.rs` and `mod_api_tests.rs`.
