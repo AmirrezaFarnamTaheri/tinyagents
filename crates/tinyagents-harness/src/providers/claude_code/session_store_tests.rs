@@ -95,7 +95,7 @@ async fn claim_is_exclusive_released_on_failure_and_committed_after_acceptance()
     let (already, second) = store.claim_delivered("t", &fingerprints).await.unwrap();
     assert!(already.contains("turn"));
     drop(second);
-    drop(first);
+    first.release().await;
     assert!(
         store
             .claim_delivered("t", &fingerprints)
@@ -154,7 +154,14 @@ async fn reservations_coordinate_across_handles_for_the_same_scope() {
         .await
         .unwrap();
     assert!(second_already.contains(&fingerprints[0]));
-    drop(first_claim);
+    first_claim.release().await;
+    assert!(
+        b.claim_delivered("thread", &fingerprints)
+            .await
+            .unwrap()
+            .0
+            .is_empty()
+    );
 }
 
 #[tokio::test]

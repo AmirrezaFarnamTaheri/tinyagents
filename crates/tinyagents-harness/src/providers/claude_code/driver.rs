@@ -781,7 +781,7 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
         }
     }
     if let Some(claim) = claim {
-        claim.commit();
+        claim.commit().await;
     }
 
     Ok(mapper.into_response())
