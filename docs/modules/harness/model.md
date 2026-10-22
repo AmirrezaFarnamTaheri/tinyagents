@@ -43,7 +43,6 @@ feature-gated provider crates/modules and a shared conformance suite.
 ## Non-Responsibilities
 
 - It does not execute tools.
-- It does not choose graph routes.
 - It does not own provider API keys globally.
 - It does not hardcode time-sensitive model prices.
 - It does not assume all models support tool calling, structured output,
@@ -103,8 +102,7 @@ pub struct ModelResponse {
 Agents and model calls should be able to define their own model preferences
 without hardcoding one provider everywhere. The harness resolves a model at the
 start of a model call, records the selected model, and makes that resolved model
-available to later calls, child agents, graph nodes, event streams, and persisted
-state.
+available to later calls, child agents, event streams, and persisted state.
 
 The design mirrors OpenHuman-style smart model resolution from hints: callers
 can provide candidate models and capability requirements, while the registry and
@@ -205,7 +203,7 @@ Every model call should attach `ResolvedModel` to:
 - model lifecycle events
 - usage and cost records
 - agent run status
-- checkpoint state when the graph or harness state is durable
+- session state when the run is persisted
 
 Agent state should have a standard place for reusable model resolution:
 

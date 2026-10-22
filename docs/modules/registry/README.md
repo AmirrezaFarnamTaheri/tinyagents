@@ -1,7 +1,7 @@
 # Registry Module Specification
 
 The registry module is the coordination and discovery layer for TinyAgents. It
-registers agents, graphs, tools, models, stores, middleware, listeners, and
+registers agents, tools, models, stores, middleware, listeners, and
 runtime data catalogs, then provides an event-friendly surface for web UIs,
 CLIs, tests, and distributed supervisors.
 
@@ -21,7 +21,6 @@ server.
 ## Responsibilities
 
 - Register named agents.
-- Register compiled graphs.
 - Register tools.
 - Register model providers.
 - Register middleware and stores.
@@ -32,7 +31,6 @@ server.
 - Validate duplicate or incompatible registrations.
 - Emit registration, lifecycle, and execution events.
 - Route events to outside listeners.
-- Support parallel agent and graph execution with correlation ids.
 - Provide a test recorder for event assertions.
 - Provide local lookup for model prices, capabilities, and context windows.
 
@@ -59,7 +57,6 @@ crates/tinyagents-registry/src/
   component.rs
   discovery.rs
   events.rs
-  graph.rs
   listener.rs
   model.rs
   names.rs
@@ -90,7 +87,6 @@ The registry owns named component handles and local metadata catalogs:
 ```rust
 pub struct Registry<State, Ctx = ()> {
     agents: AgentRegistry<State, Ctx>,
-    graphs: GraphRegistry<State, Ctx>,
     models: ModelRegistry<State, Ctx>,
     tools: ToolRegistry<State, Ctx>,
     stores: StoreRegistry,
@@ -101,12 +97,11 @@ pub struct Registry<State, Ctx = ()> {
 }
 ```
 
-Runtime execution still belongs to the harness and graph modules. The registry
+Agent execution belongs to the harness. The registry
 answers questions such as:
 
 - Which model aliases are available?
 - Which tool schemas are available?
-- Which graph ids can be invoked?
 - What are the known context-window and price details for this model?
 - Which events should be emitted and where should they go?
 
@@ -119,7 +114,7 @@ live handles.
 ### Component kinds
 
 `ComponentKind` partitions the registry namespace and now has **12** variants.
-Alongside `Model`, `Tool`, `Graph`, `Router`, `Reducer`, `Store`, `Agent`, and
+Alongside `Model`, `Tool`, `Router`, `Reducer`, `Store`, `Agent`, and
 four kinds cover the
 runtime's durable roles:
 

@@ -12,9 +12,9 @@ and model context-window pressure.
 - Carry cancellation.
 - Carry store, event, cache, usage, and cost handles.
 - Track context-window budget for the selected model.
-- Expose context to models, tools, middleware, and graph nodes.
-- Provide inherited context to nested model calls, tools, sub-agents, and graph
-  nodes without relying on global variables.
+- Expose context to models, tools, and middleware.
+- Provide inherited context to nested model calls, tools, and sub-agents
+  without relying on global variables.
 - Hide runtime-only values from model-visible tool schemas.
 
 ## Source Inspiration

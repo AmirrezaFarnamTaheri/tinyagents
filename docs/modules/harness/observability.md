@@ -31,14 +31,12 @@ TinyAgents should use typed Rust events rather than stringly callback names.
 - Preserve parent/root run relationships.
 - Include usage, cost, cache, retry, fallback, and latency data.
 - Capture model-call and tool-call latency as first-class metrics.
-- Include graph run ids, graph names, super-step indexes, node ids, routing
-  commands and host-defined execution metadata.
+
 
 ## Execution Status Store
 
-Harness runs need a readable status surface just like graph runs. Direct model
-calls, model-tool loops, and harness calls made from graph nodes should all
-publish their current execution status so external listeners can inspect runs
+Harness runs need a readable status surface. Direct model calls and model-tool
+loops publish their current execution status so external listeners can inspect runs
 without holding an in-process stream.
 
 ```rust
@@ -81,8 +79,8 @@ pub enum HarnessPhase {
 
 Status should move through `Pending`, `Running`, `Waiting`, `Completed`,
 `Failed`, or `Cancelled` states while `current_phase` describes the active
-harness operation. A graph node that invokes a harness should be able to read
-the child harness status through `parent_run_id` and `root_run_id`.
+harness operation. Nested harness calls can read child status through `parent_run_id` and
+`root_run_id`.
 
 Run-level latency can be derived from `started_at` and either `ended_at` or
 `updated_at`. This status-derived view is compact and cheap, but it only reports

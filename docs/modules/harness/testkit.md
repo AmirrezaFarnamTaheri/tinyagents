@@ -104,8 +104,6 @@ Tests should be able to assert:
 - no unexpected provider calls
 - retrieved document ids and scores
 - indexed document hashes
-- graph run status
-- graph node transition sequence
 - checkpoint labels and state snapshots
 - HITL interrupt kind/options/resume node
 
@@ -130,7 +128,7 @@ Provider adapters should run a shared suite that covers:
 - timeout
 - rate-limit error classification
 
-State-graph conformance should cover:
+Former graph-runtime conformance cases were removed with the graph crate in TinyAgents #61.
 
 - linear route
 - conditional route
@@ -138,12 +136,7 @@ State-graph conformance should cover:
 - cycle guarded by max steps
 - cancellation
 - node error propagation
-- HITL pause/resume/reject
-- in-memory and durable checkpointer round trip
 - run list pagination and newest-first order
-- per-agent blueprint validation
-- live turn graph tool advertisement, allowlist enforcement, malformed
-  argument handling, and final output depending on actual tool execution
 - provider options passthrough
 
 Tests requiring live providers should be opt-in and documented with environment

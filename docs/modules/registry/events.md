@@ -134,7 +134,6 @@ Event payloads:
 ```rust
 pub enum EventPayload {
     Agent(AgentEvent),
-    Graph(GraphEvent),
     Model(ModelEvent),
     Tool(ToolEvent),
     Store(StoreEvent),
@@ -160,10 +159,6 @@ on_agent_start
 on_agent_stream
 on_agent_end
 on_agent_error
-on_graph_start
-on_graph_stream
-on_graph_end
-on_graph_error
 on_tool_start
 on_tool_stream
 on_tool_end
@@ -228,7 +223,6 @@ pub struct EventFilter {
 Example filters:
 
 - all events for one `run_id`
-- only graph node events
 - only tool failures
 - only events tagged `tenant:acme`
 - only model token deltas for streaming text
