@@ -61,4 +61,4 @@ The block middleware and a host's debug view use the same call.
 One serialized `Scratchpad` per thread in the `graph.scratchpad` namespace of a
 `harness::store::Store`, keyed by `hex(thread_id)`, written
 `load → merge → put` under a per-thread async mutex (the same single-process
-caveat as `graph::todos`).
+caveat as the todo store).
