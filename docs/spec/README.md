@@ -1,38 +1,29 @@
 # TinyAgents System Specification
 
-TinyAgents is a small, provider-neutral agent harness for Rust, plus a durable
-typed state-graph runtime. It takes its shape from LangChain (models, tools,
-middleware, structured output, streaming, usage/cost) and LangGraph
-(`START`/`END`, nodes, conditional edges, channels/reducers, checkpoints,
-interrupts, subgraphs, time travel) — rebuilt as ordinary, typed Rust. The
-system is organized as focused workspace packages:
+TinyAgents is a small, provider-neutral agent harness for Rust. It takes its
+shape from LangChain (models, tools, middleware, structured output, streaming,
+usage/cost) — rebuilt as ordinary, typed Rust. The system is organized as
+focused workspace packages:
 
 1. the harness
 2. reusable harness tools
-3. the graph
-4. the registry
-5. durable sessions
-6. host-neutral session runtime
-7. host-neutral orchestration
+3. the registry
+4. durable sessions
+5. host-neutral session runtime
+6. host-neutral orchestration
 
 The goal is to make agent systems easy to define, inspect, run, test, and
 serialize without hiding the Rust types that make production systems reliable.
 
 ## Reference Positioning
 
-TinyAgents synthesizes the reference systems rather than cloning either one:
-
-- LangGraph contributes the durable execution model: explicit state graphs,
-  virtual `START` and `END`, Pregel-style supersteps, reducers/channels,
-  commands, `Send` fanout, checkpointing, interrupts, subgraphs, streaming, and
-  time travel.
-- LangChain contributes the harness model: provider-neutral models, tools,
-  middleware, runtime context, memory, retrieval, structured output, tracing,
-  usage, cost, and conformance tests for integrations.
+TinyAgents builds on the harness model: provider-neutral models, tools,
+middleware, runtime context, memory, retrieval, structured output, tracing,
+usage, cost, and conformance tests for integrations.
 
 The target architecture is layered: the harness owns model/tool execution and
-policies, the graph owns deterministic state transition and durability, the
-registry owns named capabilities. No layer should bypass another layer's safety, policy,
+policies, the session crate owns durable conversation state, and the registry
+owns named capabilities. No layer should bypass another layer's safety, policy,
 observability, or test contracts.
 
 ## Detailed Module Docs
@@ -151,13 +142,12 @@ they use. Shared runtime errors live in `tinyagents-harness`.
 crates/
   tinyagents-harness/           # models, tools, middleware, providers, runtime
   tinyagents-harness-tools/     # reusable tool implementations and stateful support
-  tinyagents-graph/             # durable typed state graphs
-  tinyagents-tasks/             # graph-independent detached-task registry, task stores, orchestration tools
+  tinyagents-tasks/             # detached-task registry, task stores, orchestration tools
   tinyagents-registry/          # named capabilities and model catalog
   tinyagents-session/           # durable session history and run ledger
   tinyagents-definition/        # host-owned agent definition vocabulary
   tinyagents-runtime/           # host-neutral stateful harness sessions
-  tinyagents-orchestration/     # host-neutral team/workflow composition over graph+harness+session
+  tinyagents-orchestration/     # host-neutral multi-agent composition over harness+session
   tinyagents-integration-tests/ # cross-crate tests and runnable examples
 ```
 
