@@ -7,6 +7,21 @@ fn scoped(backend: &MemoryBackend) -> ScopedStorage {
     backend.for_scope(&Scope::new("local").unwrap()).unwrap()
 }
 
+#[tokio::test]
+async fn completed_import_marker_reads_back_as_done() {
+    let storage = scoped(&MemoryBackend::new());
+    with_migration_lease(&storage, "tasks", |lease| async move {
+        lease.mark_done("tasks", "records_v2").await
+    })
+    .await
+    .unwrap();
+
+    assert!(Migrations::new(&storage)
+        .done("tasks", "records_v2")
+        .await
+        .unwrap());
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn same_owner_open_sequences_are_serialized() {
     let backend = MemoryBackend::new();

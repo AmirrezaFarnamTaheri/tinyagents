@@ -15,6 +15,14 @@ pub const MIGRATIONS_COLLECTION: &str = "tsd.migrations";
 struct Progress {
     owner: String,
     step: String,
+    #[serde(default)]
+    from: u32,
+    #[serde(default)]
+    to: u32,
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    written: u64,
     done: bool,
 }
 
