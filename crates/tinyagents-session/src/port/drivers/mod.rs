@@ -429,6 +429,13 @@ impl SessionStoreProvider for DriverSessionStores {
 /// Returns the first storage or migration error. Migration leases preserve
 /// resumability if an earlier step has already completed.
 pub async fn open_agent_storage(storage: &ScopedStorage) -> Result<(), StorageError> {
+    // Declare the composed destination collections before the migration runner
+    // reads or writes owner schemas. Hosts that validate an existing schema
+    // use `collections()` during their explicit admission step instead.
+    for spec in collections() {
+        storage.documents().ensure_collection(&spec).await?;
+    }
+
     // This importer acquires the `session` migration lease itself; run it
     // before taking that lease around the Registry migration below.
     tinyagents_harness::storage::import_legacy_kv(

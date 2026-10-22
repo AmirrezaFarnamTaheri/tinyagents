@@ -151,7 +151,8 @@ async fn namespaced_items_keep_their_segments_creation_time_and_expiry() {
             "key": "likes", "value": {"food": "tea"},
         })
     );
-    assert_eq!(row.meta.created_ms, 1_700_000_000_000);
+    assert_eq!(row.doc["created_at_ms"], 1_700_000_000_000_i64);
+    assert_ne!(row.meta.created_ms, 1_700_000_000_000_i64);
     assert_eq!(row.meta.expires_ms, Some(far));
 }
 

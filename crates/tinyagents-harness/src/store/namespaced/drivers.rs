@@ -141,7 +141,13 @@ impl DriverNamespacedStore {
                 .ok_or_else(|| bad("key"))?
                 .to_owned(),
             value: row.doc.get("value").cloned().ok_or_else(|| bad("value"))?,
-            created_at_ms: u64::try_from(row.meta.created_ms).unwrap_or(0),
+            created_at_ms: u64::try_from(
+                row.doc
+                    .get("created_at_ms")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(row.meta.created_ms),
+            )
+            .unwrap_or(0),
             updated_at_ms: u64::try_from(row.meta.updated_ms).unwrap_or(0),
             expires_at_ms: row.meta.expires_ms.and_then(|at| u64::try_from(at).ok()),
         })

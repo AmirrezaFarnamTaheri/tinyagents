@@ -8,6 +8,7 @@ use tinystoragedrivers_api::StorageBackend;
 #[derive(Debug, Default)]
 struct Observations {
     declarations: AtomicUsize,
+    declared: Mutex<Vec<CollectionSpec>>,
     validated: Mutex<Vec<CollectionSpec>>,
     refusal: AtomicUsize,
 }
@@ -29,6 +30,7 @@ impl DocumentStore for ProbeDocs {
     }
     async fn ensure_collection(&self, spec: &CollectionSpec) -> Result<(), StorageError> {
         self.observed.declarations.fetch_add(1, Ordering::SeqCst);
+        self.observed.declared.lock().unwrap().push(spec.clone());
         self.inner.ensure_collection(spec).await
     }
     async fn validate_collection_spec(&self, spec: &CollectionSpec) -> Result<(), StorageError> {
@@ -113,6 +115,28 @@ impl DocumentStore for ProbeDocs {
     }
     async fn drop_collection(&self, collection: &str) -> Result<(), StorageError> {
         self.inner.drop_collection(collection).await
+    }
+}
+
+#[tokio::test]
+async fn declare_open_prepares_every_session_collection_before_migration() {
+    let storage: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    storage.prepare_schema().await.unwrap();
+    let observed = Arc::new(Observations::default());
+    let backend: Arc<dyn StorageBackend> = Arc::new(ProbeBackend {
+        inner: storage,
+        observed: observed.clone(),
+    });
+    let provider = DriverSessionStores::new(backend, Scope::new("local").unwrap()).unwrap();
+
+    provider.try_for_agent("agent").unwrap();
+
+    let declared = observed.declared.lock().unwrap();
+    for spec in DriverSessionStores::collection_specs() {
+        assert!(
+            declared.contains(&spec),
+            "session collection was not prepared before migration: {spec:?}"
+        );
     }
 }
 

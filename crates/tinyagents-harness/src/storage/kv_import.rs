@@ -147,14 +147,14 @@ pub(crate) async fn import_legacy_kv_with_lease(
                 continue;
             };
             let mut options = WriteOptions::new();
-            if let Some(created) = entry.created_ms {
-                options = options.created_ms(created);
-            }
             if let Some(expires) = entry.expires_ms {
                 options = options.expires_ms(expires);
             }
             let id = kv_id(owner, &entry.ns, &entry.key)?;
-            let body = kv_body(owner, &entry.ns, &entry.key, entry.value);
+            let mut body = kv_body(owner, &entry.ns, &entry.key, entry.value);
+            if let Some(created) = entry.created_ms {
+                body["created_at_ms"] = Value::from(created);
+            }
             lease.renew().await?;
             match docs
                 .put_with(KV, &id, body, Precondition::Absent, options)
