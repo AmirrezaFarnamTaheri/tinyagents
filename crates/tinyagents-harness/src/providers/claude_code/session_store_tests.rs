@@ -337,7 +337,7 @@ async fn failed_delivery_write_releases_the_reservation_for_retry() {
             .await
             .is_err()
     );
-    drop(claim);
+    claim.release().await;
     faults.clear();
 
     let (already, retry) = store.claim_delivered("thread", &fingerprint).await.unwrap();
