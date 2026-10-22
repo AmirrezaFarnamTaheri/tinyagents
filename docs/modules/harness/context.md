@@ -94,8 +94,8 @@ mid-tool or mid-chunk, only at well-defined checkpoints.
 
 `RunContext` carries a one-shot control request that a middleware or step can set
 to steer the agent loop from outside its `Result<()>` return channel. This is the
-harness-native complement to the graph `Command`/`Interrupt` vocabulary; the loop
-drains any request at its safe checkpoints (after each model response).
+harness-native control surface; the loop drains requests at safe checkpoints
+(after each model response).
 
 ```rust
 pub enum MiddlewareControl {

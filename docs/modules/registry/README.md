@@ -36,11 +36,8 @@ server.
 
 ## Non-Responsibilities
 
-- It does not execute graph nodes itself.
 - It does not call LLM providers itself.
 - It does not validate tool arguments beyond registry-level schema checks.
-- It does not persist checkpoints unless a checkpointer is registered as a
-  component.
 - It does not force a singleton global registry.
 - It does not guarantee live provider pricing without an explicit snapshot
   refresh.

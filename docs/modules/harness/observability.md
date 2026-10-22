@@ -147,13 +147,6 @@ Event kinds should include:
 - `rate_limit.waited`
 - `limit.reached`
 - `stream.closed`
-- `graph.run.started`
-- `graph.node.entered`
-- `graph.node.completed`
-- `graph.run.paused`
-- `graph.run.completed`
-- `graph.run.failed`
-- `graph.checkpoint.saved`
 
 ## Physical Provider Dispatches
 
@@ -362,8 +355,7 @@ Input/Output panels of a generation (`generation-create`) and a tool
 observation (`span-create`). With capture disabled the fields are absent and the
 observation renders with ids, timing, and usage only. The harness exporter also
 defaults the trace-level metadata from the run lineage (root/first run ids and
-parent), mirroring the graph exporter, so a trace is correlatable even when the
-caller passes no metadata.
+parent), so a trace is correlatable even when the caller passes no metadata.
 
 ## Langfuse Observation Tree
 
@@ -379,9 +371,7 @@ Because run-span ids are deterministic and trace-namespaced, the tree spans
 **separately exported batches**: a sub-agent run whose observations are shipped
 in their own batch carries `parent_run_id`, so its run span resolves to
 `{trace_id}:run:{parent_run_id}` and nests under the parent agent's span in the
-same trace. The graph exporter emits a matching `{trace_id}:run:{run_id}` span
-for the graph run, so a graph run and the agent runs its nodes spawn
-reconstruct one unified nested tree.
+same trace, preserving the nested agent-run lineage.
 
 ## Scores
 
@@ -394,22 +384,3 @@ deterministic value derived from the target and metric name, so re-scoring the
 same target upserts rather than duplicating. Point the score's `trace_id` at an
 exported trace (recall both exporters default the trace id to the run's
 `root_run_id`) to attach the evaluation to that run.
-
-## Graph Events
-
-State-graph event payloads should be rich enough for a UI to render run
-progress without loading checkpoints:
-
-- run id
-- graph name
-- step or super-step index
-- node id
-- rendered command such as `continue`, `goto:node`, `fork:[a,b]`,
-  `interrupt:approval`, or `end`
-- elapsed milliseconds
-- lifecycle status
-- interrupt kind and resume node when paused
-- error class and message when failed
-
-Graph event tests should filter by both event kind and run id. A shared global
-event bus can otherwise pick up unrelated graph events from parallel tests.

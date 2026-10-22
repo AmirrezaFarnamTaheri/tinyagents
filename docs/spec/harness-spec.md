@@ -8,7 +8,7 @@ middleware and context seams.
 
 The harness must stay composable. It should not be a single monolithic `Agent`
 type that hides every behavior. A direct model call, a model-plus-tools loop, and
-a graph node that invokes a model should all share the same harness primitives.
+nested harness calls should share the same primitives.
 
 ### Source Inspiration
 
@@ -48,15 +48,15 @@ testing:
   without replacing provider adapters.
 - Emit typed events for observability and streaming.
 - Write readable run status records for direct model calls, agent loops, and
-  graph-node child harness calls.
+  nested harness calls.
 - Maintain append-only event journals when durable listener replay is
   configured.
 - Enforce retry, timeout, model-call, tool-call, and recursion policies.
 - Accept sub-agent and orchestrator steering commands from humans, parent
-  agents, graph supervisors, middleware, and tests at safe loop boundaries.
+  agents, middleware, and tests at safe loop boundaries.
 - Normalize model and tool errors into framework errors.
 - Persist resolved model identity in responses, events, usage/cost records, run
-  status, and durable agent or graph state so later calls can reuse it.
+  status, and session state so later calls can reuse it.
 - Provide test doubles for models, tools, stores, clocks, and ids.
 
 ### Core Types
@@ -93,8 +93,8 @@ unit tests straightforward.
 
 ### Model Abstraction
 
-Models should be provider-agnostic. The graph layer should never know whether a
-node uses OpenAI, Anthropic, Ollama, a local model, or a test fake.
+Models should be provider-agnostic. Harness callers can use OpenAI, Anthropic,
+Ollama, a local model, or a test fake.
 
 ```rust
 #[async_trait]
@@ -261,7 +261,7 @@ Limits are not optional. The harness should enforce:
 ### Middleware
 
 Middleware is the primary extension point for behavior that should not be baked
-into the model or graph APIs.
+into the model API.
 
 ```rust
 #[async_trait]

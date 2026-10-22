@@ -51,25 +51,6 @@ observability, or test contracts.
   - [Observability and events](../modules/harness/observability.md)
   - [Performance and capacity testing](../modules/harness/performance.md)
   - [Testkit](../modules/harness/testkit.md)
-- [Graph module](../modules/graph/README.md)
-  - [Package and core types](../modules/graph/package.md)
-  - [Builder and compile contract](../modules/graph/builder.md)
-  - [Node model](../modules/graph/nodes.md)
-  - [State, channels, and updates](../modules/graph/state-channels.md)
-  - [Edges, routing, commands, and sends](../modules/graph/routing.md)
-  - [Execution model and parallelization](../modules/graph/execution.md)
-  - [Parallel agents and context forking](../modules/graph/parallel-agents-forking.md)
-  - [Checkpointing, durability, state inspection, and time travel](../modules/graph/checkpointing.md)
-  - [Interrupts and resume](../modules/graph/interrupts.md)
-  - [Streaming and events](../modules/graph/streaming.md)
-  - [Observability and tracing](../modules/graph/observability.md)
-  - [Runtime context and policies](../modules/graph/runtime-policy.md)
-  - [Fault tolerance](../modules/graph/fault-tolerance.md)
-  - [Subgraphs](../modules/graph/subgraphs.md)
-  - [Sub-agents and recursion](../modules/graph/subagents-recursion.md)
-  - [Memory and stores boundary](../modules/graph/memory-boundary.md)
-  - [Visualization, introspection, and testkit](../modules/graph/visualization-testkit.md)
-  - [Implementation milestones](../modules/graph/milestones.md)
 - [Registry module](../modules/registry/README.md)
   - [Design](../modules/registry/design.md)
   - [Model catalog and local snapshots](../modules/registry/model-catalog.md)
@@ -173,9 +154,9 @@ mock provider.
 
 ### Milestone 4: Production Runtime Features (shipped)
 
-Streaming events, checkpointing and resume support, the graph run status
-store, event journal with listener replay, graph export, and an embedded
-Langfuse tracing integration (`LangfuseClient`, `GraphLangfuseExporter`).
+Streaming events, session checkpointing and resume support, an event journal
+with listener replay, and an embedded Langfuse tracing integration. The graph
+run status store and graph exporter were removed in TinyAgents #61.
 
 ## Open Questions
 
@@ -185,10 +166,6 @@ Historical decisions that have since been settled, kept for context:
   than becoming one crate per provider.
 - Memory and embeddings are async, matching the rest of the harness surface.
 
-Remaining open question:
-
-- Should graph nodes support typed route enums as a stronger alternative to
-  string-keyed conditional routing before further serialization work lands?
 
 Transcript accounting preserves cost provenance in durable usage records.
 Hosts should use `TranscriptSpend::cost_split` to separate charged or estimated
