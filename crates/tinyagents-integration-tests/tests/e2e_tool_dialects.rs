@@ -1603,9 +1603,10 @@ async fn a_stream_that_stops_inside_a_call_block_is_nudged() {
 }
 
 #[tokio::test]
-async fn a_length_cut_inside_a_call_block_is_left_to_truncation_handling() {
-    // Control for the test above: a block cut by the token cap is truncation,
-    // not a forgotten closer, and is not answered with the parse nudge.
+async fn a_length_cut_call_block_is_retried_or_fails() {
+    // A block cut by the token cap is truncation: the lead-in prose and the
+    // half-written markup are not an answer, so the run must retry (the
+    // truncated-empty ladder) and must never hand back the half block.
     let items = text_stream(
         &[
             "Let me look.\n\n<tool_",
@@ -1618,13 +1619,26 @@ async fn a_length_cut_inside_a_call_block_is_left_to_truncation_handling() {
     let listener = Arc::new(RecordingListener::new());
     let mut harness = harness_with(model, &listener);
     harness.with_policy(xml_policy());
-
-    let run = harness
+    match harness
         .invoke_streaming_default(&(), vec![Message::user("go")])
         .await
-        .expect("run succeeds");
-
-    assert_eq!(run.model_calls, 1, "no parse nudge for a length cut");
+    {
+        Ok(run) => {
+            assert!(
+                run.model_calls > 1 || run.tool_calls > 0,
+                "run ended Ok with text {:?}, {} model call(s), {} tool call(s)",
+                run.text(),
+                run.model_calls,
+                run.tool_calls
+            );
+            assert!(
+                !run.text().unwrap_or_default().contains("<tool_call"),
+                "half call block leaked into the answer: {:?}",
+                run.text()
+            );
+        }
+        Err(e) => eprintln!("length-cut call block surfaced as an error: {e:?}"),
+    }
 }
 
 #[tokio::test]
@@ -1869,4 +1883,49 @@ async fn a_todo_element_call_is_dispatched_under_the_python_dialect() {
     assert_eq!(todo[0]["todos"][0]["status"], "in_progress");
     assert_eq!(todo[0]["todos"].as_array().map(Vec::len), Some(2));
     assert!(search.is_empty());
+}
+
+// A native call that arrives as a streamed ToolCallDelta must not wipe out a
+// narrated call the scrubber recovered from the same turn's text.
+#[tokio::test]
+async fn a_streamed_native_delta_keeps_the_narrated_call() {
+    let markup = "<tool_call>{\"name\":\"second\",\"arguments\":{\"q\":\"y\"}}</tool_call>";
+    let mut completed = ModelResponse::assistant(markup);
+    completed
+        .message
+        .tool_calls
+        .push(ToolCall::new("native-1", "lookup", json!({"q": "x"})));
+    let items = vec![
+        ModelStreamItem::Started,
+        ModelStreamItem::ToolCallDelta(tinyinference_llm::tool::ToolDelta {
+            call_id: "native-1".into(),
+            tool_name: Some("lookup".into()),
+            content: r#"{"q":"x"}"#.into(),
+            ..Default::default()
+        }),
+        ModelStreamItem::MessageDelta(MessageDelta::text(markup)),
+        ModelStreamItem::Completed(completed),
+    ];
+    let model = Arc::new(StreamingMock::new(items));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(FakeTool::returning("lookup", "lookup-output")))
+        .register_tool(Arc::new(FakeTool::returning("second", "second-output")))
+        .with_policy(RunPolicy {
+            limits: tinyagents_harness::limits::RunLimits {
+                max_model_calls: 1,
+                behavior: tinyagents_harness::limits::LimitBehavior::StopWithPartial,
+                ..tinyagents_harness::limits::RunLimits::default()
+            },
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_streaming_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run stops cleanly");
+
+    assert_eq!(run.tool_calls, 2, "{:?}", run.messages);
 }
