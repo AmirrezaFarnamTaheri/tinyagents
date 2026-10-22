@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::Future,
     hash::Hash,
     sync::{Arc, Weak},
@@ -105,6 +105,77 @@ pub enum TurnSignal {
     WorkFinished,
 }
 
+/// Host-defined metadata for a classified turn failure.
+///
+/// The runner owns the stable class and user-facing message. Hosts can attach
+/// structured details for their own presentation layer without teaching the
+/// harness about host-specific localization or wire formats.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FailureClassification {
+    /// Stable machine-readable failure class.
+    pub class: String,
+    /// User-facing summary for the failed turn.
+    pub message: String,
+    /// Optional host-defined structured presentation details.
+    pub details: Option<serde_json::Value>,
+}
+
+/// Creates the host-owned payload for a queued turn and adopts safe metadata
+/// from the active turn when the host needs to synthesize a follow-up request.
+///
+/// Payload implementations decide which fields may be inherited. Request text,
+/// ids, and queue timestamps remain owned by the newly queued request.
+pub trait RequeuePayload: Sized {
+    /// Create an empty payload for a request queued on `thread_id`.
+    fn requeued(thread_id: &str, queued_at_ms: u64) -> Self;
+
+    /// Copy any safe, turn-scoped host metadata from the running payload.
+    fn adopt(&mut self, running: &Self);
+}
+
+/// Folds progress events into balanced work-liveness signals for the runner.
+///
+/// A turn is considered busy while a model iteration or tool call is active.
+/// Overlapping work emits one `WorkStarted` transition and one `WorkFinished`
+/// transition when the last item settles. Duplicate start/completion events
+/// do not produce unbalanced signals.
+#[derive(Debug, Default)]
+pub struct WorkTracker {
+    active: HashSet<String>,
+}
+
+impl WorkTracker {
+    /// Record an event and return a signal only when busy/idle state changes.
+    pub fn observe(&mut self, event: &AgentProgress) -> Option<TurnSignal> {
+        let was_active = !self.active.is_empty();
+        match event {
+            AgentProgress::IterationStarted { iteration, .. } => {
+                self.active.insert(format!("model:{iteration}"));
+            }
+            AgentProgress::ModelCallCompleted {
+                iteration,
+                subagent_task_id: None,
+                ..
+            } => {
+                self.active.remove(&format!("model:{iteration}"));
+            }
+            AgentProgress::ToolCallStarted { call_id, .. } => {
+                self.active.insert(format!("tool:{call_id}"));
+            }
+            AgentProgress::ToolCallCompleted { call_id, .. } => {
+                self.active.remove(&format!("tool:{call_id}"));
+            }
+            AgentProgress::TurnCompleted { .. } => self.active.clear(),
+            _ => {}
+        }
+        match (was_active, !self.active.is_empty()) {
+            (false, true) => Some(TurnSignal::WorkStarted),
+            (true, false) => Some(TurnSignal::WorkFinished),
+            _ => None,
+        }
+    }
+}
+
 #[async_trait]
 pub trait TurnHost<P = serde_json::Value>: Send + Sync {
     /// Check out or create the session for this request and verify its fingerprint.
@@ -162,12 +233,37 @@ where
 {
     async fn progress(&self, request: &TurnRequest<P>, event: AgentProgress);
     async fn terminal(&self, request: &TurnRequest<P>, event: TerminalEvent);
+    /// Deliver a terminal failure with its structured host classification.
+    ///
+    /// The default keeps existing event sinks source-compatible and forwards
+    /// the wire-neutral terminal event. Hosts that render richer failure copy
+    /// can override this method.
+    async fn classified_failure(
+        &self,
+        request: &TurnRequest<P>,
+        event: TerminalEvent,
+        _classification: FailureClassification,
+    ) {
+        self.terminal(request, event).await;
+    }
     async fn suggestions(&self, _request: &TurnRequest<P>, _suggestions: Vec<String>) {}
     async fn collected(&self, _request: &TurnRequest<P>, _items: Vec<TurnRequest<P>>) {}
 }
 
 pub trait FailureClassifier: Send + Sync {
     fn classify(&self, error: &str) -> (String, String);
+
+    /// Classify an error with optional host-defined presentation details.
+    ///
+    /// The default preserves classifiers that only return a class and message.
+    fn classify_failure(&self, error: &str) -> FailureClassification {
+        let (class, message) = self.classify(error);
+        FailureClassification {
+            class,
+            message,
+            details: None,
+        }
+    }
 }
 
 #[async_trait]
@@ -750,31 +846,38 @@ where
         error: String,
         generation: Option<u64>,
     ) -> Result<T, TurnRunnerError> {
-        let (class, message) = self.failures.classify(&error);
+        let classification = self.failures.classify_failure(&error);
+        let class = classification.class.clone();
+        let message = classification.message.clone();
         let queued = self.retire_generation(request, generation).await;
         if request.disposition == QueueDisposition::Parallel {
             self.clear_parallel_tracking(request).await;
         }
         for queued_request in queued {
+            let queued_message = format!("queued turn was not run: {message}");
+            let mut queued_classification = classification.clone();
+            queued_classification.message.clone_from(&queued_message);
             self.events
-                .terminal(
+                .classified_failure(
                     &queued_request,
                     TerminalEvent::Failed {
                         request_id: queued_request.request_id.clone(),
-                        message: format!("queued turn was not run: {message}"),
+                        message: queued_message,
                         class: class.clone(),
                     },
+                    queued_classification,
                 )
                 .await;
         }
         self.events
-            .terminal(
+            .classified_failure(
                 request,
                 TerminalEvent::Failed {
                     request_id: request.request_id.clone(),
                     message: message.clone(),
                     class,
                 },
+                classification,
             )
             .await;
         Err(TurnRunnerError::Failed(message))
