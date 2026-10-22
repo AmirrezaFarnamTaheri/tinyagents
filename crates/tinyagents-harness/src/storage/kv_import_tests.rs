@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::namespaced::{DriverNamespacedStore, Namespace, NamespacedStore};
 use serde_json::json;
 use tinyagents_storage_kit::{Kv, Migrations, Precondition, Scope, ScopedStorage, StorageBackend};
 use tinystoragedrivers_testkit::MemoryBackend;
@@ -154,6 +155,13 @@ async fn namespaced_items_keep_their_segments_creation_time_and_expiry() {
     assert_eq!(row.doc["created_at_ms"], 1_700_000_000_000_i64);
     assert_ne!(row.meta.created_ms, 1_700_000_000_000_i64);
     assert_eq!(row.meta.expires_ms, Some(far));
+    let namespaced = DriverNamespacedStore::new(storage.documents().clone());
+    let item = namespaced
+        .get(&Namespace::new(["memories", "alice"]).unwrap(), "likes")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(item.created_at_ms, 1_700_000_000_000);
 }
 
 #[tokio::test]
