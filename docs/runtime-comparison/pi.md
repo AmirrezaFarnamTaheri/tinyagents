@@ -343,9 +343,9 @@ has these and should not import pi's product coupling.
 - `pi:packages/coding-agent/docs/{session-format,compaction,extensions,skills,prompt-templates,packages,sdk,models}.md`,
   `src/core/{session-manager,agent-session}.ts`, `src/experimental/`
 - GitHub API: repo metadata, releases, commits, contributors (fetched 2026-09-19)
-- TinyAgents: `ta:docs/spec/README.md`, `ta:docs/modules/harness/README.md`, `ta:docs/modules/graph/README.md`,
+- TinyAgents: `ta:docs/spec/README.md`, `ta:docs/modules/harness/README.md`,
   `ta:docs/sdk-gaps/README.md`, `ta:ROADMAP.md`, `ta:crates/*/src/lib.rs`,
-  `ta:crates/tinyagents-harness/src/{agent_loop,steering,run_queue,summarization,middleware,events,stream,cache,cost}/`,
+  `ta:crates/tinyagents-harness/src/{agent_loop,steering,run_queue,summarization,middleware,events,cache,cost}/`,
   `ta:crates/tinyagents-session/src/transcript/`, `ta:crates/tinyagents-registry/src/catalog.rs`,
 - tinyinference (main checkout): `ti:crates/tinyinference-llm/src/{message,model,catalog,usage}/types.rs`,
   `ti:crates/tinyinference-llm/src/providers/`, `ti:crates/tinyinference-providers/src/oauth.rs`
