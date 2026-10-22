@@ -155,3 +155,53 @@ async fn legacy_ledger_import_preserves_workflow_fields_and_is_only_if_absent() 
         Some(workflow)
     );
 }
+
+#[tokio::test]
+async fn collided_workflow_import_does_not_install_the_legacy_lease() {
+    let ledger = ledger();
+    let native = ledger
+        .upsert_workflow_run(WorkflowRunUpsert {
+            id: "workflow-collision".into(),
+            definition_id: "native-definition".into(),
+            parent_thread_id: None,
+            input: json!({"source":"native"}),
+            phase_states: json!({}),
+            child_run_ids: vec![],
+            status: WorkflowRunStatus::Running,
+            summary: Some("native row".into()),
+            started_at: None,
+            completed_at: None,
+        })
+        .await
+        .unwrap();
+    let legacy = WorkflowRun {
+        id: native.id.clone(),
+        definition_id: "legacy-definition".into(),
+        parent_thread_id: Some("legacy-thread".into()),
+        input: json!({"source":"legacy"}),
+        phase_states: json!({}),
+        child_run_ids: vec![],
+        status: WorkflowRunStatus::Interrupted,
+        summary: Some("legacy row".into()),
+        started_at: time("2023-04-05T06:07:08Z"),
+        updated_at: time("2023-04-05T06:08:09Z"),
+        completed_at: None,
+        revision: 17,
+        lease_owner: Some("stale-legacy-owner".into()),
+        lease_expires_at: Some(time("2099-04-05T06:10:11Z")),
+    };
+
+    let report = ledger
+        .import_legacy_rows(LegacyLedgerRows {
+            workflow_runs: vec![legacy],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(report.workflow_runs.imported, 0);
+    assert_eq!(
+        ledger.get_workflow_run(&native.id).await.unwrap(),
+        Some(native)
+    );
+}
