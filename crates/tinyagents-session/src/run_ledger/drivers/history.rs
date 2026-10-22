@@ -287,17 +287,28 @@ impl SessionHistoryStore for DriverRunLedger {
         let mut report = SessionHistoryImportReport::default();
 
         let mut imported = 0;
+        let mut compatible_sessions = HashSet::new();
         for session in &import.sessions {
             imported += usize::from(
                 self.import_if_absent(HIST_SESSIONS, &key(&[&session.id])?, encode(session)?)
                     .await?,
             );
+            if self
+                .read_session(&session.id)
+                .await?
+                .is_some_and(|stored| stored.doc == *session)
+            {
+                compatible_sessions.insert(session.id.as_str());
+            }
         }
         report.sessions = super::super::import::ImportCounts::new(import.sessions.len(), imported);
 
         let mut imported = 0;
         let mut highest = 0_u64;
         for message in &import.messages {
+            if !compatible_sessions.contains(message.session_id.as_str()) {
+                continue;
+            }
             if message.id <= 0 {
                 return Err(
                     StorageError::invalid_input("legacy message ids must be positive").into(),
@@ -317,6 +328,9 @@ impl SessionHistoryStore for DriverRunLedger {
         let mut imported = 0;
         let mut highest = 0_u64;
         for call in &import.tool_calls {
+            if !compatible_sessions.contains(call.session_id.as_str()) {
+                continue;
+            }
             if call.id <= 0 {
                 return Err(
                     StorageError::invalid_input("legacy tool-call ids must be positive").into(),
