@@ -124,3 +124,62 @@ async fn reasoning_off_sticks_for_the_rest_of_the_run_after_repeated_dead_calls(
         vec![high, none, high, none, none]
     );
 }
+
+/// Records, for each tool call, whether it came from a dead-call retry.
+#[derive(Default)]
+struct RetryFlags(std::sync::Mutex<Vec<bool>>);
+
+#[async_trait::async_trait]
+impl crate::middleware::Middleware<(), ()> for RetryFlags {
+    fn name(&self) -> &str {
+        "retry_flags"
+    }
+
+    async fn after_tool(
+        &self,
+        ctx: &mut RunContext<()>,
+        _state: &(),
+        _invocation: &crate::middleware::ToolInvocationIdentity,
+        _result: &mut tinytools::ToolResult,
+    ) -> crate::error::Result<()> {
+        self.0.lock().unwrap().push(ctx.dead_call_retry);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn only_the_tool_calls_of_a_dead_call_retry_are_marked_as_such() {
+    let call = |id: &str| {
+        crate::testkit::tool_call_response(tinyinference_llm::tool::ToolCall::new(
+            id,
+            "probe",
+            serde_json::json!({}),
+        ))
+        .with_usage(Usage::new(4, 3))
+    };
+    let model = Arc::new(ScriptedModel::new(vec![
+        dead(2048),
+        call("c1"),
+        call("c2"),
+        crate::testkit::text_response("done").with_usage(Usage::new(4, 3)),
+    ]));
+    let flags = Arc::new(RetryFlags::default());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", Arc::clone(&model) as _);
+    harness.register_tool(Arc::new(crate::testkit::FakeTool::new("probe")));
+    harness.push_middleware(flags.clone());
+    harness.with_policy(RunPolicy {
+        default_reasoning: Some(ReasoningConfig::effort(ReasoningEffort::High)),
+        truncated_empty_reasoning_off: true,
+        ..RunPolicy::default()
+    });
+    let ctx = RunContext::new(
+        RunConfig::new("retry-flag").with_max_turn_output_tokens(2048),
+        (),
+    );
+    harness
+        .invoke_in_context(&(), ctx, vec![Message::user("hi")])
+        .await
+        .expect("the run recovers");
+    assert_eq!(*flags.0.lock().unwrap(), vec![true, false]);
+}

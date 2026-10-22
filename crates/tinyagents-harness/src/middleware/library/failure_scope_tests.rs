@@ -650,3 +650,44 @@ async fn terminal_model_callback_halts_before_tool_accounting() {
             .any(|command| matches!(command, SteeringCommand::Pause))
     );
 }
+
+async fn fail_as(middleware: &FailureScopeMiddleware<()>, run_id: u64, id: &str, retry: bool) {
+    let mut ctx = context(run_id);
+    ctx.dead_call_retry = retry;
+    let mut call = ToolCall::new(id, "read_file", json!({"path": "a.txt"}));
+    middleware
+        .before_tool(&mut ctx, &(), &mut call)
+        .await
+        .unwrap();
+    let invocation = ToolInvocationIdentity::new(id, "read_file");
+    let mut result = ToolResult::error("permission denied");
+    middleware
+        .after_tool(&mut ctx, &(), &invocation, &mut result)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn failures_from_dead_call_retries_do_not_count_toward_the_repeat_stop() {
+    let halt_summary = Arc::new(std::sync::Mutex::new(None));
+    let middleware = FailureScopeMiddleware::new(
+        SteeringHandle::allow_all(),
+        halt_summary.clone(),
+        Arc::new(Policy::default()),
+    );
+    for id in ["one", "two", "three", "four"] {
+        fail_as(&middleware, 71, id, true).await;
+    }
+    assert!(
+        halt_summary.lock().unwrap().is_none(),
+        "repeats from dead-call retries never stop the run"
+    );
+
+    for id in ["five", "six", "seven"] {
+        fail_as(&middleware, 71, id, false).await;
+    }
+    assert!(
+        halt_summary.lock().unwrap().is_some(),
+        "the same repeats made with reasoning still do"
+    );
+}
