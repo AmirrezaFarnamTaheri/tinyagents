@@ -1,10 +1,15 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::completions::{CompletionResult, RecordOutcome};
 use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use crate::storage::{COMPLETIONS, task_id_key};
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_document::memory::MemoryConnection;
+use tinystoragedrivers_document::sqlite::SqliteDocuments;
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn record(task: &str, parent: &str) -> CompletionRecord {
     CompletionRecord::new(
@@ -25,19 +30,25 @@ fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> 
     )
 }
 
-/// A router over the SQLite file at `path`, opened afresh (a simulated restart).
-fn open_router(path: &std::path::Path) -> CompletionRouter {
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(path).unwrap();
-    let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
+/// A router over the explicitly owned testkit backend.
+fn open_router(storage: &MemoryBackend) -> CompletionRouter {
+    let store = DriverCompletionStore::new(docs_of(storage, "local")).unwrap();
     CompletionRouter::new(Arc::new(store))
+}
+
+fn open_sqlite_router(path: &Path) -> CompletionRouter {
+    let scope = Scope::new("local").unwrap();
+    let connection = tinystoragedrivers_connect::sqlite::SqliteConnection::open(path).unwrap();
+    let docs = Arc::new(SqliteDocuments::new(connection, scope))
+        as Arc<dyn tinyagents_storage_kit::DocumentStore>;
+    CompletionRouter::new(Arc::new(DriverCompletionStore::new(docs).unwrap()))
 }
 
 #[tokio::test]
 async fn pending_completions_survive_a_reopen() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("completions.sqlite");
+    let storage = MemoryBackend::new();
     {
-        let router = open_router(&path);
+        let router = open_router(&storage);
         router.record(record("t1", "p")).await.unwrap();
         router
             .record(record("t2", "p").with_notify_mode(NotifyMode::Off))
@@ -45,7 +56,7 @@ async fn pending_completions_survive_a_reopen() {
             .unwrap();
         router.record(record("t3", "other")).await.unwrap();
     }
-    let router = open_router(&path);
+    let router = open_router(&storage);
     let mut pending = router.pending_for("p");
     pending.sort_by(|a, b| a.task_id.cmp(&b.task_id));
     assert_eq!(
@@ -62,30 +73,28 @@ async fn pending_completions_survive_a_reopen() {
 
 #[tokio::test]
 async fn attempts_and_give_up_survive_a_reopen() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("completions.sqlite");
+    let storage = MemoryBackend::new();
     {
-        let router = open_router(&path).with_max_attempts(2);
+        let router = open_router(&storage).with_max_attempts(2);
         router.record(record("t1", "p")).await.unwrap();
         router.claim_pending("p", 1).unwrap();
         router.mark_failed(&["t1"]).unwrap();
     }
-    let router = open_router(&path).with_max_attempts(2);
+    let router = open_router(&storage).with_max_attempts(2);
     let batch = router.claim_pending("p", 1).unwrap();
     assert_eq!(batch[0].attempts, 2, "the earlier attempt was kept");
     assert_eq!(router.mark_failed(&["t1"]).unwrap().len(), 1);
     drop(router);
-    let router = open_router(&path);
+    let router = open_router(&storage);
     assert!(router.pending_for("p").is_empty());
     assert!(router.claim_pending("p", 1).unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn delivered_and_tombstoned_stay_deduped_after_a_reopen() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("completions.sqlite");
+    let storage = MemoryBackend::new();
     {
-        let router = open_router(&path);
+        let router = open_router(&storage);
         router.record(record("done", "p")).await.unwrap();
         router.claim_pending("p", 1).unwrap();
         router.mark_delivered(&["done"]).unwrap();
@@ -93,7 +102,7 @@ async fn delivered_and_tombstoned_stay_deduped_after_a_reopen() {
         router.tombstone("waited").unwrap();
         router.tombstone("early").unwrap();
     }
-    let router = open_router(&path);
+    let router = open_router(&storage);
     for task in ["done", "waited", "early"] {
         let outcome = router.record(record(task, "p")).await.unwrap();
         assert!(
@@ -108,8 +117,121 @@ async fn delivered_and_tombstoned_stay_deduped_after_a_reopen() {
 }
 
 #[tokio::test]
+async fn a_settled_record_is_persisted_without_its_result() {
+    let storage = MemoryBackend::new();
+    let docs = docs_of(&storage, "local");
+    let store = Arc::new(DriverCompletionStore::new(docs.clone()).unwrap());
+    let router = CompletionRouter::new(store.clone()).with_max_attempts(1);
+    let doc_of = |task: &str| {
+        let docs = docs.clone();
+        let id = task_id_key(task).unwrap();
+        async move { docs.get(COMPLETIONS, &id).await.unwrap().unwrap().doc }
+    };
+    for (index, task) in ["delivered", "tombstoned", "gave-up", "cancelled"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut record = record(task, "p");
+        record.finished_at = UNIX_EPOCH + Duration::from_secs(index as u64 + 1);
+        record.result.omitted_chars = 7;
+        record.result.artifact = Some(crate::completions::CompletionArtifact {
+            id: format!("art-{task}"),
+            ..Default::default()
+        });
+        router.record(record).await.unwrap();
+        let persisted = doc_of(task).await;
+        assert_eq!(persisted["result"]["text"], format!("result of {task}"));
+        assert_eq!(persisted["result"]["artifact"]["id"], format!("art-{task}"));
+    }
+    // Oldest first: the claim leases the first three; `cancelled` stays
+    // unclaimed for `cancel_parent` to withdraw.
+    let claimed = router.claim_pending("p", 3).unwrap();
+    assert_eq!(claimed.len(), 3);
+    router.mark_delivered(&["delivered"]).unwrap();
+    assert_eq!(router.mark_failed(&["gave-up"]).unwrap().len(), 1);
+    router.tombstone("tombstoned").unwrap();
+    assert_eq!(router.cancel_parent("p").unwrap(), 1);
+    for (task, state) in [
+        ("delivered", "delivered"),
+        ("tombstoned", "tombstoned"),
+        ("gave-up", "gave_up"),
+        ("cancelled", "tombstoned"),
+    ] {
+        let persisted = doc_of(task).await;
+        assert_eq!(persisted["state"], state, "{task}");
+        assert_eq!(persisted["task_id"], task, "{task}");
+        assert_eq!(persisted["parent_key"], "p", "{task}");
+        assert_eq!(persisted["result"]["text"], "", "{task}");
+        assert_eq!(persisted["result"]["omitted_chars"], 0, "{task}");
+        assert!(
+            persisted["result"].get("artifact").is_none(),
+            "{task}: {}",
+            persisted["result"]
+        );
+        let read = store.get(task).unwrap();
+        assert_eq!(read.result, CompletionResult::default(), "{task}");
+        assert_eq!(read.task_id, task, "{task}");
+    }
+}
+
+#[tokio::test]
+async fn settled_records_reopen_without_their_result_and_stay_deduped() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("completions.sqlite");
+    {
+        let router = open_sqlite_router(&path).with_max_attempts(1);
+        router.record(record("delivered", "p")).await.unwrap();
+        router.record(record("gave-up", "p")).await.unwrap();
+        router.record(record("waited", "p")).await.unwrap();
+        router.record(record("live", "p")).await.unwrap();
+        router.claim_pending("p", 2).unwrap();
+        router.mark_delivered(&["delivered"]).unwrap();
+        let gave_up = router.mark_failed(&["gave-up"]).unwrap();
+        assert_eq!(gave_up[0].result.text, "result of gave-up");
+        router.tombstone("waited").unwrap();
+    }
+    let router = open_sqlite_router(&path);
+    let store = router.store();
+    let pending = router.pending_for("p");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].task_id, "live");
+    assert_eq!(pending[0].result.text, "result of live");
+    for (task, state) in [
+        ("delivered", CompletionState::Delivered),
+        ("gave-up", CompletionState::GaveUp),
+        ("waited", CompletionState::Tombstoned),
+    ] {
+        let settled = store.get(task).unwrap();
+        assert_eq!(settled.state, state, "{task}");
+        assert_eq!(settled.result, CompletionResult::default(), "{task}");
+        assert_eq!(
+            settled.attempts,
+            u32::from(state != CompletionState::Tombstoned),
+            "{task}"
+        );
+        let outcome = router.record(record(task, "p")).await.unwrap();
+        let expected = if state == CompletionState::Tombstoned {
+            RecordOutcome::Suppressed
+        } else {
+            RecordOutcome::Duplicate
+        };
+        assert_eq!(outcome, expected, "{task}");
+    }
+    assert_eq!(router.claim_pending("p", 10).unwrap().len(), 1);
+    assert_eq!(router.cancel_parent("p").unwrap(), 1);
+    drop(router);
+    let router = open_sqlite_router(&path);
+    assert!(router.pending_for("p").is_empty());
+    assert_eq!(
+        router.record(record("live", "p")).await.unwrap(),
+        RecordOutcome::Suppressed,
+        "a withdrawn record stays tombstoned across a reopen"
+    );
+}
+
+#[tokio::test]
 async fn the_store_keeps_the_latest_record_per_task() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
     let mut first = record("t1", "p");
     store.put(&first).unwrap();
@@ -130,9 +252,9 @@ async fn the_store_keeps_the_latest_record_per_task() {
 #[tokio::test]
 async fn migration_listing_fails_on_corrupt_records_while_legacy_listing_skips_them() {
     use serde_json::json;
-    use tinystoragedrivers_core::Precondition;
+    use tinyagents_storage_kit::Precondition;
 
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
     store.put(&record("corrupt", "p")).unwrap();
     store
@@ -158,9 +280,8 @@ async fn migration_listing_fails_on_corrupt_records_while_legacy_listing_skips_t
 
 #[tokio::test]
 async fn compaction_drops_settled_records_only_and_keeps_pending_work() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("completions.sqlite");
-    let router = open_router(&path);
+    let storage = MemoryBackend::new();
+    let router = open_router(&storage);
     router.record(record("old", "p")).await.unwrap();
     router.claim_pending("p", 1).unwrap();
     router.mark_delivered(&["old"]).unwrap();
@@ -169,7 +290,7 @@ async fn compaction_drops_settled_records_only_and_keeps_pending_work() {
     assert_eq!(router.compact(Duration::from_millis(1)).unwrap(), 1);
     router.record(record("after", "p")).await.unwrap();
     drop(router);
-    let router = open_router(&path);
+    let router = open_router(&storage);
     let mut ids: Vec<_> = router
         .pending_for("p")
         .into_iter()
@@ -191,8 +312,11 @@ fn clocked_store() -> (DriverCompletionStore, Arc<std::sync::atomic::AtomicU64>)
         let now = Arc::clone(&now);
         Arc::new(move || now.load(std::sync::atomic::Ordering::SeqCst))
     };
-    let storage = MemoryStorage::with_clock(clock);
-    let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
+    let connection = MemoryConnection::with_clock(clock);
+    let docs = connection
+        .for_scope(Scope::new("local").unwrap())
+        .documents();
+    let store = DriverCompletionStore::new(docs).unwrap();
     (store, now)
 }
 
@@ -222,6 +346,7 @@ fn compaction_drops_settled_records_older_than_the_window_like_the_in_memory_sto
     let mut recent = record("recent", "p");
     recent.state = CompletionState::Delivered;
     driver.put(&recent).unwrap();
+    recent.updated_at = real_now;
     memory.put(&recent).unwrap();
     assert_eq!(memory.compact(Duration::from_secs(1)).unwrap(), 2);
     assert_eq!(driver.compact(Duration::from_secs(1)).unwrap(), 2);
@@ -235,20 +360,19 @@ fn compaction_drops_settled_records_older_than_the_window_like_the_in_memory_sto
 
 #[tokio::test]
 async fn a_cancelled_parent_stays_cancelled_after_a_reopen() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("completions.sqlite");
+    let storage = MemoryBackend::new();
     {
-        let router = open_router(&path);
+        let router = open_router(&storage);
         router.cancel_parent("p").unwrap();
     }
-    let router = open_router(&path);
+    let router = open_router(&storage);
     assert_eq!(
         router.record(record("late", "p")).await.unwrap(),
         RecordOutcome::Suppressed
     );
     router.resume_parent("p");
     drop(router);
-    let router = open_router(&path);
+    let router = open_router(&storage);
     assert!(matches!(
         router.record(record("later", "p")).await.unwrap(),
         RecordOutcome::Recorded { .. }
@@ -257,8 +381,8 @@ async fn a_cancelled_parent_stays_cancelled_after_a_reopen() {
 
 #[tokio::test]
 async fn an_unreadable_record_is_skipped_without_hiding_the_rest() {
-    use tinystoragedrivers_core::Precondition;
-    let storage = MemoryStorage::new();
+    use tinyagents_storage_kit::Precondition;
+    let storage = MemoryBackend::new();
     let docs = docs_of(&storage, "local");
     let store = DriverCompletionStore::new(docs.clone()).unwrap();
     store.put(&record("good", "p")).unwrap();
@@ -277,7 +401,7 @@ async fn an_unreadable_record_is_skipped_without_hiding_the_rest() {
 
 #[tokio::test]
 async fn scopes_keep_completions_apart() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let alice = DriverCompletionStore::new(docs_of(&storage, "alice")).unwrap();
     let bob = DriverCompletionStore::new(docs_of(&storage, "bob")).unwrap();
     alice.put(&record("t", "p")).unwrap();
@@ -287,14 +411,14 @@ async fn scopes_keep_completions_apart() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_sync_trait_works_from_a_multi_thread_runtime() {
-    let store = DriverCompletionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let store = DriverCompletionStore::new(docs_of(&MemoryBackend::new(), "local")).unwrap();
     store.put(&record("mt", "p")).unwrap();
     assert!(store.get("mt").is_some());
 }
 
 #[tokio::test]
 async fn completions_are_v2_documents_with_key_ids_and_metadata_update_times() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let docs = docs_of(&storage, "local");
     let store = DriverCompletionStore::new(docs.clone()).unwrap();
     store.put(&record("c/1", "p")).unwrap();

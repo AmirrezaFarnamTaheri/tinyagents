@@ -9,6 +9,12 @@
 use crate::retry::RetryPolicy;
 use crate::runtime::{InvalidArgsPolicy, PayloadCapture, RunPolicy, UnknownToolPolicy};
 
+/// Maximum output token budget used by the host for one interactive turn.
+///
+/// This is a host-selected cap, not a default applied by `RunPolicy`; embedders
+/// keep their existing behavior unless they explicitly use it.
+pub const AGENT_TURN_MAX_OUTPUT_TOKENS: u32 = 16_384;
+
 /// Default per-turn wall-clock ceiling, in seconds. A pure runaway guard over
 /// the whole turn: hang detection is the per-call ceiling below, so a long
 /// productive turn is not handed a shrinking remainder as its next call's

@@ -77,22 +77,11 @@ fn spawn_error_message_includes_the_os_source() {
 #[cfg(unix)]
 #[tokio::test]
 async fn provider_pipes_large_request_to_cli_stdin() {
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = tempfile::tempdir().expect("tempdir");
     let script = dir.path().join("claude");
-    let staging = dir.path().join("claude.staging");
-    std::fs::write(
-        &staging,
-        r#"#!/bin/sh
-cat > "$0.stdin"
-printf '%s\n' '{"type":"result","result":"captured","is_error":false}'
-"#,
-    )
-    .expect("write fake claude");
-    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
-        .expect("make fake claude executable");
-    std::fs::rename(&staging, &script).expect("publish fake claude");
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/providers/claude_agent_sdk/fixtures/fake-claude");
+    std::os::unix::fs::symlink(&fixture, &script).expect("link fake claude fixture");
 
     let config = ClaudeAgentSdkConfig {
         binary: script.display().to_string(),

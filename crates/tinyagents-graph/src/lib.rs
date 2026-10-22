@@ -89,10 +89,8 @@ pub use orchestration::{
     CancelledDetachedTask, DetachedTaskRegistry, DetachedTaskRegistryError, DetachedTaskSnapshot,
     DetachedTaskWaitOutcome, DriverTaskStore, InMemoryTaskStore, OrchestrationControlOutcome,
     OrchestrationTaskFilter, OrchestrationTaskKind, OrchestrationTaskRecord,
-    OrchestrationTaskResult, OrchestrationTaskSpec, OrchestrationTaskStatus, OrchestrationTool,
-    OrchestrationToolKind, SteeringRegistry, TaskStore, orchestration_tool_schema,
-    orchestration_tool_schemas, orchestration_tools, orchestration_tools_with_steering,
-    register_orchestration_tools,
+    OrchestrationTaskResult, OrchestrationTaskSpec, OrchestrationTaskStatus, SteeringRegistry,
+    TaskStore,
 };
 pub use parallel::{FailurePolicy, ItemOutcome, ParallelOptions, ParallelOutcome, map_reduce};
 pub use recursion::{
@@ -103,7 +101,9 @@ pub use reducer::{
     OverwriteStateReducer, Reducer, SetUnionReducer, StateReducer,
 };
 pub use status::GraphRunStatus;
-pub use storage::{import_legacy_leases, import_legacy_task_cache, storage_schema};
+pub use storage::{
+    collections, import_legacy_leases, import_legacy_task_cache, open_storage, storage_schema,
+};
 pub use stream::{
     CollectingSink, GraphEvent, GraphEventEnvelope, GraphEventSink, NoopSink, StreamMode,
     StreamProjection, project_graph_event,

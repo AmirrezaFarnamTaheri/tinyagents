@@ -305,6 +305,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         state: &State,
         request: &mut ModelRequest,
     ) -> Result<()> {
+        // Restore request-scoped content in registration order. Dispatch
+        // observers are registered after request rewriters, so restored state
+        // remains the final request content.
         for middleware in &self.middlewares {
             middleware.after_model_rewrite(ctx, state, request).await?;
         }
@@ -485,6 +488,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         Ok(())
     }
 
+    /// Observes actual executor entry in registration order.
+    ///
+    /// See [`Middleware::observe_tool_execution`] for the attempt and identity
+    /// contract. Observation does not request control or synthesize lifecycle
+    /// events; the executor remains the sole source of execution evidence.
+    pub fn run_observe_tool_execution(
+        &self,
+        ctx: &RunContext<Ctx>,
+        state: &State,
+        invocation: &ToolInvocationIdentity,
+        target: &dyn tinytools::Tool,
+        arguments: &serde_json::Value,
+    ) {
+        for mw in &self.middlewares {
+            mw.observe_tool_execution(ctx, state, invocation, target, arguments);
+        }
+    }
+
     /// Runs every middleware's [`Middleware::on_tool_delta`] in registration
     /// order for one streamed tool-progress delta.
     ///
@@ -503,7 +524,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
     /// bookkeeping events per streamed tool-progress delta — noise a
     /// `ModelCompleted`-based exporter had to filter, for a hook that (unlike
     /// `before_tool`/`after_tool`) can fire many times per call. Both delta
-    /// hooks now agree: bracket every non-delta hook, skip both delta hooks.
+    /// hooks now agree: bracket lifecycle hooks, skip both delta hooks and
+    /// the synchronous executor-entry observer.
     /// A caller that needs to observe delta-level middleware activity should
     /// instrument the hook implementation itself.
     pub async fn run_on_tool_delta(
@@ -532,6 +554,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
     ) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter().rev(), |mw| mw
             .after_tool_control(ctx, state, invocation, result))
+    }
+
+    /// Notifies middleware after host screening and outcome classification.
+    pub async fn run_after_tool_output_screened(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        invocation: &ToolInvocationIdentity,
+        result: &ToolResult,
+        model_output: &str,
+    ) -> Result<()> {
+        for mw in self.middlewares.iter() {
+            mw.after_tool_output_screened(ctx, state, invocation, result, model_output)
+                .await?;
+        }
+        Ok(())
     }
 
     /// Runs every middleware's [`Middleware::check_nested_tool`] in

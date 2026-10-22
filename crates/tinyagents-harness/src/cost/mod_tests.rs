@@ -214,6 +214,7 @@ fn estimates_each_component() {
         cache_creation_tokens: 200,
         reasoning_tokens: 10,
         charged_amount: None,
+        charged_amount_nanos: None,
         context_window_tokens: None,
     };
     let cost = estimate_cost(&pricing(), &usage);
@@ -243,6 +244,7 @@ fn cache_and_reasoning_tokens_are_not_double_counted() {
         cache_creation_tokens: 0,
         reasoning_tokens: 0,
         charged_amount: None,
+        charged_amount_nanos: None,
         context_window_tokens: None,
     };
     let cost = estimate_cost(&pricing(), &usage);
@@ -328,6 +330,7 @@ fn tiered_pricing_falls_back_to_flat_rate_for_unset_tier_fields() {
         cache_creation_tokens: 0,
         reasoning_tokens: 0,
         charged_amount: None,
+        charged_amount_nanos: None,
         context_window_tokens: None,
     };
     let cost = estimate_cost(&pricing, &usage);

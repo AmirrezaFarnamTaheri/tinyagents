@@ -13,16 +13,16 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tinyagents-tasks = { path = "../tinyagents-tasks", version = "2.10.0", default-features = false }
-tinyagents-harness = { path = "../tinyagents-harness", version = "2.10.0", default-features = false, features = [
+tinyagents-tasks = { path = "../tinyagents-tasks", version = "2.11.0", default-features = false }
+tinyagents-harness = { path = "../tinyagents-harness", version = "2.11.0", default-features = false, features = [
     "langfuse",
 ] }
-tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.4.1" }
+tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.5.0" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.6.0" }
 tokio = { workspace = true, features = ["sync", "time", "macros", "rt", "rt-multi-thread", "fs"] }
 tracing = { workspace = true }
 # Storage ports (no database client) for `DriverCheckpointer`.
-tinystoragedrivers-core = { workspace = true }
+tinyagents-storage-kit = { workspace = true }
 
 [features]
 default = []
@@ -38,8 +38,7 @@ storage-drivers = []
 tracing = ["tinyagents-harness/tracing"]
 
 [dev-dependencies]
-tinystoragedrivers-sqlite = { workspace = true }
-tempfile = { workspace = true }
+tinystoragedrivers-testkit = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
 [lints]

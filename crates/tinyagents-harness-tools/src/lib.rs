@@ -16,8 +16,12 @@ mod wait;
 
 #[cfg(feature = "goals")]
 pub mod goals;
+#[cfg(feature = "todos")]
+pub mod scratchpad;
 #[cfg(feature = "skills")]
 pub mod skills;
+#[cfg(feature = "state-block")]
+pub mod state_block;
 #[cfg(feature = "subagents")]
 pub mod subagents;
 #[cfg(feature = "todos")]
