@@ -202,7 +202,7 @@ where
         if entry.owner_id != owner_id {
             return Err(DetachedTaskRegistryError::NotOwned);
         }
-        if (self.is_terminal)(&entry.status.borrow()) {
+        if self.is_settled(&entry.status) {
             return Err(DetachedTaskRegistryError::AlreadyDone);
         }
         if let Some(token) = entry.cancellation.take() {
@@ -521,13 +521,14 @@ where
         self.cancel_where(|_| true)
     }
 
-    /// Prunes every entry whose latest watched status is terminal.
+    /// Prunes every entry whose latest watched status is terminal, or whose
+    /// status sender is gone.
     pub fn sweep_terminal(&self) -> std::result::Result<usize, DetachedTaskRegistryError> {
         let removed = {
             let mut guard = self.lock()?;
             let task_ids: Vec<_> = guard
                 .iter()
-                .filter(|(_, entry)| (self.is_terminal)(&entry.status.borrow()))
+                .filter(|(_, entry)| self.is_settled(&entry.status))
                 .map(|(task_id, _)| task_id.clone())
                 .collect();
             for task_id in &task_ids {
@@ -539,6 +540,12 @@ where
             self.steering.deregister(task_id);
         }
         Ok(removed.len())
+    }
+
+    /// Whether a task is done: its latest status is terminal, or its status
+    /// sender is gone, so nothing will ever publish, drain a steer or settle it.
+    fn is_settled(&self, status: &watch::Receiver<Status>) -> bool {
+        status.has_changed().is_err() || (self.is_terminal)(&status.borrow())
     }
 
     fn ensure_live_owned(
@@ -553,7 +560,7 @@ where
         if entry.owner_id != owner_id {
             return Err(DetachedTaskRegistryError::NotOwned);
         }
-        if (self.is_terminal)(&entry.status.borrow()) {
+        if self.is_settled(&entry.status) {
             return Err(DetachedTaskRegistryError::AlreadyDone);
         }
         Ok(())
@@ -564,7 +571,7 @@ where
         let entry = guard
             .get(task_id)
             .ok_or(DetachedTaskRegistryError::Unknown)?;
-        if (self.is_terminal)(&entry.status.borrow()) {
+        if self.is_settled(&entry.status) {
             return Err(DetachedTaskRegistryError::AlreadyDone);
         }
         Ok(())
