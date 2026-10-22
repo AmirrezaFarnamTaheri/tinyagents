@@ -176,24 +176,6 @@ impl DriverRunLedger {
         }
     }
 
-    async fn ensure_fts(&self, id: String, row: &FtsRow) -> Result<()> {
-        let value = serde_json::to_value(row).map_err(StorageError::from)?;
-        match self
-            .scoped
-            .documents()
-            .put(HIST_FTS, &id, value, Precondition::Absent)
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(error)
-                if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) =>
-            {
-                Ok(())
-            }
-            Err(error) => Err(error.into()),
-        }
-    }
-
     /// Page `filter` over `collection` ordered by `sort`, returning rows and the total.
     async fn page_sorted<T: Stored + Send>(
         &self,
@@ -310,8 +292,6 @@ impl SessionHistoryStore for DriverRunLedger {
                 self.import_if_absent(HIST_SESSIONS, &key(&[&session.id])?, encode(session)?)
                     .await?,
             );
-            self.ensure_fts(session_fts_id(&session.id)?, &session_fts_row(session))
-                .await?;
         }
         report.sessions = super::super::import::ImportCounts::new(import.sessions.len(), imported);
 
@@ -328,11 +308,6 @@ impl SessionHistoryStore for DriverRunLedger {
                 self.import_if_absent(HIST_MESSAGES, &message_id(message.id)?, encode(message)?)
                     .await?,
             );
-            self.ensure_fts(
-                message_fts_id(message.id)?,
-                &message_fts_row(&message.session_id, &message.content),
-            )
-            .await?;
         }
         Counters::new(self.scoped.documents())
             .set_at_least(HISTORY_OWNER, MESSAGE_COUNTER, highest)
@@ -352,17 +327,13 @@ impl SessionHistoryStore for DriverRunLedger {
                 self.import_if_absent(HIST_TOOL_CALLS, &tool_call_id(call.id)?, encode(call)?)
                     .await?,
             );
-            self.ensure_fts(
-                tool_fts_id(call.id)?,
-                &tool_fts_row(&call.session_id, &call.tool_name),
-            )
-            .await?;
         }
         Counters::new(self.scoped.documents())
             .set_at_least(HISTORY_OWNER, TOOL_CALL_COUNTER, highest)
             .await?;
         report.tool_calls =
             super::super::import::ImportCounts::new(import.tool_calls.len(), imported);
+        self.history_reindex().await?;
         Ok(report)
     }
 
