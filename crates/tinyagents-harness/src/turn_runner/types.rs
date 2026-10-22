@@ -313,6 +313,7 @@ pub enum TurnRunnerError {
 struct ActiveTurn<P> {
     request_id: String,
     cancel: crate::CancellationToken,
+    cancellable: bool,
     generation: u64,
     queue: Arc<RunQueue<TurnRequest<P>>>,
 }
@@ -424,7 +425,7 @@ where
         let mut cancelled = Vec::new();
         if let Some(turn) = active
             .get(&key)
-            .filter(|turn| request_id.is_none_or(|id| turn.request_id == id))
+            .filter(|turn| turn.cancellable && request_id.is_none_or(|id| turn.request_id == id))
         {
             turn.queue.clear().await;
             turn.cancel.cancel();
@@ -472,6 +473,9 @@ where
     pub async fn live_turns(&self) -> Vec<LiveTurn> {
         let mut live = Vec::new();
         for ((scope, thread_id), turn) in self.active.lock().await.iter() {
+            if !turn.cancellable {
+                continue;
+            }
             live.push(LiveTurn {
                 scope: scope.clone(),
                 thread_id: thread_id.clone(),
@@ -644,6 +648,7 @@ where
                 let state = ActiveTurn {
                     request_id: request.request_id.clone(),
                     cancel: cancellation.clone(),
+                    cancellable: true,
                     generation: self
                         .next_generation
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -779,6 +784,15 @@ where
                 deadline,
             )
             .await;
+        if result.is_ok()
+            && !self
+                .close_cancellation_window(&request, active_generation, &cancellation)
+                .await
+        {
+            self.host.checkin(&request).await;
+            drop(_session_guard);
+            return self.cancel_generation(&request, active_generation).await;
+        }
         self.host.checkin(&request).await;
         drop(_session_guard);
 
@@ -991,6 +1005,7 @@ where
             let reserved = ActiveTurn {
                 request_id: request.request_id.clone(),
                 cancel: crate::CancellationToken::new(),
+                cancellable: true,
                 generation: self
                     .next_generation
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -1235,6 +1250,53 @@ where
         {
             active.remove(&key);
         }
+    }
+
+    async fn close_cancellation_window(
+        &self,
+        request: &TurnRequest<P>,
+        generation: Option<u64>,
+        cancellation: &crate::CancellationToken,
+    ) -> bool {
+        if cancellation.is_cancelled() {
+            return false;
+        }
+        if request.host_authored {
+            return true;
+        }
+        if request.disposition == QueueDisposition::Parallel {
+            let key = (
+                request.scope.clone(),
+                request.thread_id.clone(),
+                request.request_id.clone(),
+            );
+            let mut active = self.parallel_active.lock().await;
+            let Some(token) = active.get(&key) else {
+                return !cancellation.is_cancelled();
+            };
+            if token.is_cancelled() {
+                return false;
+            }
+            active.remove(&key);
+            self.parallel_queues.lock().await.remove(&key);
+            return true;
+        }
+        let Some(generation) = generation else {
+            return true;
+        };
+        let key = (request.scope.clone(), request.thread_id.clone());
+        let mut active = self.active.lock().await;
+        let Some(turn) = active
+            .get_mut(&key)
+            .filter(|turn| turn.generation == generation)
+        else {
+            return !cancellation.is_cancelled();
+        };
+        if turn.cancel.is_cancelled() {
+            return false;
+        }
+        turn.cancellable = false;
+        true
     }
 
     async fn clear_parallel_tracking(&self, request: &TurnRequest<P>) {

@@ -126,10 +126,12 @@ async fn completed_execution_is_not_reported_as_cancelled_during_checkin() {
     };
 
     checkin_started.notified().await;
-    assert!(runner
-        .cancel_requests(&scope, "thread-a", Some("first"))
-        .await
-        .is_empty());
+    assert!(
+        runner
+            .cancel_requests(&scope, "thread-a", Some("first"))
+            .await
+            .is_empty()
+    );
     release_checkin.notify_one();
 
     assert!(run.await.unwrap().is_ok());
