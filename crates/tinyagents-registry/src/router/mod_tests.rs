@@ -174,7 +174,8 @@ impl RouteSource for TestRoutes {
             "catalog/model-a" => DefaultModelRoute::ManagedCatalog,
             // Exercise the router's syntax guard even if a host classifier is
             // overly broad about these values.
-            "hint:chat" | "old-chat" => DefaultModelRoute::ExplicitProvider,
+            "old-chat" => DefaultModelRoute::ExplicitProvider,
+            model if model.starts_with("hint:") => DefaultModelRoute::ExplicitProvider,
             _ => DefaultModelRoute::Other,
         }
     }
@@ -276,6 +277,16 @@ fn hint_and_legacy_default_values_are_never_provider_routes() {
         };
         assert_eq!(router.provider_for_role("chat", &source), "managed");
     }
+}
+
+#[test]
+fn explicit_unknown_hint_default_routes_passthrough() {
+    let routes = TestRoutes {
+        primary: "managed".into(),
+        default: Some("hint:new-tier".into()),
+        ..TestRoutes::default()
+    };
+    assert_eq!(router().provider_for_role("chat", &routes), "hint:new-tier");
 }
 
 #[test]
