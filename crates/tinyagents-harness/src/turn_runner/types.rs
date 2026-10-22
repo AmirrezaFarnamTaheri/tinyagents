@@ -854,15 +854,18 @@ where
             self.clear_parallel_tracking(request).await;
         }
         for queued_request in queued {
+            let queued_message = format!("queued turn was not run: {message}");
+            let mut queued_classification = classification.clone();
+            queued_classification.message.clone_from(&queued_message);
             self.events
                 .classified_failure(
                     &queued_request,
                     TerminalEvent::Failed {
                         request_id: queued_request.request_id.clone(),
-                        message: format!("queued turn was not run: {message}"),
+                        message: queued_message,
                         class: class.clone(),
                     },
-                    classification.clone(),
+                    queued_classification,
                 )
                 .await;
         }
