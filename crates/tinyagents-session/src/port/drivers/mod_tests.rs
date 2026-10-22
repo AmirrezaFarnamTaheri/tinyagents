@@ -33,7 +33,7 @@ fn memory() -> DriverSessionStores {
 fn bootstrap_manifest_contains_all_session_document_indexes() {
     use tinystoragedrivers_types::IndexSpec;
     let specs = DriverSessionStores::collection_specs();
-    assert_eq!(specs.len(), 5);
+    assert_eq!(specs.len(), 6);
     assert_eq!(specs[0].name, "session.transcript_entries");
     assert_eq!(
         specs[0].indexes,
@@ -58,6 +58,7 @@ fn bootstrap_manifest_contains_all_session_document_indexes() {
     );
     assert_eq!(specs[3], DriverStore::collection_spec());
     assert_eq!(specs[4].name, "tsd.leases", "generation reservations");
+    assert_eq!(specs[5].name, "tsd.migrations");
     for spec in specs {
         spec.validate().unwrap();
         assert!(spec.ttl_field.is_none());

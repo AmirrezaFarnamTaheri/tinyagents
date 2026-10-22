@@ -34,7 +34,8 @@ use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission}
 #[cfg(test)]
 use tinyagents_storage_kit::Scope;
 use tinyagents_storage_kit::{
-    Blocking, MigrateOptions, Registry, ScopedStorage, with_migration_lease,
+    Blocking, MIGRATIONS_COLLECTION, MigrateOptions, Registry, ScopedStorage,
+    with_migration_lease,
 };
 use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::{CollectionSpec, StorageError};
@@ -150,6 +151,7 @@ impl DriverSessionStores {
         specs.push(turn_states::collection_spec());
         specs.push(DriverStore::collection_spec());
         specs.push(transcripts::leases_spec());
+        specs.push(CollectionSpec::new(MIGRATIONS_COLLECTION));
         specs
     }
 
@@ -465,14 +467,18 @@ pub async fn open_agent_storage(storage: &ScopedStorage) -> Result<(), StorageEr
 ///
 /// Hosts may use this list to prepare a backend without depending on the
 /// registry migration API. It includes the session, ledger, history, and
-/// conversation collections plus the shared TSD primitive collections used
-/// by those owners.
+/// conversation collections plus the shared TSD primitive and migration
+/// collections used by those owners.
 #[must_use]
 pub fn collections() -> Vec<CollectionSpec> {
     let mut collections = BTreeMap::new();
     for spec in tinyagents_storage_kit::primitives::collection_specs() {
         collections.insert(spec.name.clone(), spec);
     }
+    collections.insert(
+        MIGRATIONS_COLLECTION.to_owned(),
+        CollectionSpec::new(MIGRATIONS_COLLECTION),
+    );
     for schema in [
         schema::storage_schema(),
         crate::ledger_storage_schema(),
