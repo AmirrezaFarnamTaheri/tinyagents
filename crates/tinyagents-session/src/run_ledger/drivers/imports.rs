@@ -1,6 +1,6 @@
 //! Host-owned migration writes into the already-bound ledger scope.
 
-use super::events::{EventHead, head_after};
+use super::events::EventHead;
 use super::storage::{
     AGENTS, EFFECTS, EVENTS, LEDGER_OWNER, MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, encode,
     key, put_op, workflow_lease_key,
@@ -73,37 +73,6 @@ impl DriverRunLedger {
             .map(|row| row.doc))
     }
 
-    async fn raise_event_heads(&self, events: &[crate::run_ledger::types::RunEvent]) -> Result<()> {
-        let mut highest = std::collections::BTreeMap::<String, u64>::new();
-        for event in events {
-            highest
-                .entry(event.run_id.clone())
-                .and_modify(|value| *value = (*value).max(event.sequence))
-                .or_insert(event.sequence);
-        }
-        for (run_id, sequence) in highest {
-            self.change(
-                super::storage::EVENT_HEADS,
-                &run_id,
-                |current: Option<EventHead>| {
-                    let next = head_after(sequence);
-                    match current {
-                        Some(head)
-                            if head
-                                .next
-                                .is_none_or(|value| next.is_some_and(|n| value >= n)) =>
-                        {
-                            Ok((None, ()))
-                        }
-                        _ => Ok((Some(EventHead { next }), ())),
-                    }
-                },
-            )
-            .await?;
-        }
-        Ok(())
-    }
-
     pub(super) async fn import_agent_family_rows(
         &self,
         import: AgentFamilyImport,
@@ -117,7 +86,6 @@ impl DriverRunLedger {
         }
         if let Some(receipt) = self.agent_import_receipt(&import.operation_id).await? {
             return if receipt.fingerprint == import.source_fingerprint {
-                self.raise_event_heads(&import.events).await?;
                 Ok(receipt.report)
             } else {
                 Err(StorageError::conflict("agent import operation source changed").into())
@@ -145,19 +113,27 @@ impl DriverRunLedger {
             import.runs.len() + import.events.len() + import.telemetry.len() + 1,
         );
         for run in &import.runs {
-            writes.push(put_op(AGENTS, key(&[&run.id])?, run, Precondition::Absent)?);
+            let mut run = run.clone();
+            run.telemetry = None;
+            writes.push(put_op(
+                AGENTS,
+                key(&[&run.id])?,
+                &run,
+                Precondition::Absent,
+            )?);
         }
-        let mut highest = std::collections::BTreeMap::<String, u64>::new();
+        let mut heads = std::collections::BTreeMap::<String, u64>::new();
         for event in &import.events {
             if event.sequence == 0 || event.sequence > i64::MAX as u64 {
                 return Err(
                     StorageError::invalid_input("legacy event sequence is out of range").into(),
                 );
             }
-            highest
+            let next = event.sequence + 1;
+            heads
                 .entry(event.run_id.clone())
-                .and_modify(|value| *value = (*value).max(event.sequence))
-                .or_insert(event.sequence);
+                .and_modify(|value| *value = (*value).max(next))
+                .or_insert(next);
             writes.push(put_op(
                 EVENTS,
                 key(&[&event.run_id, &event.sequence.to_string()])?,
@@ -170,6 +146,16 @@ impl DriverRunLedger {
                 TELEMETRY,
                 key(&[&row.run_id])?,
                 row,
+                Precondition::Absent,
+            )?);
+        }
+        for (run_id, next) in heads {
+            writes.push(put_op(
+                super::storage::EVENT_HEADS,
+                key(&[&run_id])?,
+                &EventHead {
+                    next: (next <= i64::MAX as u64).then_some(next),
+                },
                 Precondition::Absent,
             )?);
         }
@@ -189,7 +175,6 @@ impl DriverRunLedger {
             Err(error) if error.kind() == ErrorKind::Conflict => {
                 if let Some(receipt) = self.agent_import_receipt(&import.operation_id).await? {
                     return if receipt.fingerprint == import.source_fingerprint {
-                        self.raise_event_heads(&import.events).await?;
                         Ok(receipt.report)
                     } else {
                         Err(StorageError::conflict("agent import operation source changed").into())
@@ -200,10 +185,6 @@ impl DriverRunLedger {
             Err(error) => return Err(error.into()),
         }
 
-        // The imported event rows and receipt are atomic. Heads are derived
-        // allocator state and are raised after that commit and on every replay.
-        let _ = highest;
-        self.raise_event_heads(&import.events).await?;
         Ok(report)
     }
 
