@@ -1,6 +1,26 @@
 use super::*;
 use crate::run_queue::{QueueLane, QueueMode, RunQueue};
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+#[derive(Clone)]
+struct WrappedQueueRequest(TurnRequest);
+
+impl TurnQueueItem<serde_json::Value> for WrappedQueueRequest {
+    fn from_turn_request(request: TurnRequest) -> Self {
+        Self(request)
+    }
+
+    fn as_turn_request(&self) -> &TurnRequest {
+        &self.0
+    }
+
+    fn into_turn_request(self) -> TurnRequest {
+        self.0
+    }
+}
 
 #[derive(Default)]
 struct Host {
@@ -14,6 +34,7 @@ struct Host {
     fingerprint_release: Option<Arc<tokio::sync::Notify>>,
     checkins: std::sync::atomic::AtomicUsize,
     runs: std::sync::atomic::AtomicUsize,
+    wrapped_queue: Mutex<Option<Arc<RunQueue<WrappedQueueRequest>>>>,
 }
 
 #[async_trait::async_trait]
@@ -97,6 +118,61 @@ impl TurnHost for Host {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
     async fn cancel_children(&self, _request: &TurnRequest) {}
+}
+
+#[async_trait::async_trait]
+impl TurnHost<serde_json::Value, WrappedQueueRequest> for Host {
+    async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        <Self as TurnHost>::checkout(self, request).await
+    }
+
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        <Self as TurnHost>::checkout_fork(self, request).await
+    }
+
+    async fn validate_fingerprint(
+        &self,
+        request: &TurnRequest,
+        session: &TurnSession,
+    ) -> Result<(), String> {
+        <Self as TurnHost>::validate_fingerprint(self, request, session).await
+    }
+
+    fn run_origin(&self, request: &TurnRequest) -> serde_json::Value {
+        <Self as TurnHost>::run_origin(self, request)
+    }
+
+    async fn run(
+        &self,
+        _request: &TurnRequest,
+        _session: &TurnSession,
+        _origin: &serde_json::Value,
+        cancellation: crate::CancellationToken,
+        queue: Arc<RunQueue<WrappedQueueRequest>>,
+        _progress: tokio::sync::mpsc::Sender<TurnSignal>,
+    ) -> Result<TurnResult, String> {
+        *self.wrapped_queue.lock().unwrap() = Some(queue);
+        self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let (Some(started), Some(release)) = (&self.started, &self.release) {
+            started.notify_one();
+            tokio::select! {
+                _ = release.notified() => {},
+                _ = cancellation.cancelled() => return Err("cancelled".into()),
+            }
+        }
+        Ok(TurnResult {
+            reply: "done".into(),
+            data: serde_json::Value::Null,
+        })
+    }
+
+    async fn checkin(&self, request: &TurnRequest) {
+        <Self as TurnHost>::checkin(self, request).await
+    }
+
+    async fn cancel_children(&self, request: &TurnRequest) {
+        <Self as TurnHost>::cancel_children(self, request).await
+    }
 }
 
 #[tokio::test]
@@ -198,6 +274,117 @@ async fn cancelled_parallel_turn_remains_visible_until_cleanup_finishes() {
         Err(TurnRunnerError::Cancelled)
     ));
     assert!(runner.live_turns().await.is_empty());
+}
+
+#[tokio::test]
+async fn custom_queue_item_shares_runner_queue_and_preserves_complete_request() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release),
+        ..Host::default()
+    });
+    let runner = Arc::new(TurnRunner::<
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        serde_json::Value,
+        WrappedQueueRequest,
+    >::new(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    ));
+
+    let mut primary = request(QueueDisposition::Interrupt, false);
+    primary.request_id = "primary".into();
+    let scope = primary.scope.clone();
+    let primary_run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(primary).await })
+    };
+    started.notified().await;
+
+    let mut runner_queued = request(QueueDisposition::Followup, true);
+    runner_queued.scope.profile_id = Some("profile-x".into());
+    runner_queued.thread_id = "thread-from-runner".into();
+    runner_queued.request_id = "runner-queued-id".into();
+    runner_queued.text = "runner text".into();
+    runner_queued.payload = serde_json::json!({"client":"runner","attachment":[1,2]});
+    runner_queued.deadline = Some(Duration::from_secs(31));
+    runner_queued.idle_timeout = Some(Duration::from_secs(7));
+    assert!(matches!(
+        runner.run(runner_queued.clone()).await,
+        Err(TurnRunnerError::Queued)
+    ));
+
+    let shared_queue = host.wrapped_queue.lock().unwrap().clone().unwrap();
+    let runner_item = shared_queue
+        .snapshot()
+        .await
+        .into_iter()
+        .find(|(_, item)| item.as_turn_request().request_id == "runner-queued-id")
+        .expect("runner-enqueued item is in the host's queue");
+    assert_eq!(runner_item.0, QueueLane::Followup);
+    let stored_runner_request = runner_item.1.as_turn_request();
+    assert_eq!(stored_runner_request.scope, runner_queued.scope);
+    assert_eq!(stored_runner_request.thread_id, runner_queued.thread_id);
+    assert_eq!(stored_runner_request.request_id, runner_queued.request_id);
+    assert_eq!(stored_runner_request.text, runner_queued.text);
+    assert_eq!(stored_runner_request.payload, runner_queued.payload);
+    assert_eq!(
+        stored_runner_request.host_authored,
+        runner_queued.host_authored
+    );
+    assert_eq!(stored_runner_request.disposition, runner_queued.disposition);
+    assert_eq!(stored_runner_request.deadline, runner_queued.deadline);
+    assert_eq!(
+        stored_runner_request.idle_timeout,
+        runner_queued.idle_timeout
+    );
+
+    let mut host_queued = request(QueueDisposition::Steer, false);
+    host_queued.request_id = "host-queued-id".into();
+    host_queued.text = "host text".into();
+    host_queued.payload = serde_json::json!({"client":"host","locale":"en"});
+    shared_queue
+        .push(
+            QueueLane::Steer,
+            WrappedQueueRequest::from_turn_request(host_queued.clone()),
+        )
+        .await;
+    let runner_snapshot = runner.queue_snapshot(&scope, "thread-a").await;
+    let host_item = runner_snapshot
+        .iter()
+        .find(|(_, item)| item.as_turn_request().request_id == "host-queued-id")
+        .expect("host-enqueued item is visible in runner's snapshot");
+    assert_eq!(host_item.0, QueueLane::Steer);
+    assert_eq!(host_item.1.as_turn_request().scope, host_queued.scope);
+    assert_eq!(
+        host_item.1.as_turn_request().request_id,
+        host_queued.request_id
+    );
+    assert_eq!(host_item.1.as_turn_request().text, host_queued.text);
+    assert_eq!(host_item.1.as_turn_request().payload, host_queued.payload);
+
+    assert_eq!(
+        runner
+            .cancel_requests(&scope, "thread-a", Some("primary"))
+            .await,
+        ["primary"]
+    );
+    assert!(matches!(
+        primary_run.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
 }
 
 #[derive(Default)]
