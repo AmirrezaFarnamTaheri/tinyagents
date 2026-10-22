@@ -54,7 +54,7 @@ pub struct AgentFamilyImportReport {
 
 /// Fully decoded legacy rows outside the receipt-backed agent family.
 #[derive(Debug, Clone, Default)]
-pub struct LegacyLedgerImport {
+pub struct LegacyLedgerRows {
     pub workflow_runs: Vec<WorkflowRun>,
     pub teams: Vec<AgentTeam>,
     pub members: Vec<AgentTeamMember>,
@@ -64,7 +64,7 @@ pub struct LegacyLedgerImport {
 
 /// Per-family counts from a retryable, only-if-absent ledger import.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LegacyLedgerImportReport {
+pub struct LegacyLedgerRowsReport {
     pub workflow_runs: ImportCounts,
     pub teams: ImportCounts,
     pub members: ImportCounts,

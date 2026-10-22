@@ -15,7 +15,7 @@
 //! an error instead of using another backend.
 
 use super::error::LedgerResult as Result;
-use super::import::{AgentFamilyImport, AgentFamilyImportReport, LegacyLedgerImport, LegacyLedgerImportReport};
+use super::import::{AgentFamilyImport, AgentFamilyImportReport, LegacyLedgerRows, LegacyLedgerRowsReport};
 use chrono::{DateTime, Utc};
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
@@ -50,8 +50,8 @@ pub trait RunLedgerStore: Send + Sync {
     /// be retried safely. Source discovery and decoding remain host concerns.
     async fn import_legacy_rows(
         &self,
-        import: LegacyLedgerImport,
-    ) -> Result<LegacyLedgerImportReport>;
+        import: LegacyLedgerRows,
+    ) -> Result<LegacyLedgerRowsReport>;
 
     /// Inserts a new [`AgentRun`] or merges fields into an existing one with the
     /// same id, returning the row as stored.

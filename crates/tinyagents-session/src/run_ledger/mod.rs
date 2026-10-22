@@ -27,8 +27,8 @@ pub use history::{
     SessionStart,
 };
 pub use import::{
-    AgentFamilyImport, AgentFamilyImportReport, ImportCounts, LegacyLedgerImport,
-    LegacyLedgerImportReport,
+    AgentFamilyImport, AgentFamilyImportReport, ImportCounts, LegacyLedgerRows,
+    LegacyLedgerRowsReport,
 };
 pub use port::RunLedgerStore;
 
