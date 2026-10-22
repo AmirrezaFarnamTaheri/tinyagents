@@ -92,7 +92,7 @@ inert while the thread has no plan with open steps.
 
 ```rust,ignore
 use std::sync::Arc;
-use tinyagents_graph::{TodoItem, TodoStatus, TodoTool, todo_store};
+use tinyagents_harness_tools::todos::{TodoItem, TodoStatus, TodoTool, todo_store};
 use tinyagents_harness::store::{InMemoryStore, Store};
 
 let store: Arc<dyn Store> = Arc::new(InMemoryStore::default());

@@ -11,7 +11,7 @@ Usage accounting normalizes token and cache usage across providers.
 - Track embedding input tokens, characters, vector counts, dimensions, and
   batch counts when providers expose them.
 - Track tool/model call counts.
-- Roll usage up by call, node, agent, graph, thread, and run.
+- Roll usage up by call, agent, thread, and run.
 - Emit usage events.
 - Preserve provider-specific token details.
 - Mark provider-reported versus locally estimated usage.

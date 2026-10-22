@@ -215,7 +215,7 @@ watching across a pause and skips a child whose ledger shows a cancellation.
 
 One `SubAgentPolicy { timeout, retry, budget, retry_after_tool_calls }` governs
 every path (it is defined in orchestration and temporarily re-exported by
-`tinyagents-graph` for the deprecated graph subagent node).
+the former graph subagent node).
 
 - **Timeout.** `SubagentDriver` runs the executor under its own child token; on
   elapse the child is cancelled (the caller's token is not) and the outcome is
@@ -275,7 +275,7 @@ or timed-out attempt is not reported (an error carries no run).
 
 ## Graph compatibility
 
-`tinyagents-graph` temporarily re-exports `SubAgentBudget`, `SubAgentPolicy`,
+the removed graph crate re-exported `SubAgentBudget`, `SubAgentPolicy`,
 and `SubAgentOutput` from this crate while its deprecated subagent node is
 removed.
 

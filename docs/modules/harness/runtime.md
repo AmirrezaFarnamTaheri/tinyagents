@@ -274,8 +274,8 @@ installed (calling it again replaces the previous one).
 
 ## Middleware
 
-Middleware is the main extension point for behavior that cuts across providers,
-tools, and graph nodes.
+Middleware is the main extension point for behavior that cuts across providers
+and tools.
 
 ```rust
 #[async_trait]

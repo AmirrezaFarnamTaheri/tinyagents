@@ -1,8 +1,6 @@
 # Harness Streaming Feature
 
-The harness must support streaming independently from the graph. Graph streaming
-can forward harness events, but direct harness users should also be able to
-consume streams.
+The harness supports caller-consumable run events and provider model streams.
 
 ## Responsibilities
 
@@ -41,8 +39,8 @@ tracer streams:
 - `events`: all harness events
 - `final`: final result only
 
-Every stream item should carry run ids and component ids so web UIs can merge
-harness streams with graph streams.
+Every stream item should carry run ids and component ids so web UIs can identify
+the run that emitted it.
 
 ## Stream Items
 
@@ -77,8 +75,8 @@ Streaming adapters must merge chunks deterministically:
 ## Implementation status (runtime-comparison Phase 3, C1/C2)
 
 The design above names the target shape; here is what exists in code today,
-one layer down at `tinyinference_llm::model::ModelStreamItem` and
-`tinyagents_harness::stream`.
+one layer down at `tinyinference_llm::model::ModelStreamItem` and the
+`agent_loop::stream` caller API.
 
 **Block-indexed streaming (C1, vendor `tinyinference-llm`).** Content block
 indexes are respected via new `ModelStreamItem` variants: `BlockStart {
@@ -106,56 +104,3 @@ specifically `ProviderError` — now carries `partial_message:
 Option<AssistantMessage>` and `stop_reason: Option<String>` on both
 adapters, so a mid-stream failure does not discard whatever content had
 already arrived.
-
-**Frame codec (C2, `crates/tinyagents-harness/src/stream/frame.rs`).**
-`AssistantFrame` is the durable, journal-friendly encoding of a block-aware
-stream: `FrameEncoder` turns a sequence of `ModelStreamItem`s into frames
-(only the block-indexed and terminal items are framed — `Started` and the
-flat compatibility deltas carry no information a reducer needs beyond what
-the block items already have), emitting a periodic
-`AssistantFrame::ToolArgsCheckpoint { index, json_so_far }` full snapshot for
-long tool-argument streams. `reduce_frames(&[AssistantFrame]) ->
-PartialAssistantMessage` folds a — possibly truncated — frame sequence back
-into closed `content` blocks plus whatever `open_blocks` were still
-in-progress, without needing the original provider stream. A checkpoint is a
-full snapshot, not a delta, so a reader that only has frames from a
-checkpoint onward (earlier per-fragment frames pruned from the journal) still
-reduces to a consistent result.
-
-**Mid-tool progress (C2).** A running tool reports through
-`tinytools::ToolRunContext::report_progress(ToolProgress { message, fraction,
-partial })` (a default no-op, so existing tools are unchanged). The loop gives
-every executing call a progress gate (`crates/tinyagents-harness/src/tool/progress/mod.rs`)
-that emits `AgentEvent::ToolProgressDetail { call_id, message, fraction, partial }`
-live and queues a `ToolDelta` for `Middleware::on_tool_delta`. Guarantees:
-
-- Every `ToolProgressDetail` for a call falls between its `ToolStarted` and its
-  terminal `ToolCompleted`/`ToolFailed`, in the order the tool reported it.
-- The gate closes when the tool's future settles (return, error, timeout),
-  before the terminal event. An update reported afterwards (for example from a
-  task the tool spawned) is dropped, never emitted late; the open check and the
-  emit share one lock, so there is no race window.
-- A concurrent batch interleaves progress across calls; each call's progress
-  still precedes its own terminal event (terminals are emitted by the fold,
-  in call order, after the batch).
-- `on_tool_delta` needs `&mut RunContext`, which the executing tool holds, so
-  middleware sees a call's deltas replayed in order immediately after the call
-  settles and before `after_tool` and the terminal event. It observes; the live
-  event is already out. A failing hook is logged and does not fail the call.
-- The gate also closes if the dispatch future is dropped (run cancelled or
-  timed out mid-call), so a task the tool spawned cannot emit afterwards.
-- Flooding is coalesced: at most 32 events per second per call (fixed,
-  crate-private `ToolProgressLimits`); beyond that the newest value of each
-  field replaces the held update. There is no timer: the held update is emitted
-  on the first update of the next window or when the call settles (that final
-  flush is exempt from the window limit), so the final reported state is never
-  lost.
-- The middleware replay queue is bounded (newest 64 deltas, each `content`
-  capped at 4 KiB, partials serialized only up to the cap) and is not filled at
-  all when the run has no middleware.
-- An event listener must not call `report_progress` re-entrantly (events are
-  emitted under the call's gate lock).
-
-The typed
-`HarnessStreamItem` enum, `StreamMode::{tools, usage, cost, events, final}`,
-and stream replay from event stores are still design-only.

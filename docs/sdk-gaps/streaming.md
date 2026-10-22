@@ -54,28 +54,14 @@ TinyAgents has `HarnessEventJournal`, `StoreEventJournal`, `HarnessStatusStore`,
 and `HarnessRunStatus`. OpenHuman still bridges TinyAgents events into its own
 progress system, cost tracker, run ledger, and UI status stream.
 
-Late attach is now partially solved. `tinyagents_harness::stream::{AssistantFrame,
-FrameEncoder, reduce_frames}` give a durable per-block frame codec:
-`FrameEncoder` turns a `ModelStreamItem` sequence into frames (periodic
-`ToolArgsCheckpoint` snapshots bound replay depth), and `reduce_frames` folds
-a — possibly truncated — sequence into a `PartialAssistantMessage`. Every
-`GraphEvent` is now wrapped in a `GraphEventEnvelope { run_id, task_id, ns,
-seq, event }` (`seq` monotonic per emitting graph instance, fresh for an
-embedded subgraph), and `tinyagents_graph::stream::StreamProjection` folds
-graph envelopes plus harness `AgentEvent`s into cursor-ordered
-`messages`/`tool_calls`/`subagents` views; `StreamProjection::since(cursor)`
-is the late-attach replay primitive. `seq` does not chain across a subgraph
-boundary into one run-tree-wide sequence yet (D4's `TaskId` is the natural
-place for that). `JournalGraphSink::dropped()` exposes its best-effort drop
-counter so lossy-under-load is observable; the harness-side
-`HarnessEventJournal` has no equivalent yet. Filters/compaction/redaction
-hooks are still missing on both sides.
+The harness exposes typed `AgentEvent`s and durable event/status journals. Hosts can
+replay those records, but the journals do not yet provide cursor-addressable
+replay, replay windows, or stream projections.
 
 Remaining work:
 
 - Replay windows, filters, compaction, and redaction hooks on the durable
-  journals (cursors/`since` now exist for `StreamProjection`; the journals
-  themselves still lack cursor-addressable replay).
+  journals (the journals still lack cursor-addressable replay).
 - Status stores with parent/root lineage, thread-scoped listing, phase details,
   active tool/model call ids, usage totals, cost totals, and terminal summaries.
 - Redaction policies for prompts, tool args, tool results, PII, secrets, and
