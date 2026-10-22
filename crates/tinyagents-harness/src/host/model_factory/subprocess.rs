@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use tinyinference_llm::model::ChatModel;
+
 /// Host-owned context passed to the Claude subprocess provider constructors.
 #[cfg(feature = "claude-code")]
 pub struct SubprocessProviderContext {
@@ -84,7 +88,3 @@ where
         _ => Ok(None),
     }
 }
-
-#[cfg(test)]
-#[path = "model_factory_tests.rs"]
-mod tests;

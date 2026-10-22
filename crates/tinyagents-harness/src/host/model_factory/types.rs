@@ -1,3 +1,9 @@
+use std::sync::Arc;
+
+use tinyinference_llm::model::{ChatModel, ResolvedModelRoute};
+
+use crate::error::Result;
+
 /// Construction options passed through without interpretation by the harness.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BuildOpts {
@@ -64,10 +70,3 @@ pub trait ModelFactory<State: Send + Sync> {
         request: &ModelBuildRequest,
     ) -> Result<(Arc<dyn ChatModel<State>>, ResolvedModelRoute)>;
 }
-
-use std::sync::Arc;
-
-use tinyinference_llm::model::{ChatModel, ResolvedModelRoute};
-
-use crate::error::Result;
-

@@ -12,6 +12,5 @@ pub use types::{BuildOpts, ModelBuildGate, ModelBuildRequest, ModelFactory, Mode
 
 #[cfg(feature = "claude-code")]
 pub use subprocess::{
-    SubprocessProviderContext, build_claude_subprocess_model,
-    build_claude_subprocess_model_with,
+    SubprocessProviderContext, build_claude_subprocess_model, build_claude_subprocess_model_with,
 };

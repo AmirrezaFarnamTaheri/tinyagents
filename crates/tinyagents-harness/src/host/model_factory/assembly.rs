@@ -11,7 +11,6 @@ use tinyinference_llm::model::{
 use crate::error::Result;
 use crate::host::model_resolver::PrebuiltModelResolver;
 
-
 use super::types::{BuildOpts, ModelBuildGate, ModelBuildRequest, ModelFactory, ModelPurpose};
 pub struct TurnModelSetBuilder<'a, State: Send + Sync, F: ?Sized, G: ?Sized> {
     factory: &'a F,
@@ -365,7 +364,6 @@ impl<State: Send + Sync + 'static> TurnModelSet<State> {
         self.route_errors.get(route).cloned()
     }
 }
-
 
 #[cfg(test)]
 #[path = "../model_factory_tests.rs"]

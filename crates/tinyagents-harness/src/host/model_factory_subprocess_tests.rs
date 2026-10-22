@@ -1,5 +1,7 @@
 #[cfg(feature = "claude-code")]
 use super::*;
+#[cfg(feature = "claude-code")]
+use crate::host::model_factory::{SubprocessProviderContext, build_claude_subprocess_model_with};
 
 #[cfg(feature = "claude-code")]
 #[test]
