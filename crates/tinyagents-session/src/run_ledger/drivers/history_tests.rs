@@ -2,12 +2,13 @@ use super::history::message_fts_id;
 use super::storage::{HIST_FTS, HIST_MESSAGES, HIST_SESSIONS, HIST_TOOL_CALLS};
 use super::*;
 use crate::run_ledger::history::{
-    MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryStore,
-    SessionStart,
+    MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryImport,
+    SessionHistoryStore, SessionStart,
 };
 use crate::testkit::MemoryStorage;
 use crate::types::{SessionSearchParams, SessionStatus};
 use chrono::Duration;
+use chrono::{DateTime, Utc};
 use tinyagents_storage_kit::Precondition;
 use tinystoragedrivers_api::StorageBackend;
 
@@ -38,6 +39,104 @@ fn end(status: SessionStatus) -> SessionEnd {
         cached_input_tokens: 5,
         cost_usd: 0.25,
     }
+}
+
+#[tokio::test]
+async fn session_history_import_preserves_explicit_ids_times_and_is_idempotent() {
+    let backend = MemoryStorage::new();
+    let ledger = ledger_on(&backend, "history-import");
+    let started_at = DateTime::parse_from_rfc3339("2024-02-03T04:05:06Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let created_at = DateTime::parse_from_rfc3339("2024-02-03T04:06:07Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let session = SessionRecord {
+        id: "imported-session".into(),
+        agent_definition_id: "agent".into(),
+        agent_definition_name: "Agent".into(),
+        session_key: "key".into(),
+        parent_session_id: None,
+        thread_id: Some("thread".into()),
+        source_channel: None,
+        status: SessionStatus::Completed,
+        model: Some("model".into()),
+        turn_count: 4,
+        input_tokens: 12,
+        output_tokens: 34,
+        cached_input_tokens: 5,
+        cost_usd: 0.12,
+        transcript_path: None,
+        started_at,
+        ended_at: Some(created_at),
+    };
+    let message = SessionMessage {
+        id: 41,
+        session_id: session.id.clone(),
+        role: "assistant".into(),
+        content: "historical response".into(),
+        reasoning_content: Some("reasoning".into()),
+        model: Some("model".into()),
+        input_tokens: Some(12),
+        output_tokens: Some(34),
+        cost_usd: Some(0.12),
+        created_at,
+    };
+    let call = SessionToolCall {
+        id: 52,
+        session_id: session.id.clone(),
+        message_id: Some(message.id),
+        tool_name: "lookup".into(),
+        tool_input: Some("{}".into()),
+        tool_output: Some("ok".into()),
+        status: "completed".into(),
+        duration_ms: Some(9),
+        created_at,
+    };
+    let import = SessionHistoryImport {
+        sessions: vec![session.clone()],
+        messages: vec![message.clone()],
+        tool_calls: vec![call.clone()],
+    };
+    let report = ledger.import_session_history(import.clone()).await.unwrap();
+    assert_eq!(report.sessions.imported, 1);
+    assert_eq!(report.messages.imported, 1);
+    assert_eq!(report.tool_calls.imported, 1);
+    assert_eq!(
+        ledger.get_session(&session.id).await.unwrap(),
+        Some(session)
+    );
+    assert_eq!(
+        ledger
+            .list_messages("imported-session", None)
+            .await
+            .unwrap(),
+        vec![message]
+    );
+    assert_eq!(
+        ledger
+            .list_tool_calls("imported-session", None)
+            .await
+            .unwrap(),
+        vec![call]
+    );
+
+    let replay = ledger.import_session_history(import).await.unwrap();
+    assert_eq!(replay.sessions.already_present, 1);
+    assert_eq!(replay.messages.already_present, 1);
+    assert_eq!(replay.tool_calls.already_present, 1);
+    assert_eq!(
+        ledger
+            .record_message(NewSessionMessage {
+                session_id: "imported-session".into(),
+                role: "user".into(),
+                content: "new message".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+        42
+    );
 }
 
 async fn say(ledger: &DriverRunLedger, session: &str, content: &str) -> i64 {
