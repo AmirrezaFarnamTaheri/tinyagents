@@ -8,12 +8,12 @@
 //! append and after every batch, and deleted once the source is gone.
 //!
 //! A step function is pure, so a resumed run recomputes the target's entries
-//! and appends the ones the target does not have yet. The target's own length
-//! is the authority for where to continue: a crash between an append and its
-//! progress save leaves the target one batch ahead of `written`, which is
-//! fine. A target that is shorter than the recorded progress, longer than the
-//! mapped entries, or non-empty with no recorded progress was not written by
-//! this step and is refused with `Conflict`.
+//! and appends the ones the target does not have yet. A crash between an append
+//! and its progress save can leave the target one batch ahead of `written`;
+//! the runner reads and verifies that existing target prefix before continuing.
+//! A mismatched prefix, a target shorter than recorded progress, a target
+//! longer than mapped entries, or a non-empty target with no progress is
+//! refused with `Conflict`.
 //!
 //! Every append is conditional on the length the run observed
 //! (`append_batch_if_offset`), so a second migrator working on the same stream
@@ -117,6 +117,20 @@ async fn migrate_stream(
             )));
         }
         _ => {}
+    }
+    if have > 0 {
+        let existing = read_all(streams.as_ref(), &target, context.batch_size).await?;
+        let expected_prefix = values
+            .iter()
+            .take(usize::try_from(have).unwrap_or(usize::MAX))
+            .cloned()
+            .collect::<Vec<_>>();
+        if existing.len() as u64 != have || existing != expected_prefix {
+            return Err(StorageError::conflict(format!(
+                "step `{}` of `{}`: stream `{target}` contains entries that do not match the migrated prefix; refusing to resume",
+                step.id, step.item
+            )));
+        }
     }
     let mut progress = recorded.unwrap_or_else(|| Progress {
         owner: context.owner.to_string(),

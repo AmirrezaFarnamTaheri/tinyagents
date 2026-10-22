@@ -90,7 +90,6 @@ pub(crate) async fn import_legacy_leases_with_lease(
         .ensure_collection(&primitives::leases_collection_spec())
         .await?;
     let leases = Leases::new(storage.documents());
-    let now = now_ms() as i64;
     let mut carried = 0_u64;
     for legacy in &LEGACY {
         for row in legacy_rows(storage, legacy.leases).await? {
@@ -103,6 +102,7 @@ pub(crate) async fn import_legacy_leases_with_lease(
             let Some(thread) = v1_lease_thread(&row.id) else {
                 continue;
             };
+            let now = now_ms() as i64;
             if expires <= now {
                 continue;
             }
