@@ -18,6 +18,9 @@ struct State {
     denied: bool,
     events: Mutex<Vec<ExecAuditEvent>>,
     backend_calls: AtomicUsize,
+    authorization_calls: AtomicUsize,
+    authorization_request: Mutex<Option<ExecAuthorizationRequest>>,
+    manager_lookup_calls: AtomicUsize,
     request: Mutex<Option<ExecRequest>>,
     backend_outcome: Mutex<Option<ExecBackendOutcome>>,
 }
@@ -35,9 +38,11 @@ impl ExecGate for Gate {
     }
     async fn authorize(
         &self,
-        _: &ExecAuthorizationRequest,
+        request: &ExecAuthorizationRequest,
         _: Option<&dyn ToolRunContext>,
     ) -> Result<ExecPermit, ExecDenied> {
+        self.0.authorization_calls.fetch_add(1, Ordering::SeqCst);
+        *self.0.authorization_request.lock().unwrap() = Some(request.clone());
         if self.0.denied {
             return Err(ExecDenied("installation denied".into()));
         }
@@ -189,6 +194,103 @@ async fn denied_install_never_calls_backend_and_records_denial() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].outcome, ExecAuditOutcome::GateDenied);
     assert!(!events[0].process_attempted);
+}
+
+#[tokio::test]
+async fn denied_install_is_authorized_before_manager_resolution() {
+    for (args, expected_manager) in [
+        (json!({"package":"ripgrep"}), "auto"),
+        (
+            json!({"package":"ripgrep","manager":"unsupported"}),
+            "unsupported",
+        ),
+    ] {
+        let (tool, state) = tool(true);
+        let result = tool
+            .execute_with_context_and_path_lookup(args, ToolCallOptions::default(), None, |_| {
+                state.manager_lookup_calls.fetch_add(1, Ordering::SeqCst);
+                false
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.text(), "installation denied");
+        assert_eq!(state.authorization_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(state.manager_lookup_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            state
+                .authorization_request
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .operation,
+            ExecOperation::Install {
+                package: "ripgrep".to_owned(),
+                manager: expected_manager.to_owned(),
+            }
+        );
+        let events = state.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].outcome, ExecAuditOutcome::GateDenied);
+        assert!(!events[0].process_attempted);
+    }
+}
+
+#[tokio::test]
+async fn authorized_install_manager_resolution_failure_is_audited_without_execution() {
+    let cases = [
+        (
+            json!({"package":"ripgrep"}),
+            "auto",
+            "No supported package manager detected on PATH. Pass 'manager' explicitly (e.g. brew, pipx, npm, cargo).",
+        ),
+        (
+            json!({"package":"ripgrep","manager":"unsupported"}),
+            "unsupported",
+            "Unsupported package manager 'unsupported'",
+        ),
+    ];
+
+    for (args, expected_manager, expected_error) in cases {
+        let (tool, state) = tool(false);
+        let lookup_state = state.clone();
+        let result = tool
+            .execute_with_context_and_path_lookup(
+                args,
+                ToolCallOptions::default(),
+                None,
+                move |_| {
+                    lookup_state
+                        .manager_lookup_calls
+                        .fetch_add(1, Ordering::SeqCst);
+                    false
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.text(), expected_error);
+        assert_eq!(state.authorization_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(state.backend_calls.load(Ordering::SeqCst), 0);
+        let events = state.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].authorized);
+        assert!(!events[0].allowed);
+        assert!(!events[0].process_attempted);
+        assert_eq!(
+            events[0].outcome,
+            ExecAuditOutcome::InstallManagerResolutionFailed
+        );
+        assert_eq!(events[0].backend_selection.as_deref(), Some("test"));
+        assert_eq!(
+            events[0].operation,
+            ExecOperation::Install {
+                package: "ripgrep".to_owned(),
+                manager: expected_manager.to_owned(),
+            }
+        );
+    }
 }
 
 #[tokio::test]
