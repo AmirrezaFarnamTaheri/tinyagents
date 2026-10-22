@@ -134,7 +134,7 @@ async fn the_block_follows_the_plan_and_the_tool_results() {
     let failed = block(&mw, &mut ctx).await.unwrap();
     assert!(failed.contains("(1 tool round on it)"), "{failed}");
     assert!(
-        failed.contains("  - last round, shell `python3 migrate.py`: exit code 127; stderr: bash: python3: command not found"),
+        failed.contains("  - last round, shell `python3 migrate.py`: \"exit code 127; stderr: bash: python3: command not found\""),
         "{failed}"
     );
     assert!(failed.contains("Reported not found: python3"), "{failed}");
@@ -191,7 +191,7 @@ async fn nested_tool_results_are_recorded_in_the_run_state() {
         .await
         .expect("nested failure is visible");
     assert!(
-        rendered.contains("shell `make test`: nested tool returned an error"),
+        rendered.contains("shell `make test`: \"nested tool returned an error\""),
         "{rendered}"
     );
 }
