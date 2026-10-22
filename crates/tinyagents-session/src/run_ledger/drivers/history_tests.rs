@@ -183,9 +183,17 @@ async fn collided_native_session_does_not_receive_legacy_child_rows() {
         .await
         .unwrap();
 
-    assert_eq!(report.sessions.already_present, 1);
+    // The stored session is a different one, so nothing here is "already
+    // present": a host that reads it that way marks the import done and the
+    // legacy rows are gone for good.
+    assert_eq!(report.sessions.already_present, 0);
     assert_eq!(report.messages.imported, 0);
+    assert_eq!(report.messages.already_present, 0);
     assert_eq!(report.tool_calls.imported, 0);
+    assert_eq!(report.tool_calls.already_present, 0);
+    for counts in [report.sessions, report.messages, report.tool_calls] {
+        assert_eq!(counts.read - counts.imported - counts.already_present, 1);
+    }
     assert_eq!(ledger.get_session("shared-id").await.unwrap(), Some(native));
     assert!(
         ledger
