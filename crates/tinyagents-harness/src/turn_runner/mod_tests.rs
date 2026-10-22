@@ -1918,16 +1918,33 @@ async fn live_turns_and_cancel_requests_report_scoped_primary_before_parallel() 
         let runner = runner.clone();
         tokio::spawn(async move { runner.run(parallel_request).await })
     };
-    while host.runs.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+
+    let mut other_agent_request = request(QueueDisposition::Interrupt, false);
+    other_agent_request.request_id = "other-agent".into();
+    other_agent_request.scope.agent_id = "agent-b".into();
+    let other_agent_scope = other_agent_request.scope.clone();
+    let other_agent = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(other_agent_request).await })
+    };
+    while host.runs.load(std::sync::atomic::Ordering::SeqCst) < 3 {
         tokio::task::yield_now().await;
     }
 
     let live = runner.live_turns().await;
     assert_eq!(
         live.iter()
-            .map(|turn| (turn.request_id.as_str(), turn.parallel))
+            .map(|turn| (
+                turn.scope.agent_id.as_str(),
+                turn.request_id.as_str(),
+                turn.parallel,
+            ))
             .collect::<Vec<_>>(),
-        [("primary", false), ("parallel", true)]
+        [
+            ("agent-a", "primary", false),
+            ("agent-a", "parallel", true),
+            ("agent-b", "other-agent", false),
+        ]
     );
 
     assert_eq!(
@@ -1940,6 +1957,16 @@ async fn live_turns_and_cancel_requests_report_scoped_primary_before_parallel() 
     ));
     assert!(matches!(
         parallel.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    assert_eq!(
+        runner
+            .cancel_requests(&other_agent_scope, "thread-a", None)
+            .await,
+        ["other-agent".to_owned()]
+    );
+    assert!(matches!(
+        other_agent.await.unwrap(),
         Err(TurnRunnerError::Cancelled)
     ));
     assert!(runner.live_turns().await.is_empty());
