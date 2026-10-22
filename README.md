@@ -167,8 +167,8 @@ All live in
   **`openai_graph_agent`** — provider-backed chat, tool calling, structured
   output, and a graph-driven agent (all need `OPENAI_API_KEY`).
 - **`subconscious_loop`** — an offline, testable autonomous closed-loop
-  harness (see its own
-  [README](crates/tinyagents-integration-tests/examples/subconscious_loop/README.md)).
+  harness (see the source and test in
+  `crates/tinyagents-integration-tests/examples/subconscious_loop/`).
 
 ## Documentation
 

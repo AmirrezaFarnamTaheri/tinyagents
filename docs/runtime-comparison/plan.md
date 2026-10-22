@@ -5,11 +5,9 @@ format and contract changes (stream, checkpoint, error, tool result) once,
 early, and non-exhaustively so later work does not break downstream matches;
 prefer the smallest change that closes a documented promise over a new
 abstraction. Every item is one PR unless marked (multi-PR). Finding ids
-(`H-C1`, `G-I3`, `W-I5`) refer to
-[`code-review-harness.md`](code-review-harness.md),
-[`code-review-graph.md`](code-review-graph.md) and
-[`code-review-workspace.md`](code-review-workspace.md); gap ids (`A1`,
-`D3`) refer to [`feature-gaps.md`](feature-gaps.md).
+(`H-C1`, `G-I3`, `W-I5`) refer to [`code-review-harness.md`](code-review-harness.md);
+graph and workspace review documents were removed in TinyAgents #61. Gap ids
+(`A1`, `D3`) refer to [`feature-gaps.md`](feature-gaps.md).
 
 ## Execution log
 

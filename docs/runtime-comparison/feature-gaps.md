@@ -3,8 +3,8 @@
 Cross-runtime view of what LangGraph/LangChain (LG), Pydantic AI (PA) and pi
 have that TinyAgents lacks or only partly has, with a layer decision for each.
 Per-runtime detail, API shapes and code excerpts live in
-[`langgraph.md`](langgraph.md), [`pydantic-ai.md`](pydantic-ai.md) and
-[`pi.md`](pi.md); the section numbers in the "Source" column point there.
+[`pydantic-ai.md`](pydantic-ai.md) and [`pi.md`](pi.md). LangGraph references
+in this historical gap inventory describe the external project.
 
 Layer legend: **RT** = TinyAgents runtime (crate named), **OH** = OpenHuman,
 **RT+OH** = primitive in the runtime, policy/UI in OpenHuman.
