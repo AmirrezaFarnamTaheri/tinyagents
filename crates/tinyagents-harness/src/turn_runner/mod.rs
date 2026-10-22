@@ -20,5 +20,5 @@ pub use types::{
 mod tests;
 
 #[cfg(test)]
-#[path = "api_tests.rs"]
-mod api_tests;
+#[path = "mod_api_tests.rs"]
+mod api_api_tests;
