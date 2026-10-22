@@ -59,22 +59,19 @@ Acceptance criteria:
   or a thin schema integration.
 - Storage features remain opt-in and keep the default crate dependency-light.
 
-### 17. Storage And Graph Conformance
+### 17. Storage Conformance
 
 Status: shipped.
 
 Every persistence layer has a shared contract-test suite, so a backend swap or
 a caller-supplied implementation can be certified rather than trusted:
-`tinyagents_graph::testkit::conformance` (checkpointer + task-store, run
-against memory/file/SQLite and JSONL in `tests/conformance.rs` and
-`tests/persistence_conformance.rs`); `tinyagents_harness::store::conformance`
+`tinyagents_harness::store::conformance`
 (`run_store_conformance`/`run_namespaced_store_conformance`, run against
 `InMemoryStore`/`FileStore`/`InMemoryNamespacedStore` in
 `tests/store_conformance.rs` — no in-tree SQLite `Store` exists yet); and
 `tinyagents_session::testkit::conformance` (run ledger + transcript history,
 run against SQLite and an in-memory double in `tests/session_conformance.rs`).
 See `docs/modules/harness/store.md` and
-`crates/tinyagents-session/src/README.md` for details. Parallel-agent
-order/failure/timeout/cancellation regression tests remain open (see the
-fuzz/e2e graph-agent orchestration tests instead).
+`crates/tinyagents-session/src/README.md` for details. Detached-task
+order/failure/timeout/cancellation regression tests remain open.
 

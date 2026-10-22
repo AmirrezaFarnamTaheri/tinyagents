@@ -245,7 +245,6 @@ from the journal rather than relying on in-memory broadcast delivery.
 `HarnessEventJournal`/`StoreEventJournal` exist as designed above (offset
 replay, no block-level detail). What is new this phase is a durable shape for
 *in-progress* assistant messages specifically:
-`tinyagents_harness::stream::{AssistantFrame, FrameEncoder, reduce_frames}`
 (`crates/tinyagents-harness/src/stream/frame.rs`) — see
 `docs/modules/harness/streaming.md`'s "Implementation status" for the codec
 itself. A journal that persists `AssistantFrame`s alongside its ordinary

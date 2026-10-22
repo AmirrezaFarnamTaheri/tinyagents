@@ -23,8 +23,6 @@
 //!
 //! - `tinyagents_harness::store` is namespaced key-value storage for live
 //!   runtime data. It is a substrate runs read and write during execution.
-//! - `tinyagents_graph::checkpoint` is durability for *resuming* an interrupted
-//!   graph run.
 //! - This crate is queryable history. Nothing resumes from it; it answers
 //!   "what happened", supports cross-session search, and lets a host recover
 //!   orchestration state after a restart.

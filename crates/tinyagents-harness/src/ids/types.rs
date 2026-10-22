@@ -98,10 +98,7 @@ pub enum ExecutionStatus {
     Failed,
     /// Cancelled before completion.
     Cancelled,
-    /// Stopped gracefully at a superstep boundary by a drain request (see
-    /// `tinyagents_graph::DrainSignal`): the in-flight superstep was allowed
-    /// to finish and the still-pending work was checkpointed, so the run is
-    /// resumable exactly like an interrupted one.
+    /// Stopped at a safe boundary after the active work completed.
     Drained,
 }
 
