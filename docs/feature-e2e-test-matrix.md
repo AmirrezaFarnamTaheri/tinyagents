@@ -11,12 +11,10 @@ tests remain valuable but do not close an E2E gap.
 
 | Surface | Existing integration coverage | Status |
 | --- | --- | --- |
-| Graph construction, routing, fan-out, checkpoints, interrupts, export, streaming, subgraphs, parallelism | `graph_durable.rs`, `e2e_complex_graph.rs`, `e2e_durable_interrupt.rs`, `e2e_graph_export.rs`, `feature_graph_{routing,fanout,parallel,streaming}.rs` | Covered |
-| Graph goals, todo board, task dispatch, subagents, observability | integration tests plus `crates/tinyagents-orchestration/tests/e2e_graph_subagent_node.rs` | Covered; delegation durability remains unit-only |
 | Harness loop, tools, structured output, middleware, retry, cache, streams, hosted execution | `harness_agent_loop.rs`, `feature_harness_*`, `e2e_{middleware,streaming_cancel,tool_policy}.rs`, `wave2_*` | Covered; optional features remain gaps |
 | Registry catalog, capability binding, diagnostics, observability | `e2e_registry_binding.rs`, `e2e_registry_observability_contracts.rs`, `feature_registry_{catalog,diagnostics}.rs` | Covered; router-to-runtime fallback is a gap |
 | Session records, retention, search, lifecycle, transcripts | `e2e_session_lifecycle.rs`, `feature_session_retention.rs`, `feature_session_transcript.rs`, persistence contracts | Covered; run-ledger workflows remain gaps |
-| Subagent orchestration | `crates/tinyagents-orchestration/tests/e2e_*subagent*.rs` and `hosted_subagents.rs` | Direct invocation, tools, reuse, limits, graph nodes, and hosted orchestration covered |
+| Subagent orchestration | `crates/tinyagents-orchestration/tests/e2e_*subagent*.rs` and `hosted_subagents.rs` | Direct invocation, tools, reuse, limits, and hosted orchestration covered |
 
 ## Prioritized execution backlog
 
@@ -33,8 +31,6 @@ tests remain valuable but do not close an E2E gap.
 
 | Feature | Test to add |
 | --- | --- |
-| Durable reviewed delegation | `e2e_graph_delegation.rs` with `DriverCheckpointer`, approval interrupt/resume, revision, and denial. |
-| Typed graph channels/barriers | `e2e_graph_channels.rs` for aggregate, barrier, ephemeral, conflict, events, and checkpoints. |
 | Workspace dispatch claims | A mixed tool-side-effect batch proving permitted parallelism, writer serialization, and unsafe-path rejection. |
 | Goal tools in a model loop | A scripted model invoking registered goal tools and an over-budget preflight block. |
 | SQLite cache across harness restart | Reopen a disk cache with a new harness and prove a cache hit avoids model call and billing. |

@@ -121,10 +121,10 @@ non-observer hooks are skipped (`Middleware::is_observer`).
 `crates/tinyagents-harness/src/{context,middleware,agent_loop}/*` and
 [`docs/modules/harness/middleware.md`](modules/harness/middleware.md#middleware-control-a1).
 
-Still open: routing a harness-level control outcome onto a graph `Command`
-node when the loop runs as a graph node, and "defer to task/sub-agent" as a
-control outcome — both remain graph/A5 (loop-as-`CompiledGraph`) territory,
-not yet implemented.
+Still open: a future workflow runtime could route harness-level control
+outcomes through graph commands and add a "defer to task/sub-agent" outcome.
+TinyAgents #61 removed the graph runtime; this remains future design work and
+is not a current harness capability.
 
 Acceptance criteria (harness scope):
 

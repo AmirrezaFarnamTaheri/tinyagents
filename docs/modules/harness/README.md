@@ -5,15 +5,14 @@ registration, tool registration, prompt assembly, middleware, event streaming,
 tracing, retries, limits, summarization, caching, usage accounting,
 pricing, sub-agent/orchestrator steering, and test support.
 
-The harness should be usable in three modes:
+The harness is currently used in two modes:
 
 1. direct model invocation
 2. model plus tools agent loop
-3. graph node runtime dependency
 
-It should not require the graph module. The graph module can depend on harness
-traits, but a user should be able to call a model or run a tool loop without
-constructing a graph.
+The graph runtime formerly provided a third mode, but was removed in TinyAgents
+#61. The harness now owns the direct model-tool-model loop and has no graph
+runtime dependency.
 
 ## Source Inspiration
 
@@ -89,9 +88,6 @@ tests for every adapter.
 - Dispatch tool calls through a registry with schema validation.
 - Expose retrievers and vector stores for retrieval-augmented context assembly.
 - Run the standard model-tool-model agent loop.
-- Represent the standard agent loop as an explicit state machine when callers
-  need inspection, checkpointing, HITL, branch/fork semantics, or graph-node
-  execution.
 - Apply middleware before and after model calls, tool calls, retries, and errors.
 - Enforce model-call limits, tool-call limits, timeouts, and retry policy.
 - Emit typed events for tracing, streaming, and tests.
@@ -110,28 +106,23 @@ tests for every adapter.
 - Provide deterministic test utilities.
 - Describe provider capability profiles so middleware can choose safe defaults.
 - Translate between provider-native message formats and TinyAgents messages.
-- Persist resolved model identity in response metadata, run status, events,
-  usage/cost rows, and durable agent or graph state for reuse.
+- Persist resolved model identity in response metadata, run status, events, and
+  usage/cost rows for reuse.
 - Support dynamic runtime context injection into tools and middleware without
   exposing private state to model-visible schemas.
 - Support model fallback, tool retry, rate limiting, and human interruption as
   explicit policies rather than ad hoc callbacks.
 - Support parent-orchestrator and human steering of sub-agents, orchestrator
-  agents, graph tasks, and harness loops through typed commands delivered at
+  agents, and harness loops through typed commands delivered at
   safe boundaries.
 - Queue host-owned payloads in steer, follow-up, and collected-context lanes
   without importing host transport or UI metadata into the harness.
-- Support durable graph runs with pause/resume, checkpoint listing, and
-  inspectable node transitions.
-- Support per-agent execution blueprints that describe how an agent runs
-  separately from what its prompt says.
-- Provide a standard conformance test suite for model, tool, store, stream, and
+- Provide a standard conformance test suite for model, tool, store, and
   middleware implementations.
 
 ## Non-Responsibilities
 
-- It does not own graph topology.
-- It does not decide graph routing except inside an agent-loop node.
+- It does not provide a workflow or state-graph runtime.
 - It does not hide provider-specific metadata when users need it.
 - It does not execute arbitrary workflow language source directly.
 - It does not require every provider to support every modality or output
@@ -156,7 +147,6 @@ crates/tinyagents-harness/src/
   cost.rs
   embeddings.rs
   events.rs
-  graph_runtime.rs
   limits.rs
   message.rs
   middleware.rs
@@ -170,7 +160,6 @@ crates/tinyagents-harness/src/
     types.rs
   runtime.rs
   steering.rs
-  stream.rs
   summarization.rs
   structured.rs
   store.rs
@@ -195,8 +184,6 @@ Feature ownership:
 - `embeddings`: embedding providers, vector stores, retrievers, indexing, and
   retrieval-context records.
 - `events`: typed harness events, sinks, streams, redaction adapters.
-- `graph_runtime`: explicit state graphs, node commands, reducers,
-  checkpointing, HITL, run records, and graph execution blueprints.
 - `limits`: model-call, tool-call, concurrency, timeout, and recursion policy.
 - `message`: structured messages, content blocks, tool call correlation.
 - `middleware`: before/after/wrap hooks and middleware stack ordering.
@@ -208,8 +195,9 @@ Feature ownership:
   collected-context payloads; hosts retain ownership of payload metadata.
 - `runtime`: high-level `AgentHarness` builder/facade.
 - `steering`: policy-checked parent/human steering of orchestrators,
-  sub-agents, graph tasks, and harness loops.
-- `stream`: token streams, tool progress streams, event streams, adapters.
+  sub-agents, and harness loops.
+- Streaming is provided through the agent loop and event APIs; the former
+  graph stream projection was removed in TinyAgents #61.
 - `summarization`: context summaries, message compaction, summary provenance.
 - `structured`: typed response formats and validation.
 - `store`: persistence contracts supplied by hosts.

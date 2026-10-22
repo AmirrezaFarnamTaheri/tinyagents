@@ -11,10 +11,10 @@ record whether the deadline landed before a provider call, during one, or
 after a call. Provider-start state is tracked separately so a host can tell a
 first-call failure from a preflight failure.
 
-The direct and graph loop drivers publish the outcome on `AgentRun` before
-running `after_agent` middleware. This lets middleware observe the same
-classification as the terminal event. Session hooks receive the typed outcome
-before the legacy terminal notification.
+The direct loop publishes the outcome on `AgentRun` before running
+`after_agent` middleware. This lets middleware observe the same classification
+as the terminal event. Session hooks receive the typed outcome before the
+legacy terminal notification.
 
 Turn lifecycle events announce appended messages and retract only messages
 that were previously announced. Initial input messages are treated as a seed
@@ -35,28 +35,11 @@ crate ends; it is `None` only when deserializing journals written before the
 field existed.
 
 Scope: the typed outcome and the turn and message lifecycle events
-(`TurnStarted`, `TurnCompleted`, `MessageAppended`) are published by both the
-direct loop and the graph loop driver, with the same semantics: input messages
-are never announced, each appended message is announced exactly once, and a
-nested tool call never produces a `MessageAppended`. The graph driver announces
-appends at the same points as the direct loop (before a turn's `ModelStarted`,
-after the assistant reply, after a tool batch, and at the end of the run,
-including after `after_agent`). `MessageRetracted` and `TranscriptRewritten`
-come from direct-loop recovery paths the graph rendition does not implement. The
-step-by-step `LoopIter` and `compile_loop` graph announce the same events and
-treat the transcript present at their first node activation (any node) as the seed. A node that
-interrupts discards its state and re-runs on resume, so the appends it announced
-are retracted with `MessageRetracted` first. A model node's turn is closed on an
-interrupt; a tools node leaves its turn open, and the re-run closes it with the
-real results. A fresh runtime resuming from a checkpoint continues the turn
-numbering from the checkpoint and re-opens the in-flight tool turn (without a
-second `TurnStarted`).
-
-Known difference from the direct loop: the graph rendition closes a turn before
-an output-retry prompt is announced (the direct loop announces the prompt first).
-A model or tools node that fails closes the turn it opened (and announces the
-results of calls that ran before the failure), so `LoopIter` and `compile_loop`
-need no driver epilogue.
+(`TurnStarted`, `TurnCompleted`, `MessageAppended`) are published by the direct
+loop. Input messages are never announced, each appended message is announced
+exactly once, and a nested tool call never produces a `MessageAppended`.
+`MessageRetracted` and `TranscriptRewritten` describe direct-loop recovery
+paths.
 
 ## `provider_started` and summarizers
 

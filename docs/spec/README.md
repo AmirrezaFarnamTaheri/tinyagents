@@ -155,8 +155,9 @@ All four milestones below have shipped as of v1.5.0.
 
 ### Milestone 1: Core Runtime (shipped)
 
-Chat message primitives, the model and tool traits, the state graph with
-direct and conditional edges, and the initial test/example suite.
+Chat message primitives, the model and tool traits, and the initial
+test/example suite. The original state-graph runtime was removed in TinyAgents
+#61.
 
 ### Milestone 2: Harness (shipped)
 
