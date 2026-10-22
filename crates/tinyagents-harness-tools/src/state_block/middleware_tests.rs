@@ -370,6 +370,48 @@ async fn a_run_without_a_thread_reads_the_fallback_key() {
     assert!(shown.contains("[>] 1. Configure postfix"), "{shown}");
 }
 
+#[tokio::test]
+async fn a_hidden_goal_leaves_the_plan_in_the_block() {
+    let store: Arc<dyn Store> = Arc::new(InMemoryStore::default());
+    goal_store::set(&store, THREAD, "Migrate the billing tables", None)
+        .await
+        .unwrap();
+
+    // Only a goal: hidden, nothing is left to show.
+    let hidden = StateBlockMiddleware::new(store.clone()).hide_goal(true);
+    assert_eq!(
+        block(&hidden, &mut ctx()).await,
+        None,
+        "nothing but the goal"
+    );
+
+    todo_store::replace(&store, THREAD, vec![TodoItem::new("Dump the schema")])
+        .await
+        .unwrap();
+    let shown = block(&StateBlockMiddleware::new(store.clone()), &mut ctx())
+        .await
+        .expect("goal and plan");
+    assert!(shown.contains("Migrate the billing tables"), "{shown}");
+    assert!(shown.contains("[>] 1. Dump the schema"), "{shown}");
+
+    let without_goal = block(&hidden, &mut ctx())
+        .await
+        .expect("the plan still shows");
+    assert!(
+        !without_goal.contains("Migrate the billing tables"),
+        "{without_goal}"
+    );
+    assert!(!without_goal.contains("Goal ("), "{without_goal}");
+    assert!(
+        without_goal.contains("[>] 1. Dump the schema"),
+        "{without_goal}"
+    );
+    assert!(
+        goal_store::get(&store, THREAD).await.unwrap().is_some(),
+        "the goal itself is untouched"
+    );
+}
+
 /// A note another middleware pushes in `before_model`, after the block went in.
 fn late_note(request: &mut ModelRequest) {
     request.messages.push(Message::user("web budget exhausted"));

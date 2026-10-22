@@ -36,6 +36,9 @@ pub struct StateBlockMiddleware {
     /// The plan and goal key for a run with no thread id: the scope the host's
     /// `todo` tool falls back to (for example a session id).
     pub(super) fallback_thread: Option<String>,
+    /// Leave the thread goal out of the block (see
+    /// [`StateBlockMiddleware::hide_goal`]).
+    pub(super) hide_goal: bool,
     /// Per-run ledgers, keyed by [`RunContext::instance_id`](tinyagents_harness::context::RunContext::instance_id).
     pub(super) runs: Mutex<HashMap<u64, RunLedger>>,
 }
