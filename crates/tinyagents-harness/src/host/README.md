@@ -50,7 +50,7 @@ embedding, not as a way to fake "unconfigured."
 | `ContextComposer`, `StaticContextComposer`, `TurnContextRequest` | `context_composer` | Builds a turn's system prompt and preamble (required). |
 | `SecurityGate`, `AllowAllSecurityGate`, `GateDecision`, `ScreenOutcome`, `ToolCallRequest`, `ContentOrigin` | `security_gate` | Authorizes tool calls, screens untrusted text (required). |
 | `ModelResolver<State>`, `FixedModelResolver`, `PrebuiltModelResolver`, `ModelResolveRequest` | `model_resolver` | Chooses the model for a turn (required). |
-| `ModelFactory<State>`, `ModelBuildGate`, `ModelBuildRequest`, `BuildOpts`, `ModelPurpose`, `TurnModelSet` | `model_factory` | Builds role-keyed primary, workload, and summarization models with host policy checks. |
+| `ModelFactory<State>`, `ModelBuildGate`, `ModelBuildRequest`, `BuildOpts`, `ModelPurpose`, `TurnModelSet` | `model_factory` | Builds role-keyed primary, workload, and summarization models with host policy checks. See [`model_factory/README.md`](model_factory/README.md) for assembly and provider boundaries. |
 | `AgentMemory`, `InMemoryAgentMemory`, `MemoryId`, `MemoryItem`, `NewMemory`, `RecallRequest` | `agent_memory` | Durable user memory (optional). |
 | `BudgetGate`, `UnlimitedBudgetGate`, `Permit`, `CallEstimate`, `ContextState`, `CompressionHint` | `budget_gate` | Admission, spend accounting, compression advice (optional). |
 | `ProgressSink`, `NoopProgressSink`, `RecordingProgressSink`, `ProgressEvent` | `progress_sink` | Coarse turn progress for a UI (optional). |
@@ -68,7 +68,7 @@ embedding, not as a way to fake "unconfigured."
 | `context_composer.rs` | `ContextComposer` trait, `TurnContextRequest`, `StaticContextComposer`. |
 | `experience_store.rs` | `ExperienceStore` trait, `Experience`, `InMemoryExperienceStore`. |
 | `learning_sink.rs` | `LearningSink` trait, `TurnSummary`, `NoopLearningSink`. |
-| `model_factory.rs` | Role-keyed model factory/gate contracts, turn model assembly, route/error-slot wrapping, and Claude subprocess route construction. |
+| `model_factory.rs` and `model_factory/` | Thin re-export plus the model-factory module; see its [module README](model_factory/README.md) for file ownership and operational constraints. |
 | `model_resolver.rs` | `ModelResolver<State>` trait, `ModelResolveRequest`, `FixedModelResolver`, and `PrebuiltModelResolver` for lead/pin/hint routes. |
 | `progress_sink.rs` | `ProgressEvent`, `ProgressSink` trait, `NoopProgressSink`, `RecordingProgressSink`. |
 | `security_gate.rs` | `SecurityGate` trait, `ToolCallRequest`, `GateDecision`, `ScreenOutcome`, `ContentOrigin`. |

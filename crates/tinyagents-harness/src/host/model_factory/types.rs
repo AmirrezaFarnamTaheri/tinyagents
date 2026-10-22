@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use tinyinference_llm::model::{ChatModel, ResolvedModelRoute};
 
 use crate::error::Result;
 
 /// Construction options passed through without interpretation by the harness.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct BuildOpts {
     /// Whether the provider should expose native tool support.
     pub native_tools: bool,
@@ -18,7 +19,7 @@ pub struct BuildOpts {
 /// Why a model is being constructed. Hosts can apply distinct policies to
 /// primary, workload-tier, and summarization models without sharing policy
 /// details with the harness.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModelPurpose {
     /// Model selected for the primary turn.
     Primary,
@@ -29,7 +30,7 @@ pub enum ModelPurpose {
 }
 
 /// Neutral facts a host may inspect before building one model.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModelBuildRequest {
     /// Host-defined role key.
     pub role: String,

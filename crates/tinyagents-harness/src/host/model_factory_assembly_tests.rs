@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn model_build_requests_round_trip_through_serde() {
+    let request = ModelBuildRequest {
+        role: "summarization".into(),
+        route: Some("hint:summarization".into()),
+        purpose: ModelPurpose::Summarization,
+        model_pin: Some("summary-model".into()),
+        opts: BuildOpts {
+            native_tools: false,
+            temperature: Some(0.2),
+            egress_tag: Some("summary".into()),
+        },
+    };
+    let encoded = serde_json::to_vec(&request).unwrap();
+    let decoded: ModelBuildRequest = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(decoded, request);
+}
+
+#[test]
 fn primary_override_stays_separate_from_default_workload_routes_and_summary() {
     let context = NonCloneContext {
         primary_provider_override: Some("provider-override".to_owned()),

@@ -361,7 +361,7 @@ fn explicit_default_model_route<'a>(
     let model = source.default_model()?.trim();
     (default_model_eligible_for_role(role)
         && !model.is_empty()
-        && !model.starts_with("hint:")
+        && canonical_hint_role(model).is_none()
         && source.legacy_tier_role(model).is_none()
         && source.classify_default_model_route(model) == DefaultModelRoute::ExplicitProvider)
         .then_some(model)
