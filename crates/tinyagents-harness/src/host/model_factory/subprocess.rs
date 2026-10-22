@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::types::ModelBuildGate;
 use tinyinference_llm::model::ChatModel;
 
 /// Host-owned context passed to the Claude subprocess provider constructors.
