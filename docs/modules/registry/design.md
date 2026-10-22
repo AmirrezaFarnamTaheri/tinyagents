@@ -308,34 +308,6 @@ The registry stores these declarations; the harness applies them during a run.
 This keeps model selection inspectable without making the registry call model
 providers.
 
-## Graph Registration
-
-Graphs are compiled graph runtimes.
-
-```rust
-pub struct RegisteredGraph<State, Ctx = ()> {
-    pub metadata: ComponentMetadata,
-    pub graph: Arc<CompiledGraph<State, Ctx>>,
-}
-```
-
-Registration:
-
-```rust
-registry
-    .graphs()
-    .register("support_flow", compiled_graph)
-    .await?;
-```
-
-Graph metadata should include:
-
-- node ids
-- edge count
-- route names
-- start node
-- whether checkpoints are required
-- whether interrupts are possible
 - declared input/output schemas when available
 
 Graph events:

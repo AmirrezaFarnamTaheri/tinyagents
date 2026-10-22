@@ -6,21 +6,19 @@
 > [`implementation-status.md`](implementation-status.md) for what is actually
 > shipped.
 
-Continues from [`design.md`](design.md): store and checkpointer
-registration, listener registration, the event model, event bus, and
+Continues from [`design.md`](design.md): store registration, listener
+registration, the event model, event bus, and
 event filters.
 
 ## Store And Checkpointer Registration
 
-Stores and checkpointers should be registry components so agents and graphs can
-share them without globals.
+Stores should be registry components so agents can share them without globals.
 
 Registered stores:
 
 - short-term memory
 - long-term key/value store
 - vector store
-- graph checkpointer
 - event sink
 
 Store events:

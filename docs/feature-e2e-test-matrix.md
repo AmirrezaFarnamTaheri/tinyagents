@@ -51,11 +51,10 @@ tests remain valuable but do not close an E2E gap.
 | Public stream iterator | Consume `AgentHarness::invoke_stream` through terminal and early-drop paths. |
 | Artifact, handoff, and workspace utilities | Temp-root artifact-offload, handoff, and workspace lifecycle API contract. |
 | Namespaced stores and control primitives | Namespace/TTL/batch/search, `RunQueue`, and no-progress/repeat tracking as direct feature contracts. |
-| Extended language grammar | Execute materialized command/send/join/retry/checkpoint constructs only where graph runtime supports them. |
 
 ## Feature flags
 
-`sqlite` is integration-tested through graph/session persistence. `tools` and
+`sqlite` is integration-tested through session persistence. `tools` and
 `multimodal` are compiled and unit-tested in CI but need the P2 behavioral
 integration tests above. `tracing` is compiled under all-features; adding
 behavioral tracing tests is lower priority because instrumentation is opt-in.
