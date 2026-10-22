@@ -1637,7 +1637,11 @@ async fn a_length_cut_call_block_is_retried_or_fails() {
                 run.text()
             );
         }
-        Err(e) => eprintln!("length-cut call block surfaced as an error: {e:?}"),
+        // Recovery exhausted: the only accepted failure is the token limit.
+        Err(e) => assert!(
+            matches!(e, tinyagents_harness::TinyAgentsError::LimitExceeded(_)),
+            "length-cut call block failed with an unrelated error: {e:?}"
+        ),
     }
 }
 
