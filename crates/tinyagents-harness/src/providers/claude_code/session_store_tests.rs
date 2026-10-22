@@ -6,7 +6,7 @@ use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_testkit::{Failing, FaultPlan, MemoryBackend};
 use tinystoragedrivers_types::{
     Capabilities, CollectionSpec, ErrorKind, Filter, Page, Precondition, Query, ReadCheck,
-    SearchHit, Sort, Version, Versioned, WatchOptions, WriteOp, WriteOptions, WriteResult,
+    SearchHit, Sort, Version, Versioned, WriteOp, WriteOptions, WriteResult,
 };
 
 #[derive(Debug)]
