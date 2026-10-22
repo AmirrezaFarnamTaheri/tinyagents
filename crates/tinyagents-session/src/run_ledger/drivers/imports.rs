@@ -42,6 +42,41 @@ fn agent_receipt_id(operation_id: &str) -> Result<String> {
 }
 
 impl DriverRunLedger {
+    async fn import_workflow_if_absent(&self, run: &WorkflowRun) -> Result<bool> {
+        let mut writes = vec![put_op(
+            WORKFLOWS,
+            key(&[&run.id])?,
+            run,
+            Precondition::Absent,
+        )?];
+        if let (Some(holder), Some(expires)) = (&run.lease_owner, run.lease_expires_at) {
+            writes.push(WriteOp::Put {
+                collection: LEASES.into(),
+                id: key(&[LEDGER_OWNER, &workflow_lease_key(&run.id)?])?,
+                doc: json!({
+                    "holder": holder,
+                    "epoch": 1,
+                    "expires_ms": expires.timestamp_millis(),
+                }),
+                precondition: Precondition::Absent,
+            });
+        }
+        match self
+            .scoped
+            .documents()
+            .atomic_batch_checked(Vec::new(), writes)
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(error)
+                if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
     async fn import_put_if_absent(
         &self,
         collection: &str,
@@ -196,19 +231,7 @@ impl DriverRunLedger {
         let mut report = LegacyLedgerRowsReport::default();
         let mut imported = 0;
         for run in &import.workflow_runs {
-            imported += usize::from(
-                self.import_put_if_absent(WORKFLOWS, &key(&[&run.id])?, encode(run)?)
-                    .await?,
-            );
-            if let (Some(holder), Some(expires)) = (&run.lease_owner, run.lease_expires_at) {
-                let id = key(&[LEDGER_OWNER, &workflow_lease_key(&run.id)?])?;
-                let body = json!({
-                    "holder": holder,
-                    "epoch": 1,
-                    "expires_ms": expires.timestamp_millis(),
-                });
-                self.import_put_if_absent(LEASES, &id, body).await?;
-            }
+            imported += usize::from(self.import_workflow_if_absent(run).await?);
         }
         report.workflow_runs = ImportCounts::new(import.workflow_runs.len(), imported);
 
