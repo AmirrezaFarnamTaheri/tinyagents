@@ -3,7 +3,7 @@
 //! These ids are the keys that make recursion observable and correlatable: a
 //! [`RunId`] names one run, and pairing it with the `root_run_id` /
 //! `parent_run_id` recorded in [`crate::events::HarnessRunStatus`] lets
-//! a child run (a sub-agent or sub-graph invocation) be traced back up to the
+//! a child run (for example, a sub-agent invocation) be traced back up to the
 //! top-level run that spawned it. A `From`/`Display`/`as_str` surface is
 //! generated for each newtype by a single macro so the ids stay cheap to clone,
 //! log, and serialize.
