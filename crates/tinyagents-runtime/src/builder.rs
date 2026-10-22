@@ -1,10 +1,11 @@
 use std::sync::Arc;
+use tinyagents_harness::tool::ToolSnapshot;
 
 use tinyagents_session::transcript::{SessionRef, TranscriptLocator, TranscriptMeta, session_stem};
 
 use crate::{
     NoopSessionHooks, PrefixSnapshot, RuntimeError, Session, SessionDriver, SessionHooks,
-    ToolSnapshot, TranscriptCodec,
+    TranscriptCodec,
 };
 
 /// Configures a directly-owned, reusable [`Session`].

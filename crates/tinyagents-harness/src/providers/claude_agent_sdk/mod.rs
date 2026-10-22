@@ -53,6 +53,43 @@ impl Default for ClaudeAgentSdkConfig {
 pub struct ClaudeAgentSdkProvider {
     pub(super) config: ClaudeAgentSdkConfig,
     profile: ModelProfile,
+    inspection_auth: Option<ClaudeAgentSdkInspectionAuth>,
+}
+
+/// Explicit environment credential snapshot used by the doctor's bounded
+/// one-shot inspection path. Opaque CLI-managed login is intentionally absent.
+pub struct ClaudeAgentSdkInspectionAuth {
+    api_key: Option<String>,
+    auth_token: Option<String>,
+    base_url: Option<String>,
+}
+
+impl ClaudeAgentSdkInspectionAuth {
+    /// Captures only explicit Anthropic API credentials and an optional
+    /// configured endpoint. The resulting value is passed to the child
+    /// process unchanged; the CLI is launched in bare mode and cannot read a
+    /// user's stored login.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when neither an explicit API key nor an explicit auth
+    /// token is available.
+    pub fn new(
+        api_key: Option<String>,
+        auth_token: Option<String>,
+        base_url: Option<String>,
+    ) -> anyhow::Result<Self> {
+        if api_key.as_deref().is_none_or(str::is_empty)
+            && auth_token.as_deref().is_none_or(str::is_empty)
+        {
+            anyhow::bail!("Claude inspection requires an explicit API key or auth token");
+        }
+        Ok(Self {
+            api_key: api_key.filter(|value| !value.is_empty()),
+            auth_token: auth_token.filter(|value| !value.is_empty()),
+            base_url: base_url.filter(|value| !value.is_empty()),
+        })
+    }
 }
 
 /// Fully-formed CLI arguments and stdin payload for one `claude -p` call.
@@ -95,6 +132,73 @@ fn build_invocation(
         args.push(format!("{budget:.4}"));
     }
     ClaudeInvocation { args, stdin }
+}
+
+/// Builds a stateless, tool-free invocation with the CLI's documented
+/// output-token limit set by `CLAUDE_CODE_MAX_OUTPUT_TOKENS`.
+fn build_inspection_invocation(message: &str, model: &str) -> ClaudeInvocation {
+    ClaudeInvocation {
+        args: vec![
+            "--bare".into(),
+            "-p".into(),
+            "--no-session-persistence".into(),
+            "--tools".into(),
+            String::new(),
+            "--permission-mode".into(),
+            "dontAsk".into(),
+            "--max-turns".into(),
+            "1".into(),
+            "--model".into(),
+            model.into(),
+            "--verbose".into(),
+            "--output-format".into(),
+            "stream-json".into(),
+            "--system-prompt".into(),
+            String::new(),
+        ],
+        stdin: message.to_string(),
+    }
+}
+
+fn configure_inspection_child(
+    cmd: &mut Command,
+    auth: &ClaudeAgentSdkInspectionAuth,
+    home_path: &std::path::Path,
+    max_tokens: u32,
+) {
+    cmd.env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", home_path)
+        .env("TMPDIR", home_path)
+        .env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", max_tokens.to_string())
+        .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+        .env("DISABLE_TELEMETRY", "1")
+        .env("DISABLE_ERROR_REPORTING", "1")
+        .current_dir(home_path);
+    #[cfg(not(windows))]
+    cmd.env("XDG_CONFIG_HOME", home_path)
+        .env("XDG_DATA_HOME", home_path)
+        .env("XDG_STATE_HOME", home_path)
+        .env("XDG_CACHE_HOME", home_path);
+    #[cfg(windows)]
+    {
+        cmd.env("USERPROFILE", home_path)
+            .env("APPDATA", home_path)
+            .env("LOCALAPPDATA", home_path)
+            .env("TEMP", home_path)
+            .env("TMP", home_path);
+        if let Some(system_root) = std::env::var_os("SystemRoot") {
+            cmd.env("SystemRoot", system_root);
+        }
+    }
+    if let Some(key) = auth.api_key.as_deref() {
+        cmd.env("ANTHROPIC_API_KEY", key);
+    } else if let Some(token) = auth.auth_token.as_deref() {
+        cmd.env("ANTHROPIC_AUTH_TOKEN", token);
+    }
+    if let Some(base_url) = auth.base_url.as_deref() {
+        cmd.env("ANTHROPIC_BASE_URL", base_url);
+    }
 }
 
 /// Render the complete non-system transcript for the stateless CLI process.
@@ -156,6 +260,26 @@ impl ClaudeAgentSdkProvider {
                 model: Some(model.into()),
                 ..Default::default()
             },
+            inspection_auth: None,
+        }
+    }
+
+    /// Creates a one-shot model for doctor inspection using a frozen explicit
+    /// API credential. Its invocations disable built-in tools and session
+    /// persistence and cap each request at five output tokens.
+    pub fn for_inspection(
+        config: ClaudeAgentSdkConfig,
+        model: impl Into<String>,
+        auth: ClaudeAgentSdkInspectionAuth,
+    ) -> Self {
+        Self {
+            config,
+            profile: ModelProfile {
+                provider: Some("claude-agent-sdk".to_string()),
+                model: Some(model.into()),
+                ..Default::default()
+            },
+            inspection_auth: Some(auth),
         }
     }
 
@@ -175,6 +299,7 @@ impl ClaudeAgentSdkProvider {
         system_prompt: Option<&str>,
         message: &str,
         model: &str,
+        max_tokens: Option<u32>,
     ) -> anyhow::Result<String> {
         let model = if model.is_empty() {
             &self.config.default_model
@@ -184,15 +309,34 @@ impl ClaudeAgentSdkProvider {
 
         // `claude -p` reads stdin in non-interactive mode. Keep the full
         // request out of argv so large harness prompts can spawn on Windows.
-        let invocation =
-            build_invocation(system_prompt, message, model, self.config.max_budget_usd);
+        let inspection_home = self
+            .inspection_auth
+            .as_ref()
+            .map(|_| tempfile::tempdir())
+            .transpose()
+            .context("could not create isolated Claude inspection HOME")?;
+        let invocation = if self.inspection_auth.is_some() {
+            build_inspection_invocation(message, model)
+        } else {
+            build_invocation(system_prompt, message, model, self.config.max_budget_usd)
+        };
 
-        let mut cmd = Command::new(&self.config.binary);
+        let executable = if inspection_home.is_some() {
+            inspection_binary_path(&self.config.binary)?
+        } else {
+            self.config.binary.clone().into()
+        };
+        let mut cmd = Command::new(executable);
         cmd.args(&invocation.args)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::piped())
             .kill_on_drop(true);
+        if let (Some(auth), Some(home)) = (&self.inspection_auth, &inspection_home) {
+            let home_path = home.path();
+            let max_tokens = max_tokens.unwrap_or(5).clamp(1, 5);
+            configure_inspection_child(&mut cmd, auth, home_path, max_tokens);
+        }
 
         tracing::debug!(
             "[claude_agent_sdk] spawning claude binary={} model={} message_len={}",
@@ -345,6 +489,14 @@ impl ClaudeAgentSdkProvider {
     }
 }
 
+fn inspection_binary_path(binary: &str) -> anyhow::Result<std::path::PathBuf> {
+    let path = std::path::PathBuf::from(binary);
+    if path.is_absolute() || (!binary.contains('/') && !binary.contains('\\')) {
+        return Ok(path);
+    }
+    Ok(std::env::current_dir()?.join(path))
+}
+
 #[async_trait]
 impl ChatModel<()> for ClaudeAgentSdkProvider {
     fn profile(&self) -> Option<&ModelProfile> {
@@ -354,6 +506,9 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
     /// Identity for harness response-cache scoping: the SDK binary and the
     /// selected model. No credential is involved on this path.
     fn cache_identity(&self) -> Option<String> {
+        if self.inspection_auth.is_some() {
+            return None;
+        }
         Some(format!(
             "claude_agent_sdk:{}:{}",
             self.config.binary,
@@ -369,6 +524,30 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
         _state: &(),
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
+        if self.inspection_auth.is_some() {
+            if !request.tools.is_empty() {
+                return Err(tinyinference_llm::Error::Unsupported(
+                    "Claude inspection does not execute tools".into(),
+                ));
+            }
+            if request.messages.len() != 1
+                || !matches!(request.messages.first(), Some(Message::User(_)))
+            {
+                return Err(tinyinference_llm::Error::Unsupported(
+                    "Claude inspection accepts one user message without history".into(),
+                ));
+            }
+            let model = request
+                .model
+                .as_deref()
+                .or(self.profile.model.as_deref())
+                .unwrap_or(&self.config.default_model);
+            let output = self
+                .invoke_cli(None, &request.messages[0].text(), model, request.max_tokens)
+                .await
+                .map_err(|error| tinyinference_llm::Error::Model(error.to_string()))?;
+            return Ok(ModelResponse::assistant(output));
+        }
         let messages = coalesce_tool_results(&request.messages);
         let messages = with_tool_instructions(&messages, &request.tools, &request.tool_choice);
         let system = coalesce_system_prompt(&messages);
@@ -379,7 +558,7 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
             .or(self.profile.model.as_deref())
             .unwrap_or(&self.config.default_model);
         let output = self
-            .invoke_cli(system.as_deref(), &transcript, model)
+            .invoke_cli(system.as_deref(), &transcript, model, request.max_tokens)
             .await
             .map_err(|error| tinyinference_llm::Error::Model(error.to_string()))?;
 

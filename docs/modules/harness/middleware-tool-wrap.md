@@ -57,6 +57,35 @@ state into an interior-mutable handle it owns, or into a lifecycle hook
 serially during admission and fold). `ModelMiddleware` and `AgentMiddleware`
 are unchanged.
 
+## Actual execution observation
+
+`Middleware::observe_tool_execution` runs synchronously inside the innermost
+tool future, after admission, argument validation, rules, approval, and host
+authorization. A wrapper that does not call `next` creates no execution
+observation. Each retry that enters the executor produces one observation.
+Nested tool calls use the same hook after their own gates.
+
+The hook receives a `ToolInvocationIdentity` for the admitted outer call and
+the actual target's `Tool` reference and effective arguments. A packed call
+therefore keeps `use_skill` and its admitted call id in the transcript while
+the observer sees the pinned inner implementation. Registry rebinding and
+later wrap rewrites cannot replace that target. Ordinary tools expose the
+final arguments their wrappers pass to the executor. Disclosure and missing
+packed targets identify only the dispatcher.
+
+Observation records a started attempt, including one that subsequently fails,
+times out, or is cancelled. It does not establish a successful mutation. The
+synchronous hook cannot suspend between recording evidence and executor entry;
+implementations should keep bookkeeping short and safe for concurrent calls.
+It emits no lifecycle bracketing events and cannot request control.
+
+`VerifyBeforeFinishMiddleware` consumes this evidence in `FinishActivity`.
+Its `executed_with_side_effects(name)` helper additionally checks the target's
+argument-aware permissions and external-effect declaration, allowing literal
+read-only previews to stay outside a mutating-work trigger. See the
+[finish-check module](../../../crates/tinyagents-harness/src/middleware/library/verify_before_finish/README.md)
+for state migration and deferred-run behavior.
+
 ## When a batch runs concurrently
 
 A turn with two or more calls runs them concurrently when every call's tool is

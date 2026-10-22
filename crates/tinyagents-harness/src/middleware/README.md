@@ -16,6 +16,11 @@ as models call models and graphs run graphs.
   `on_tool_delta` / `after_tool`, and `on_error`. Every hook has a no-op
   default, is async, and returns `Result<()>`; an `Err` short-circuits the
   stack.
+- **Executor observation** (`Middleware::observe_tool_execution`) — a
+  synchronous, read-only hook inside the terminal tool future. It receives the
+  admitted outer identity plus the actual bound target and arguments after
+  gates and wrappers. It records attempts, including retries and nested calls,
+  without requesting control, rewriting calls, or claiming successful effects.
 - **Around-agent middleware** (`AgentMiddleware`) — surrounds a complete run,
   receives the mutable partial `AgentRun`, and can rewrite initial input,
   prepare run-scoped resources, short-circuit, or finalize after either success
@@ -48,8 +53,9 @@ the `RunContext`, so hook activity is independently observable via the event
 sink regardless of what a middleware itself records. The pair is always
 balanced: a hook that returns `Err` still emits its `MiddlewareCompleted`
 before the error short-circuits the stack, so an observer never sees a dangling
-`Started`. (The per-delta streaming hook `on_model_delta` is the one deliberate
-exception — it emits no bracketing events, to stay cheap on the token hot path.)
+`Started`. The per-delta hooks `on_model_delta` and `on_tool_delta`, and the
+synchronous executor-entry observer, emit no bracketing events. These observers
+can run repeatedly within one invocation and keep their own lightweight records.
 
 ## Error handling
 
@@ -149,7 +155,8 @@ tracing — lives in `library/` and is re-exported through this module. See
 
 - Hooks are invoked with `&mut RunContext<Ctx>` and a shared `&State`; a
   middleware must not assume exclusive ownership of `State` — it is read-only
-  from the middleware's perspective.
+  from the middleware's perspective. The executor-entry observer and tool-wrap
+  onion use shared `&RunContext`; their invocations can overlap.
 - Because `on_error` failures are swallowed, a middleware must not rely on
   `on_error` for anything beyond best-effort side effects (logging, metrics).
 - Wrap middleware that retry `next.run(..)` are responsible for their own

@@ -168,42 +168,6 @@ async fn canonical_adapter_preserves_spec_policy_context_and_result() {
     );
 }
 
-#[test]
-fn canonical_adapter_forwards_use_skill_extension_to_its_binding_dispatch() {
-    use crate::tool::ToolDispatch;
-    use crate::tool::packs::{
-        PackCatalog, PackRegistryHandle, PackToolExtension, USE_SKILL, UseSkillDispatch,
-        UseSkillTool,
-    };
-
-    let use_skill = UseSkillTool::new(
-        PackRegistryHandle::default(),
-        PackCatalog::new(&[], "[not-found]"),
-    );
-    let tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![Box::new(use_skill)]);
-    let adapter = Arc::new(
-        CanonicalSharedToolAdapter::for_name(vec![tools], USE_SKILL).expect("registered use_skill"),
-    );
-
-    assert!(
-        adapter
-            .host_extension()
-            .and_then(|extension| extension.downcast_ref::<PackToolExtension>())
-            .is_some()
-    );
-
-    let dispatch = UseSkillDispatch::<(), ()>::new(adapter, Arc::new(|_| None));
-    let bound = dispatch
-        .bind_call(&serde_json::json!({
-            "skill": "missing",
-            "tool": "missing_tool",
-            "args": {}
-        }))
-        .expect("adapter exposes the pack extension to the real binder")
-        .expect("use_skill binding returns a dispatch");
-    assert_eq!(bound.tool().name(), USE_SKILL);
-}
-
 #[tokio::test]
 async fn canonical_adapter_fails_closed_when_the_registered_tool_is_gone() {
     let adapter = CanonicalSharedToolAdapter {
@@ -261,6 +225,47 @@ fn canonical_adapter_forwards_injected_argument_declarations() {
 }
 
 struct BehaviorTool;
+
+struct HostExtension;
+
+static HOST_EXTENSION: HostExtension = HostExtension;
+
+struct ExtensionTool;
+
+#[async_trait]
+impl Tool for ExtensionTool {
+    fn name(&self) -> &str {
+        "extension"
+    }
+
+    fn description(&self) -> &str {
+        "Exposes host-specific admission metadata."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        Some(&HOST_EXTENSION)
+    }
+
+    async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::default())
+    }
+}
+
+#[test]
+fn canonical_adapter_forwards_host_extension_from_the_resolved_tool() {
+    let sets: Vec<Arc<Vec<Box<dyn Tool>>>> = vec![Arc::new(vec![Box::new(ExtensionTool)])];
+    let adapter = CanonicalSharedToolAdapter::for_name(sets, "extension").expect("registered tool");
+
+    assert!(
+        adapter
+            .host_extension()
+            .is_some_and(|extension| extension.is::<HostExtension>())
+    );
+}
 
 #[async_trait]
 impl Tool for BehaviorTool {

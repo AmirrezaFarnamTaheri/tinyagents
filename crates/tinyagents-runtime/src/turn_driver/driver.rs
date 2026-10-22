@@ -61,7 +61,7 @@ pub struct TurnPlan<State, C> {
     /// Fired once when the turn completes (see [`TurnControls::defer_turn_completed`](super::TurnControls::defer_turn_completed)).
     pub completion: Option<Arc<dyn TurnCompletionSink>>,
     /// Refuse to run when the harness's declared tools differ from the
-    /// session's frozen [`crate::ToolSnapshot`]. On by default.
+    /// session's frozen [`tinyagents_harness::tool::ToolSnapshot`]. On by default.
     pub enforce_tool_snapshot: bool,
 }
 

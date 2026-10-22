@@ -1,4 +1,4 @@
-//! End-to-end coverage for the per-thread todo list (`graph::todos`) exercised
+//! End-to-end coverage for the per-thread harness todo list exercised
 //! through the public crate surface: a `MockModel`-driven agent loop calls the
 //! `todo` tool, and the list persists on a shared `Store` addressed by the
 //! run's thread id.
@@ -7,11 +7,11 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use tinyagents_graph::*;
 use tinyagents_harness::context::RunConfig;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::store::{InMemoryStore, Store};
 use tinyagents_harness::*;
+use tinyagents_harness_tools::todos::{TodoStatus, TodoTool, store as todo_store};
 use tinyagents_registry::*;
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
 use tinyinference_llm::model::ModelResponse;

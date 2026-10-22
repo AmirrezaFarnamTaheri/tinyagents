@@ -20,6 +20,8 @@ pub struct ToolRulePolicy {
     pub rules: Arc<ToolRuleSet>,
     /// Attributes `when` conditions match against: `channel`, `agent`, ….
     pub context: RuleContext,
+    /// The highest permission level admitted by this run.
+    pub permission_ceiling: Option<tinytools::PermissionLevel>,
 }
 
 impl ToolRulePolicy {
@@ -29,6 +31,7 @@ impl ToolRulePolicy {
         Self {
             rules: Arc::new(rules.into()),
             context: RuleContext::new(),
+            permission_ceiling: None,
         }
     }
 
@@ -39,10 +42,20 @@ impl ToolRulePolicy {
         self
     }
 
+    /// Sets the highest permission level admitted by this run.
+    #[must_use]
+    pub fn with_permission_ceiling(
+        mut self,
+        permission_ceiling: tinytools::PermissionLevel,
+    ) -> Self {
+        self.permission_ceiling = Some(permission_ceiling);
+        self
+    }
+
     /// Whether the policy admits every tool, so the loop can skip it.
     #[must_use]
     pub fn is_permissive(&self) -> bool {
-        self.rules.is_permissive()
+        self.permission_ceiling.is_none() && self.rules.is_permissive()
     }
 }
 
@@ -64,6 +77,7 @@ pub(crate) struct ToolGate {
     deferred: HashSet<String>,
     rules: Option<Arc<ToolRuleSet>>,
     context: RuleContext,
+    permission_ceiling: Option<tinytools::PermissionLevel>,
 }
 
 impl ToolGate {
@@ -89,6 +103,7 @@ impl ToolGate {
             deferred: HashSet::new(),
             rules,
             context: policy.context.clone(),
+            permission_ceiling: policy.permission_ceiling,
         }
     }
 
@@ -187,6 +202,22 @@ impl ToolGate {
     /// Decides a concrete call. The allowlist is checked by the caller before
     /// lookup; this applies the rules, including any indirect target.
     pub(crate) async fn admit_call_async(&self, tool: &dyn Tool, args: &Value) -> CallGate {
+        if let Some(ceiling) = self.permission_ceiling {
+            let required = tool.permission_level_with_args(args);
+            if required > ceiling {
+                tracing::debug!(
+                    target: "tinyagents::tool_rules",
+                    tool = %tool.name(),
+                    permission = %required,
+                    ceiling = %ceiling,
+                    "[tool_rules] call refused by permission ceiling"
+                );
+                return CallGate::Refuse(format!(
+                    "tool '{}' requires permission above the session limit ({ceiling})",
+                    tool.name()
+                ));
+            }
+        }
         let Some(rules) = &self.rules else {
             return CallGate::Admit(ApprovalDirective::Default);
         };

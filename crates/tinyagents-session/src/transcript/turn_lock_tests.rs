@@ -15,6 +15,7 @@ async fn is_held(locator: &dyn TranscriptLocator, session: &SessionRef) -> bool 
 
 /// A locator naming a fixed destination, so separate instances stand for
 /// separate handles over one store.
+/// Each test needs its own destination because the lock registry is process-wide.
 struct Keyed(&'static str);
 
 impl TranscriptLocator for Keyed {

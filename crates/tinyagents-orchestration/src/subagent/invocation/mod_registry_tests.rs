@@ -110,6 +110,45 @@ async fn control_errors_keep_their_documented_order() {
 }
 
 #[tokio::test]
+async fn poisoned_detached_registry_errors_remain_typed_across_job_controls() {
+    let jobs = SubAgentJobRegistry::new();
+    let (id, _) = jobs.create("worker", 7);
+
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::types::PANIC_ON_JOB_META_CLONE.with(|panic| panic.set(true));
+        jobs.try_get_owned(id.as_str(), 7)
+    }));
+    // The intentional panic skips the end of the closure; clear the trigger
+    // before any assertions or awaits can reuse this test worker.
+    super::types::PANIC_ON_JOB_META_CLONE.with(|panic| panic.set(false));
+    assert!(
+        panic.is_err(),
+        "metadata clone poisons the real job registry lock"
+    );
+
+    assert!(matches!(
+        jobs.try_get_owned(id.as_str(), 7),
+        Err(SubAgentJobError::Registry(_))
+    ));
+    assert!(matches!(
+        jobs.try_list_owned(7),
+        Err(SubAgentJobError::Registry(_))
+    ));
+    assert!(matches!(
+        jobs.wait_owned(id.as_str(), 7).await,
+        Err(SubAgentJobError::Registry(_))
+    ));
+    assert!(matches!(
+        jobs.cancel_owned(id.as_str(), 7),
+        Err(SubAgentJobError::Registry(_))
+    ));
+    assert!(matches!(
+        jobs.send_message_with_request_id(id.as_str(), 7, "message", None),
+        Err(SubAgentJobError::Registry(_))
+    ));
+}
+
+#[tokio::test]
 async fn listings_are_sorted_by_job_id() {
     let jobs = SubAgentJobRegistry::new();
     for _ in 0..40 {
@@ -120,4 +159,76 @@ async fn listings_are_sorted_by_job_id() {
     sorted.sort();
     assert_eq!(all, sorted);
     assert_eq!(all.len(), 40);
+}
+
+#[tokio::test]
+async fn terminal_jobs_never_return_to_running() {
+    let jobs = SubAgentJobRegistry::new();
+    let (id, _) = jobs.create("worker", 1);
+    jobs.cancel_owned(id.as_str(), 1).expect("cancel");
+    jobs.mark_result(&id, Err(TinyAgentsError::Cancelled));
+    jobs.mark_running(&id);
+    assert_eq!(
+        jobs.get(id.as_str()).unwrap().status,
+        SubAgentJobStatus::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn settled_jobs_release_their_cancellation_token() {
+    let jobs = SubAgentJobRegistry::new();
+    let (id, _) = jobs.create("worker", 1);
+    let task_id = TaskId::new(id.as_str());
+    assert!(jobs.tasks().holds_cancellation(&task_id).unwrap());
+    jobs.cancel_owned(id.as_str(), 1).expect("cancel");
+    assert!(!jobs.tasks().holds_cancellation(&task_id).unwrap());
+    assert!(!jobs.get(id.as_str()).unwrap().status.is_terminal());
+    jobs.mark_result(&id, Err(TinyAgentsError::Cancelled));
+    assert!(jobs.get(id.as_str()).unwrap().status.is_terminal());
+
+    let (aborted, _) = jobs.create("worker", 1);
+    jobs.mark_aborted(&aborted, true);
+    assert!(
+        !jobs
+            .tasks()
+            .holds_cancellation(&TaskId::new(aborted.as_str()))
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn a_budget_overrun_that_raced_an_owner_cancel_settles_cancelled() {
+    let jobs = SubAgentJobRegistry::new();
+    let (id, _) = jobs.create("worker", 1);
+    jobs.cancel_owned(id.as_str(), 1).expect("cancel");
+    jobs.mark_budget_overrun(
+        &id,
+        crate::subagent::AppliedResult {
+            text: "late".into(),
+            ..Default::default()
+        },
+        "over budget".into(),
+    );
+    let job = jobs.get(id.as_str()).unwrap();
+    assert_eq!(job.status, SubAgentJobStatus::Cancelled);
+    assert!(job.incomplete_kind.is_none() && job.output.is_none());
+}
+
+#[tokio::test]
+async fn message_request_ids_are_bounded_per_job() {
+    let jobs = SubAgentJobRegistry::new();
+    let (id, steering) = jobs.create("worker", 1);
+    for index in 0..=tinyagents_harness::steering::RecentRequestIds::DEFAULT_CAPACITY {
+        let duplicate = jobs
+            .send_message_with_request_id(id.as_str(), 1, "m", Some(&format!("r{index}")))
+            .unwrap();
+        assert!(!duplicate);
+    }
+    // r0 ages out of the per-job 64-id window and can be delivered again.
+    assert!(
+        !jobs
+            .send_message_with_request_id(id.as_str(), 1, "m", Some("r0"))
+            .unwrap()
+    );
+    assert_eq!(steering.pending(), 66);
 }

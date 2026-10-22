@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use tinyagents_harness::tool::{ToolSnapshot, ToolSnapshotError};
+
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
@@ -23,8 +25,8 @@ use tinytools::{Tool, ToolResult, ToolSpec};
 use crate::{
     CommitReceipt, DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, PrefixSnapshot,
     ResumeMode, ResumePreparation, RuntimeError, SessionBuilder, SessionDriver, SessionHooks,
-    SessionStateView, SessionTerminal, SessionTurnOutcome, SessionTurnRequest, ToolSnapshot,
-    TranscriptCodec, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
+    SessionStateView, SessionTerminal, SessionTurnOutcome, SessionTurnRequest, TranscriptCodec,
+    TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 
 struct Driver {
@@ -600,7 +602,7 @@ async fn trailing_input_is_deduplicated_and_tool_collisions_fail_closed() {
                 parameters: serde_json::json!({})
             },
         ]),
-        Err(RuntimeError::ToolNameCollision(_))
+        Err(ToolSnapshotError::NameCollision(_))
     ));
 }
 
