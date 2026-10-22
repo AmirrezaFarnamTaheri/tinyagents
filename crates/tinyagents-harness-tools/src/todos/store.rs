@@ -186,6 +186,21 @@ pub async fn complete_steps(
     .await
 }
 
+/// Cancel `cancel` (with `reason`) and complete `complete` in one write, all
+/// or none; see `sequence::close_steps` for the order.
+pub async fn close_steps(
+    store: &Arc<dyn Store>,
+    thread_id: &str,
+    complete: &[usize],
+    cancel: &[usize],
+    reason: &str,
+) -> Result<TodosSnapshot> {
+    mutate(store, thread_id, |items| {
+        sequence::close_steps(items, complete, cancel, reason)
+    })
+    .await
+}
+
 /// Cancel step `step` (1-based) with `reason`; when it was the step in
 /// progress, the next open one starts.
 pub async fn cancel(

@@ -113,6 +113,39 @@ pub(super) fn complete_steps(
     Ok(notes)
 }
 
+/// Cancels `cancel` (all with `reason`), then completes `complete`, in one
+/// write, all or none. Cancelling first lets "drop step 2, finish step 3" and
+/// "finish steps 4-5, drop step 6" both go through. Only the last "now in
+/// progress" note is kept.
+pub(super) fn close_steps(
+    items: &mut [TodoItem],
+    complete: &[usize],
+    cancel: &[usize],
+    reason: &str,
+) -> Result<Vec<String>, String> {
+    let mut notes = Vec::new();
+    let mut cancel = cancel.to_vec();
+    cancel.sort_unstable();
+    cancel.dedup();
+    for step in cancel {
+        notes.extend(self::cancel(items, step, reason)?);
+    }
+    if !complete.is_empty() {
+        notes.extend(complete_steps(items, complete)?);
+    }
+    let last_start = notes
+        .iter()
+        .rposition(|note| note.ends_with("is now in progress."));
+    Ok(notes
+        .into_iter()
+        .enumerate()
+        .filter(|(index, note)| {
+            !note.ends_with("is now in progress.") || Some(*index) == last_start
+        })
+        .map(|(_, note)| note)
+        .collect())
+}
+
 /// Marks step `step` (1-based) cancelled with `reason` and, when it was the
 /// step in progress, starts the next open one. Any open step may be
 /// cancelled: dropping a later step is planning, not skipping ahead.

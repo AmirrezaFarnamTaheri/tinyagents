@@ -206,7 +206,7 @@ async fn complete_takes_several_steps_in_order_all_or_none() {
     for bad in [
         json!({"complete": []}),
         json!({"complete": [0]}),
-        json!({"complete": "2"}),
+        json!({"complete": "two"}),
     ] {
         assert!(run(&tool, bad.clone()).await.is_error, "{bad} is refused");
     }
@@ -267,5 +267,117 @@ async fn a_rewrite_that_closes_several_steps_without_notes_asks_for_them() {
             .any(|note| note.contains("Steps 1, 2 were closed in one call")),
         "{:?}",
         notes_of(&rewrite)
+    );
+}
+
+fn statuses(result: &ToolResult) -> Vec<String> {
+    payload(result)["todos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["status"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn complete_and_cancel_go_in_one_call() {
+    let (tool, _store) = tool();
+    plan(&tool, &["a", "b", "c", "d"]).await;
+    let result = run(
+        &tool,
+        json!({"complete": [1, 2], "cancel": 4, "reason": "not needed", "facts": ["a and b work"]}),
+    )
+    .await;
+    assert!(!result.is_error, "{}", result.output());
+    assert_eq!(
+        statuses(&result),
+        ["completed", "completed", "in_progress", "cancelled"]
+    );
+}
+
+#[tokio::test]
+async fn cancels_go_first_so_a_skipped_step_does_not_block_the_next() {
+    let (tool, _store) = tool();
+    plan(&tool, &["a", "b", "c"]).await;
+    // Step 1 is in progress: drop 2, finish 1 and 3.
+    let result = run(
+        &tool,
+        json!({"complete": [1, 3], "cancel": 2, "reason": "covered by 1"}),
+    )
+    .await;
+    assert!(!result.is_error, "{}", result.output());
+    assert_eq!(statuses(&result), ["completed", "cancelled", "completed"]);
+}
+
+#[tokio::test]
+async fn cancel_takes_a_list_with_one_reason() {
+    let (tool, _store) = tool();
+    plan(&tool, &["a", "b", "c"]).await;
+    let result = run(&tool, json!({"cancel": [2, 3], "reason": "out of scope"})).await;
+    assert!(!result.is_error, "{}", result.output());
+    assert_eq!(statuses(&result), ["in_progress", "cancelled", "cancelled"]);
+}
+
+#[tokio::test]
+async fn a_list_or_number_sent_as_a_string_is_read() {
+    let (tool, _store) = tool();
+    plan(&tool, &["a", "b", "c"]).await;
+    let result = run(&tool, json!({"complete": "[1, 2]"})).await;
+    assert!(!result.is_error, "{}", result.output());
+    assert_eq!(statuses(&result), ["completed", "completed", "in_progress"]);
+    let result = run(&tool, json!({"complete": " 3 "})).await;
+    assert!(!result.is_error, "{}", result.output());
+    assert_eq!(statuses(&result), ["completed", "completed", "completed"]);
+}
+
+#[tokio::test]
+async fn a_combined_call_is_all_or_nothing_and_checks_its_arguments() {
+    let (tool, store) = tool();
+    plan(&tool, &["a", "b", "c"]).await;
+    for (args, message) in [
+        (
+            json!({"complete": 3, "cancel": 9, "reason": "x"}),
+            "There is no step 9",
+        ),
+        (
+            json!({"complete": 1, "cancel": 2}),
+            "`cancel` needs a `reason`.",
+        ),
+        (
+            json!({"complete": 1, "reason": "x"}),
+            "`reason` goes with `cancel`",
+        ),
+        (
+            json!({"complete": "two"}),
+            "`complete` is a step number or a list of them",
+        ),
+        (
+            json!({"cancel": [], "reason": "x"}),
+            "`cancel` needs at least one step number",
+        ),
+        (json!({"complete": 1, "todos": []}), "unknown arguments"),
+    ] {
+        let result = run(&tool, args.clone()).await;
+        assert!(
+            result.is_error && result.output().starts_with(message),
+            "{args}: {}",
+            result.output()
+        );
+    }
+    let list = crate::todos::store::get(&store, "t")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        list.items
+            .iter()
+            .map(|item| item.status)
+            .collect::<Vec<_>>(),
+        [
+            TodoStatus::InProgress,
+            TodoStatus::Pending,
+            TodoStatus::Pending
+        ],
+        "a refused call writes nothing"
     );
 }

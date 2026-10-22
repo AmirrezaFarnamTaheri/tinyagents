@@ -38,7 +38,8 @@ const TODO_DESCRIPTION: &str = "This thread's plan, for work with 3+ steps. Writ
     time, in order. Tick a step with `{\"complete\": N}` (N from 1) only after its work has run \
     and its result is in the conversation, before starting the next: that call starts step N+1 \
     (several finished steps: `{\"complete\": [N, M]}`). \
-    Drop a step with `{\"cancel\": N, \"reason\": \"...\"}`. No arguments reads the list. \
+    Drop a step with `{\"cancel\": N, \"reason\": \"...\"}` (a list too; it may go with \
+    `complete`). No arguments reads the list. \
     Ticking is bookkeeping, not work: in the same response (or your next turn, if you cannot call \
     tools in parallel) do the next step unless the list is finished. Replace the list at most \
     once per assistant response. Notes, in any call: `facts` (what a result proved), `dead_ends` \
@@ -163,32 +164,29 @@ impl TodoTool {
                 ))
             })
         };
-        if let Some(raw) = args.get("complete") {
-            if let Some(error) = unknown(&["complete"]) {
+        if args.contains_key("complete") || args.contains_key("cancel") {
+            if let Some(error) = unknown(&["complete", "cancel", "reason"]) {
                 return Ok(error);
             }
-            let steps = match step_numbers(raw) {
-                Ok(steps) => steps,
-                Err(message) => return Ok(TodoOutcome::Error(message)),
+            let steps = |name: &str| match args.get(name) {
+                Some(raw) => step_numbers(name, raw),
+                None => Ok(Vec::new()),
             };
-            return Ok(outcome(
-                store::complete_steps(&self.store, thread_id, &steps).await,
-            ));
-        }
-        if let Some(step) = args.get("cancel") {
-            if let Some(error) = unknown(&["cancel", "reason"]) {
-                return Ok(error);
-            }
-            let step = match step_number(step) {
-                Ok(step) => step,
-                Err(message) => return Ok(TodoOutcome::Error(message)),
+            let (complete, cancel) = match (steps("complete"), steps("cancel")) {
+                (Ok(complete), Ok(cancel)) => (complete, cancel),
+                (Err(message), _) | (_, Err(message)) => return Ok(TodoOutcome::Error(message)),
             };
             let reason = args
                 .get("reason")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            if cancel.is_empty() && args.contains_key("reason") {
+                return Ok(TodoOutcome::Error(
+                    "`reason` goes with `cancel`".to_string(),
+                ));
+            }
             return Ok(outcome(
-                store::cancel(&self.store, thread_id, step, reason).await,
+                store::close_steps(&self.store, thread_id, &complete, &cancel, reason).await,
             ));
         }
         let snap = match args.get("todos") {
@@ -295,11 +293,21 @@ fn outcome(snap: Result<TodosSnapshot>) -> TodoOutcome {
     }
 }
 
-/// One 1-based step number, or a list of them.
-fn step_numbers(raw: &Value) -> std::result::Result<Vec<usize>, String> {
+/// One 1-based step number, or a list of them. A list or number sent as a
+/// JSON string (`"[1, 2]"`, `"3"`) is read too: models write it that way often
+/// enough that refusing it costs a call each time.
+fn step_numbers(name: &str, raw: &Value) -> std::result::Result<Vec<usize>, String> {
+    if let Value::String(text) = raw {
+        return match serde_json::from_str::<Value>(text.trim()) {
+            Ok(parsed @ (Value::Array(_) | Value::Number(_))) => step_numbers(name, &parsed),
+            _ => Err(format!(
+                "`{name}` is a step number or a list of them, got {raw}"
+            )),
+        };
+    }
     match raw {
         Value::Array(values) if values.is_empty() => {
-            Err("`complete` needs at least one step number".to_string())
+            Err(format!("`{name}` needs at least one step number"))
         }
         Value::Array(values) => values.iter().map(step_number).collect(),
         single => step_number(single).map(|step| vec![step]),
@@ -417,15 +425,16 @@ fn parameters_schema() -> Value {
                 }
             },
             "complete": {
-                "type": ["integer", "array"],
+                "type": ["integer", "array", "string"],
                 "minimum": 1,
                 "items": { "type": "integer", "minimum": 1 },
                 "description": "Complete step N (from 1), or several finished steps in order, and start the next one."
             },
             "cancel": {
-                "type": "integer",
+                "type": ["integer", "array", "string"],
                 "minimum": 1,
-                "description": "Cancel step N (from 1); needs `reason`."
+                "items": { "type": "integer", "minimum": 1 },
+                "description": "Cancel step N (from 1) or several; needs `reason`. May go with `complete` in one call."
             },
             "reason": { "type": "string" },
             "facts": {
