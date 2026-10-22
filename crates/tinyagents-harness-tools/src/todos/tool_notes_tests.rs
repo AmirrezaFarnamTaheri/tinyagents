@@ -40,7 +40,7 @@ async fn notes_alone_are_saved_and_read_the_list() {
     let (tool, store) = tool();
     let result = run(
         &tool,
-        json!({"facts": "the table is auth_users", "dead_ends": ["pip: no network"], "approach": "dump the schema"}),
+        json!({"facts": "the table is auth_users", "blockers": ["pip: no network"], "approach": "dump the schema"}),
     )
     .await;
     assert!(!result.is_error, "{}", result.output());
@@ -48,7 +48,7 @@ async fn notes_alone_are_saved_and_read_the_list() {
     assert_eq!(payload["todos"], json!([]), "a read of the (empty) list");
     assert_eq!(
         payload["scratchpad"],
-        json!({"facts": ["the table is auth_users"], "deadEnds": ["pip: no network"], "approach": "dump the schema"})
+        json!({"facts": ["the table is auth_users"], "blockers": ["pip: no network"], "approach": "dump the schema"})
     );
     let pad = scratchpad_store::get(&store, "t").await.unwrap().unwrap();
     assert_eq!(pad.facts, ["the table is auth_users"]);
@@ -74,12 +74,12 @@ async fn notes_ride_along_with_every_plan_mode() {
 
     let cancelled = run(
         &tool,
-        json!({"cancel": 2, "reason": "covered by a", "dead_ends": ["b is redundant"]}),
+        json!({"cancel": 2, "reason": "covered by a", "blockers": ["b is redundant"]}),
     )
     .await;
     assert!(!cancelled.is_error, "{}", cancelled.output());
     let pad = scratchpad_store::get(&store, "t").await.unwrap().unwrap();
-    assert_eq!(pad.dead_ends, ["b is redundant"]);
+    assert_eq!(pad.blockers, ["b is redundant"]);
     assert_eq!(pad.approach.as_deref(), Some("a then b"));
 }
 
@@ -109,7 +109,7 @@ async fn malformed_notes_are_refused_before_anything_is_written() {
     let (tool, store) = tool();
     for args in [
         json!({"facts": 3}),
-        json!({"dead_ends": [1, 2]}),
+        json!({"blockers": [1, 2]}),
         json!({"approach": ["x"], "todos": [{"content": "a"}]}),
     ] {
         let result = run(&tool, args.clone()).await;

@@ -182,11 +182,11 @@ fn a_paused_goal_asks_the_model_to_decide() {
 fn the_models_notes_show_after_the_plan_and_apart_from_the_harness_facts() {
     let pad = Scratchpad {
         facts: vec!["the table is auth_users".into()],
-        dead_ends: vec!["ALTER without default timed out".into()],
+        blockers: vec!["ALTER without default timed out".into()],
         approach: Some("add the column nullable, backfill, then constrain".into()),
         last_task: Some(crate::scratchpad::TaskNotes {
             facts: vec!["staging has 2M rows".into()],
-            dead_ends: vec!["pg_dump over ssh is too slow".into()],
+            blockers: vec!["pg_dump over ssh is too slow".into()],
         }),
         ..Scratchpad::default()
     };
@@ -208,12 +208,12 @@ fn the_models_notes_show_after_the_plan_and_apart_from_the_harness_facts() {
     );
     assert!(
         at("Verified facts")
-            < at("Dead ends (your notes, oldest first):\n  - ALTER without default")
+            < at("Blockers (your notes, oldest first):\n  - ALTER without default")
     );
     assert!(
-        at("Dead ends")
+        at("Blockers")
             < at(
-                "From your last finished task:\n  - fact: staging has 2M rows\n  - dead end: pg_dump"
+                "From your last finished task:\n  - fact: staging has 2M rows\n  - blocker: pg_dump"
             )
     );
     assert!(at("From your last finished task") < at("Files written this run"));
@@ -254,18 +254,18 @@ fn failing_ledger(rounds: &[usize], step_since: usize, step: bool) -> RunLedger 
         step_since,
         step: step.then(|| (1, "Build".to_string())),
         failures: rounds.iter().map(|round| failed(*round)).collect(),
-        dead_end_anchor: Some(None),
+        blocker_anchor: Some(None),
         ..RunLedger::default()
     }
 }
 
 #[test]
-fn a_step_that_keeps_failing_asks_for_a_dead_end() {
+fn a_step_that_keeps_failing_asks_for_a_blocker() {
     let items = vec![item("Build", TodoStatus::InProgress)];
     let block = render(None, None, &items, &failing_ledger(&[7, 8], 6, true)).unwrap();
     assert!(
         block.contains("This step keeps failing (2 recent failures)")
-            && block.contains("todo {\"dead_ends\": [\"what failed and why\"]"),
+            && block.contains("todo {\"blockers\": [\"what does not work and why\"]"),
         "{block}"
     );
 
@@ -283,21 +283,21 @@ fn a_step_that_keeps_failing_asks_for_a_dead_end() {
 }
 
 #[test]
-fn a_dead_end_recorded_since_the_step_began_ends_the_request() {
+fn a_blocker_recorded_since_the_step_began_ends_the_request() {
     let items = vec![item("Build", TodoStatus::InProgress)];
     let pad = Scratchpad {
-        dead_ends: vec!["make with -j1 still fails: missing libpng".into()],
+        blockers: vec!["make with -j1 still fails: missing libpng".into()],
         ..Scratchpad::default()
     };
     let block = render(None, Some(&pad), &items, &failing_ledger(&[7, 8], 6, true)).unwrap();
     assert!(!block.contains("keeps failing"), "{block}");
 
     let mut stale = failing_ledger(&[7, 8], 6, true);
-    stale.dead_end_anchor = Some(Some("make with -j1 still fails: missing libpng".into()));
+    stale.blocker_anchor = Some(Some("make with -j1 still fails: missing libpng".into()));
     let block = render(None, Some(&pad), &items, &stale).unwrap();
     assert!(
         block.contains("keeps failing"),
-        "a dead end from before the step does not count: {block}"
+        "a blocker from before the step does not count: {block}"
     );
 }
 

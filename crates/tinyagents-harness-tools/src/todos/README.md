@@ -73,13 +73,13 @@ content, unknown status, an out-of-order step) are surfaced to the model as
 tool errors rather than failing the run.
 
 The same call, or one on its own, also takes the model's notes for the
-thread's [scratchpad](../scratchpad/mod.rs): `facts`, `dead_ends`, `approach`
+thread's [scratchpad](../scratchpad/mod.rs): `facts`, `blockers`, `approach`
 and `retract`. They are written first and taken out of the arguments, so each
 plan mode keeps its own argument rules; notes alone read the list. A result
-after a note write carries `scratchpad` (`facts`, `deadEnds`, `approach`); a
+after a note write carries `scratchpad` (`facts`, `blockers`, `approach`); a
 plan refusal still keeps the notes and says so. A call that closes two or
 more steps (a `complete` list or a whole-list write) without `facts` or
-`dead_ends` gets a note asking for what those steps established: a model that
+`blockers` gets a note asking for what those steps established: a model that
 ticks late, in a batch, otherwise keeps none of it.
 
 ## Middleware (`middleware.rs`)

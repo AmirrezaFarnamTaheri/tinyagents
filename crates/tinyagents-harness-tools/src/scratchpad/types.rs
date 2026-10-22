@@ -14,9 +14,9 @@ pub struct Scratchpad {
     /// Facts the model verified, oldest first.
     #[serde(default)]
     pub facts: Vec<String>,
-    /// Approaches that failed and why, oldest first.
+    /// What does not work or must be avoided here, and why, oldest first.
     #[serde(default)]
-    pub dead_ends: Vec<String>,
+    pub blockers: Vec<String>,
     /// The approach the model is on now; a new one replaces it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approach: Option<String>,
@@ -29,22 +29,22 @@ pub struct Scratchpad {
     pub last_task: Option<TaskNotes>,
 }
 
-/// The facts and dead ends of one finished plan.
+/// The facts and blockers of one finished plan.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskNotes {
     /// Facts verified while the plan ran.
     #[serde(default)]
     pub facts: Vec<String>,
-    /// Approaches that failed while the plan ran.
+    /// What blocked the work while the plan ran.
     #[serde(default)]
-    pub dead_ends: Vec<String>,
+    pub blockers: Vec<String>,
 }
 
 impl TaskNotes {
     /// Whether there is nothing to keep.
     pub fn is_empty(&self) -> bool {
-        self.facts.is_empty() && self.dead_ends.is_empty()
+        self.facts.is_empty() && self.blockers.is_empty()
     }
 }
 
@@ -52,7 +52,7 @@ impl Scratchpad {
     /// Whether the scratchpad holds nothing, counting the last task's notes.
     pub fn is_empty(&self) -> bool {
         self.facts.is_empty()
-            && self.dead_ends.is_empty()
+            && self.blockers.is_empty()
             && self.approach.is_none()
             && self.last_task.as_ref().is_none_or(TaskNotes::is_empty)
     }
@@ -63,11 +63,11 @@ impl Scratchpad {
 pub struct ScratchpadUpdate {
     /// Facts to add.
     pub facts: Vec<String>,
-    /// Dead ends to add.
-    pub dead_ends: Vec<String>,
+    /// Blockers to add.
+    pub blockers: Vec<String>,
     /// The current approach; `Some("")` clears it.
     pub approach: Option<String>,
-    /// Remove every fact, dead end or approach containing one of these
+    /// Remove every fact, blocker or approach containing one of these
     /// (case-insensitive), so a wrong note does not stay.
     pub retract: Vec<String>,
 }
@@ -76,7 +76,7 @@ impl ScratchpadUpdate {
     /// Whether the update changes nothing.
     pub fn is_empty(&self) -> bool {
         self.facts.is_empty()
-            && self.dead_ends.is_empty()
+            && self.blockers.is_empty()
             && self.approach.is_none()
             && self.retract.is_empty()
     }
@@ -91,6 +91,6 @@ pub struct ClosedPlan {
     pub thread_id: String,
     /// The plan: every step completed or cancelled.
     pub items: Vec<TodoItem>,
-    /// The facts and dead ends; never both empty.
+    /// The facts and blockers; never both empty.
     pub notes: TaskNotes,
 }

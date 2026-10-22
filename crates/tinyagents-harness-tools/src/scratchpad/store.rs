@@ -21,8 +21,8 @@ use tinyagents_harness::store::Store;
 pub const SCRATCHPAD_NAMESPACE: &str = "graph.scratchpad";
 /// Facts kept; the oldest go first.
 pub const MAX_FACTS: usize = 12;
-/// Dead ends kept; the oldest go first.
-pub const MAX_DEAD_ENDS: usize = 8;
+/// Blockers kept; the oldest go first.
+pub const MAX_BLOCKERS: usize = 8;
 /// Longest note kept, in characters.
 pub const MAX_NOTE_CHARS: usize = 300;
 
@@ -85,7 +85,7 @@ pub async fn apply(
 }
 
 /// Ends the turn's bookkeeping for a plan that finished: when the thread's
-/// plan has steps and none open, and the model noted facts or dead ends, those
+/// plan has steps and none open, and the model noted facts or blockers, those
 /// move to [`Scratchpad::last_task`] (replacing the previous task's), the
 /// working notes and approach are cleared, and the plan with its notes comes
 /// back for the host to keep. Otherwise nothing changes and `None` comes back:
@@ -113,7 +113,7 @@ pub async fn close_finished_plan(
     };
     let notes = TaskNotes {
         facts: std::mem::take(&mut pad.facts),
-        dead_ends: std::mem::take(&mut pad.dead_ends),
+        blockers: std::mem::take(&mut pad.blockers),
     };
     if notes.is_empty() {
         return Ok(None);
@@ -130,7 +130,7 @@ pub async fn close_finished_plan(
         .await?;
     tracing::debug!(
         facts = notes.facts.len(),
-        dead_ends = notes.dead_ends.len(),
+        blockers = notes.blockers.len(),
         "[tinyagents::scratchpad] finished plan: notes moved to last_task"
     );
     Ok(Some(ClosedPlan {
@@ -166,10 +166,10 @@ pub(super) fn merge(pad: &mut Scratchpad, update: &ScratchpadUpdate) {
         needles.iter().any(|needle| text.contains(needle))
     };
     pad.facts.retain(|fact| !retracted(fact));
-    pad.dead_ends.retain(|dead_end| !retracted(dead_end));
+    pad.blockers.retain(|blocker| !retracted(blocker));
     if let Some(last) = &mut pad.last_task {
         last.facts.retain(|fact| !retracted(fact));
-        last.dead_ends.retain(|dead_end| !retracted(dead_end));
+        last.blockers.retain(|blocker| !retracted(blocker));
         if last.is_empty() {
             pad.last_task = None;
         }
@@ -178,7 +178,7 @@ pub(super) fn merge(pad: &mut Scratchpad, update: &ScratchpadUpdate) {
         pad.approach = None;
     }
     add(&mut pad.facts, &update.facts, MAX_FACTS);
-    add(&mut pad.dead_ends, &update.dead_ends, MAX_DEAD_ENDS);
+    add(&mut pad.blockers, &update.blockers, MAX_BLOCKERS);
     if let Some(approach) = &update.approach {
         let approach = clip(approach);
         pad.approach = (!approach.is_empty()).then_some(approach);

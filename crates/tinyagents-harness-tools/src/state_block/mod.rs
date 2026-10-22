@@ -12,7 +12,7 @@
 //! - **the plan**: the thread's todo list from the store the `todo` tool
 //!   writes ([`crate::todos`]), with the step in progress and how many tool
 //!   rounds it has run;
-//! - **the notes**: the model's own facts, dead ends and current approach,
+//! - **the notes**: the model's own facts, blockers and current approach,
 //!   and those of its last finished task ([`crate::scratchpad`]), written
 //!   through the `todo` tool's note arguments;
 //! - **the ledger**: facts derived from the run's own tool calls with no model

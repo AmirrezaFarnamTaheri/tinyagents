@@ -47,7 +47,7 @@ pub(super) fn render(
         }
         sections.push(lines.join("\n"));
     }
-    if let Some(nudge) = dead_end_nudge(pad, ledger) {
+    if let Some(nudge) = blocker_nudge(pad, ledger) {
         sections.push(nudge);
     }
     if !ledger.missing.is_empty() {
@@ -181,41 +181,41 @@ fn notes_sections(pad: &Scratchpad) -> Vec<String> {
     if !pad.facts.is_empty() {
         sections.push(list("Verified facts", &pad.facts));
     }
-    if !pad.dead_ends.is_empty() {
-        sections.push(list("Dead ends", &pad.dead_ends));
+    if !pad.blockers.is_empty() {
+        sections.push(list("Blockers", &pad.blockers));
     }
     if let Some(last) = pad.last_task.as_ref().filter(|last| !last.is_empty()) {
         let mut lines = vec!["From your last finished task:".to_string()];
         lines.extend(last.facts.iter().map(|fact| format!("  - fact: {fact}")));
         lines.extend(
-            last.dead_ends
+            last.blockers
                 .iter()
-                .map(|dead_end| format!("  - dead end: {dead_end}")),
+                .map(|blocker| format!("  - blocker: {blocker}")),
         );
         sections.push(lines.join("\n"));
     }
     sections
 }
 
-/// Failures since the step began before the block asks for a dead end.
-const DEAD_END_NUDGE_FAILURES: usize = 2;
+/// Failures since the step began before the block asks for a blocker.
+const BLOCKER_NUDGE_FAILURES: usize = 2;
 
-/// A request to record a failing approach: shown while the current step (or,
-/// without a plan, the run) has [`DEAD_END_NUDGE_FAILURES`] or more recent
-/// failures and the model has written no dead end since it began. The model
+/// A request to record what blocks the step: shown while the current step (or,
+/// without a plan, the run) has [`BLOCKER_NUDGE_FAILURES`] or more recent
+/// failures and the model has written no blocker since it began. The model
 /// otherwise notes facts when it ticks a step and never what did not work.
-fn dead_end_nudge(pad: Option<&Scratchpad>, ledger: &RunLedger) -> Option<String> {
+fn blocker_nudge(pad: Option<&Scratchpad>, ledger: &RunLedger) -> Option<String> {
     let failing = ledger
         .failures
         .iter()
         .filter(|failure| failure.round >= ledger.step_since)
         .count();
-    if failing < DEAD_END_NUDGE_FAILURES {
+    if failing < BLOCKER_NUDGE_FAILURES {
         return None;
     }
-    let newest = pad.and_then(|pad| pad.dead_ends.last()).cloned();
+    let newest = pad.and_then(|pad| pad.blockers.last()).cloned();
     if ledger
-        .dead_end_anchor
+        .blocker_anchor
         .as_ref()
         .is_some_and(|anchor| *anchor != newest)
     {
@@ -227,8 +227,8 @@ fn dead_end_nudge(pad: Option<&Scratchpad>, ledger: &RunLedger) -> Option<String
         "Calls keep failing"
     };
     Some(format!(
-        "{what} ({failing} recent failures). If the approach is wrong, record it before \
-         changing course: todo {{\"dead_ends\": [\"what failed and why\"], \"approach\": \
+        "{what} ({failing} recent failures). Record what blocks it before changing \
+         course: todo {{\"blockers\": [\"what does not work and why\"], \"approach\": \
          \"what you try next\"}}."
     ))
 }

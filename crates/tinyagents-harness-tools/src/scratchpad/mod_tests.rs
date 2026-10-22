@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::store::{self, MAX_DEAD_ENDS, MAX_FACTS, MAX_NOTE_CHARS, merge};
+use super::store::{self, MAX_BLOCKERS, MAX_FACTS, MAX_NOTE_CHARS, merge};
 use super::*;
 use crate::todos::{TodoItem, store as todo_store};
 use tinyagents_harness::store::{InMemoryStore, Store};
@@ -9,10 +9,10 @@ fn store() -> Arc<dyn Store> {
     Arc::new(InMemoryStore::default())
 }
 
-fn notes(facts: &[&str], dead_ends: &[&str]) -> ScratchpadUpdate {
+fn notes(facts: &[&str], blockers: &[&str]) -> ScratchpadUpdate {
     ScratchpadUpdate {
         facts: facts.iter().map(|note| note.to_string()).collect(),
-        dead_ends: dead_ends.iter().map(|note| note.to_string()).collect(),
+        blockers: blockers.iter().map(|note| note.to_string()).collect(),
         ..ScratchpadUpdate::default()
     }
 }
@@ -41,19 +41,19 @@ fn notes_are_one_line_deduplicated_and_capped_oldest_first() {
 
     let long = "x".repeat(MAX_NOTE_CHARS + 50);
     merge(&mut pad, &notes(&[], &[&long]));
-    assert_eq!(pad.dead_ends[0].chars().count(), MAX_NOTE_CHARS);
-    assert!(pad.dead_ends[0].ends_with('…'));
+    assert_eq!(pad.blockers[0].chars().count(), MAX_NOTE_CHARS);
+    assert!(pad.blockers[0].ends_with('…'));
 }
 
 #[test]
-fn dead_ends_are_capped_too() {
+fn blockers_are_capped_too() {
     let mut pad = Scratchpad::default();
-    let many: Vec<String> = (0..MAX_DEAD_ENDS + 2)
+    let many: Vec<String> = (0..MAX_BLOCKERS + 2)
         .map(|n| format!("tried {n}"))
         .collect();
     let many: Vec<&str> = many.iter().map(String::as_str).collect();
     merge(&mut pad, &notes(&[], &many));
-    assert_eq!(pad.dead_ends.len(), MAX_DEAD_ENDS);
+    assert_eq!(pad.blockers.len(), MAX_BLOCKERS);
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn retract_removes_matching_notes_before_new_ones_land() {
         &mut pad,
         &ScratchpadUpdate {
             facts: vec!["port is 8080".into(), "python3 is installed".into()],
-            dead_ends: vec!["pip install failed: no network".into()],
+            blockers: vec!["pip install failed: no network".into()],
             approach: Some("serve on port 8080".into()),
             ..ScratchpadUpdate::default()
         },
@@ -77,7 +77,7 @@ fn retract_removes_matching_notes_before_new_ones_land() {
         },
     );
     assert_eq!(pad.facts, ["python3 is installed", "port is 9090"]);
-    assert_eq!(pad.dead_ends, ["pip install failed: no network"]);
+    assert_eq!(pad.blockers, ["pip install failed: no network"]);
     assert_eq!(pad.approach, None, "the approach matched too");
 }
 
@@ -169,10 +169,10 @@ async fn a_finished_plan_hands_its_notes_over_once_and_keeps_them_as_the_last_ta
     assert_eq!(closed.thread_id, "t");
     assert_eq!(closed.items.len(), 2);
     assert_eq!(closed.notes.facts, ["the table is auth_users"]);
-    assert_eq!(closed.notes.dead_ends, ["ALTER without default timed out"]);
+    assert_eq!(closed.notes.blockers, ["ALTER without default timed out"]);
 
     let pad = store::get(&store, "t").await.unwrap().unwrap();
-    assert!(pad.facts.is_empty() && pad.dead_ends.is_empty());
+    assert!(pad.facts.is_empty() && pad.blockers.is_empty());
     assert_eq!(pad.approach, None, "the next task starts clean");
     assert_eq!(pad.last_task, Some(closed.notes));
     assert_eq!(
@@ -209,7 +209,7 @@ fn retract_reaches_the_last_tasks_notes() {
     let mut pad = Scratchpad {
         last_task: Some(TaskNotes {
             facts: vec!["port is 8080".into()],
-            dead_ends: Vec::new(),
+            blockers: Vec::new(),
         }),
         ..Scratchpad::default()
     };

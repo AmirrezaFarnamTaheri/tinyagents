@@ -11,7 +11,7 @@
 //! rendering.
 //!
 //! The same call (or one on its own) takes the model's notes for the thread's
-//! [scratchpad](crate::scratchpad): `facts`, `dead_ends`, `approach` and
+//! [scratchpad](crate::scratchpad): `facts`, `blockers`, `approach` and
 //! `retract`. They are written first, then the plan arguments run as if the
 //! notes were not there; notes alone read the list.
 
@@ -42,12 +42,12 @@ const TODO_DESCRIPTION: &str = "This thread's plan, for work with 3+ steps. Writ
     `complete`). No arguments reads the list. \
     Ticking is bookkeeping, not work: in the same response (or your next turn, if you cannot call \
     tools in parallel) do the next step unless the list is finished. Replace the list at most \
-    once per assistant response. Notes, in any call: `facts` (what a result proved), `dead_ends` \
-    (what failed and why), `approach` (what you are trying now), `retract` (text of a note that \
+    once per assistant response. Notes, in any call: `facts` (what a result proved), `blockers` \
+    (what does not work or must be avoided here, and why), `approach` (what you are trying now), `retract` (text of a note that \
     was wrong). They stay in [run state] on every call; write one when you learn it.";
 
 /// The note arguments, taken out before the plan arguments are read.
-const NOTE_ARGS: [&str; 4] = ["facts", "dead_ends", "approach", "retract"];
+const NOTE_ARGS: [&str; 4] = ["facts", "blockers", "approach", "retract"];
 
 /// The `todo` harness [`Tool`], backed by a [`Store`](tinyagents_harness::store::Store).
 pub struct TodoTool {
@@ -131,7 +131,7 @@ impl TodoTool {
         let mut outcome = self.dispatch_plan(thread_id, &args).await?;
         if let TodoOutcome::Ok(payload) = &mut outcome
             && update.facts.is_empty()
-            && update.dead_ends.is_empty()
+            && update.blockers.is_empty()
         {
             note_unrecorded_closes(payload, &before);
         }
@@ -229,7 +229,7 @@ fn split_notes(
         };
         match name {
             "facts" => update.facts = note_list(name, value)?,
-            "dead_ends" => update.dead_ends = note_list(name, value)?,
+            "blockers" => update.blockers = note_list(name, value)?,
             "retract" => update.retract = note_list(name, value)?,
             _ => {
                 update.approach = match value {
@@ -265,7 +265,7 @@ fn note_list(name: &str, value: Value) -> std::result::Result<Vec<String>, Strin
 fn notes_payload(pad: &Scratchpad) -> Value {
     let mut payload = json!({
         "facts": pad.facts,
-        "deadEnds": pad.dead_ends,
+        "blockers": pad.blockers,
     });
     if let Some(approach) = &pad.approach {
         payload["approach"] = json!(approach);
@@ -353,7 +353,7 @@ fn note_unrecorded_closes(payload: &mut Value, before: &[String]) {
     }
     let note = format!(
         "Steps {} were closed in one call with no notes. Record what they established (and \
-         anything that failed) now: todo {{\"facts\": [...], \"dead_ends\": [...]}}.",
+         anything that blocked you) now: todo {{\"facts\": [...], \"blockers\": [...]}}.",
         newly.join(", ")
     );
     match payload.get_mut("notes").and_then(Value::as_array_mut) {
@@ -442,10 +442,10 @@ fn parameters_schema() -> Value {
                 "items": { "type": "string" },
                 "description": "Facts a tool result proved, one line each."
             },
-            "dead_ends": {
+            "blockers": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Approaches that failed, with why, one line each."
+                "description": "What does not work or must be avoided here, and why (a failed approach, a limit, a constraint), one line each."
             },
             "approach": {
                 "type": "string",

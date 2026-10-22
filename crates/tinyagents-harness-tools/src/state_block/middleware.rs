@@ -97,8 +97,8 @@ fn remove_block(request: &mut ModelRequest) {
 }
 
 /// Notes the step in progress, so the block can say how long it has run, and
-/// the model's newest dead end when that step began.
-fn track_step(ledger: &mut RunLedger, items: &[TodoItem], newest_dead_end: Option<&String>) {
+/// the model's newest blocker when that step began.
+fn track_step(ledger: &mut RunLedger, items: &[TodoItem], newest_blocker: Option<&String>) {
     let current = items
         .iter()
         .position(|item| item.status == TodoStatus::InProgress)
@@ -106,10 +106,10 @@ fn track_step(ledger: &mut RunLedger, items: &[TodoItem], newest_dead_end: Optio
     if ledger.step != current {
         ledger.step = current;
         ledger.step_since = ledger.round;
-        ledger.dead_end_anchor = Some(newest_dead_end.cloned());
+        ledger.blocker_anchor = Some(newest_blocker.cloned());
     }
-    if ledger.dead_end_anchor.is_none() {
-        ledger.dead_end_anchor = Some(newest_dead_end.cloned());
+    if ledger.blocker_anchor.is_none() {
+        ledger.blocker_anchor = Some(newest_blocker.cloned());
     }
 }
 
@@ -140,7 +140,7 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
             track_step(
                 ledger,
                 &saved.todos,
-                saved.notes.as_ref().and_then(|pad| pad.dead_ends.last()),
+                saved.notes.as_ref().and_then(|pad| pad.blockers.last()),
             );
             ledger.staged = render(
                 saved.goal.as_ref(),
