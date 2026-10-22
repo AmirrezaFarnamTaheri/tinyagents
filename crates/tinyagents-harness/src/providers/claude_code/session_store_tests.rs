@@ -4,7 +4,133 @@ use super::*;
 use tinyagents_storage_kit::{Scope, StorageBackend};
 use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_testkit::{Failing, FaultPlan, MemoryBackend};
-use tinystoragedrivers_types::ErrorKind;
+use tinystoragedrivers_types::{
+    Capabilities, CollectionSpec, ErrorKind, Filter, Page, Precondition, Query, ReadCheck,
+    SearchHit, Sort, Version, Versioned, WatchOptions, WriteOp, WriteOptions, WriteResult,
+};
+
+#[derive(Debug)]
+struct DistinctDocuments(Arc<dyn DocumentStore>);
+
+#[async_trait::async_trait]
+impl DocumentStore for DistinctDocuments {
+    fn capabilities(&self) -> Capabilities {
+        self.0.capabilities()
+    }
+
+    async fn ensure_collection(
+        &self,
+        spec: &CollectionSpec,
+    ) -> tinystoragedrivers_types::Result<()> {
+        self.0.ensure_collection(spec).await
+    }
+
+    async fn get(
+        &self,
+        collection: &str,
+        id: &str,
+    ) -> tinystoragedrivers_types::Result<Option<Versioned<serde_json::Value>>> {
+        self.0.get(collection, id).await
+    }
+
+    async fn put(
+        &self,
+        collection: &str,
+        id: &str,
+        value: serde_json::Value,
+        precondition: Precondition,
+    ) -> tinystoragedrivers_types::Result<Version> {
+        self.0.put(collection, id, value, precondition).await
+    }
+
+    async fn put_with(
+        &self,
+        collection: &str,
+        id: &str,
+        value: serde_json::Value,
+        precondition: Precondition,
+        options: WriteOptions,
+    ) -> tinystoragedrivers_types::Result<Version> {
+        self.0
+            .put_with(collection, id, value, precondition, options)
+            .await
+    }
+
+    async fn delete(
+        &self,
+        collection: &str,
+        id: &str,
+        precondition: Precondition,
+    ) -> tinystoragedrivers_types::Result<bool> {
+        self.0.delete(collection, id, precondition).await
+    }
+
+    async fn query(
+        &self,
+        collection: &str,
+        query: &Query,
+    ) -> tinystoragedrivers_types::Result<Page<Versioned<serde_json::Value>>> {
+        self.0.query(collection, query).await
+    }
+
+    async fn count(
+        &self,
+        collection: &str,
+        filter: &Filter,
+    ) -> tinystoragedrivers_types::Result<u64> {
+        self.0.count(collection, filter).await
+    }
+
+    async fn delete_where(
+        &self,
+        collection: &str,
+        filter: &Filter,
+    ) -> tinystoragedrivers_types::Result<u64> {
+        self.0.delete_where(collection, filter).await
+    }
+
+    async fn claim(
+        &self,
+        collection: &str,
+        filter: &Filter,
+        sort: &[Sort],
+        patch: &serde_json::Value,
+    ) -> tinystoragedrivers_types::Result<Option<Versioned<serde_json::Value>>> {
+        self.0.claim(collection, filter, sort, patch).await
+    }
+
+    async fn atomic_batch(
+        &self,
+        ops: Vec<WriteOp>,
+    ) -> tinystoragedrivers_types::Result<Vec<WriteResult>> {
+        self.0.atomic_batch(ops).await
+    }
+
+    async fn atomic_batch_checked(
+        &self,
+        checks: Vec<ReadCheck>,
+        ops: Vec<WriteOp>,
+    ) -> tinystoragedrivers_types::Result<Vec<WriteResult>> {
+        self.0.atomic_batch_checked(checks, ops).await
+    }
+
+    async fn search(
+        &self,
+        collection: &str,
+        text: &str,
+        limit: usize,
+    ) -> tinystoragedrivers_types::Result<Vec<SearchHit>> {
+        self.0.search(collection, text, limit).await
+    }
+
+    async fn drop_collection(&self, collection: &str) -> tinystoragedrivers_types::Result<()> {
+        self.0.drop_collection(collection).await
+    }
+
+    async fn collections(&self, prefix: &str) -> tinystoragedrivers_types::Result<Vec<String>> {
+        self.0.collections(prefix).await
+    }
+}
 
 fn new_store() -> (tinyagents_storage_kit::ScopedStorage, Arc<SessionStore>) {
     let storage = MemoryBackend::new()
@@ -137,11 +263,14 @@ async fn reservations_coordinate_for_same_handle_but_not_different_scopes() {
 async fn reservations_coordinate_across_handles_for_the_same_scope() {
     let backend = MemoryBackend::new();
     let scope = Scope::new("claude-code-shared-scope").unwrap();
-    let storage_a = backend.for_scope(&scope).unwrap();
-    let storage_b = backend.for_scope(&scope).unwrap();
-    assert!(!Arc::ptr_eq(storage_a.documents(), storage_b.documents()));
-    let a = Arc::new(SessionStore::new(storage_a.documents()).unwrap());
-    let b = Arc::new(SessionStore::new(storage_b.documents()).unwrap());
+    let storage = backend.for_scope(&scope).unwrap();
+    let docs_a: Arc<dyn DocumentStore> =
+        Arc::new(DistinctDocuments(Arc::clone(storage.documents())));
+    let docs_b: Arc<dyn DocumentStore> =
+        Arc::new(DistinctDocuments(Arc::clone(storage.documents())));
+    assert!(!Arc::ptr_eq(&docs_a, &docs_b));
+    let a = Arc::new(SessionStore::new(&docs_a).unwrap());
+    let b = Arc::new(SessionStore::new(&docs_b).unwrap());
     let fingerprints = ["same-fingerprint".to_owned()];
 
     let (first_already, first_claim) = a.claim_delivered("thread", &fingerprints).await.unwrap();
