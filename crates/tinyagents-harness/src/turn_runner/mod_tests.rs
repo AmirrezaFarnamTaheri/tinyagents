@@ -34,7 +34,6 @@ struct Host {
     fingerprint_release: Option<Arc<tokio::sync::Notify>>,
     checkins: std::sync::atomic::AtomicUsize,
     runs: std::sync::atomic::AtomicUsize,
-    wrapped_queue: Mutex<Option<Arc<RunQueue<WrappedQueueRequest>>>>,
 }
 
 #[async_trait::async_trait]
@@ -120,14 +119,19 @@ impl TurnHost for Host {
     async fn cancel_children(&self, _request: &TurnRequest) {}
 }
 
+struct WrappedHost {
+    inner: Host,
+    wrapped_queue: Mutex<Option<Arc<RunQueue<WrappedQueueRequest>>>>,
+}
+
 #[async_trait::async_trait]
-impl TurnHost<serde_json::Value, WrappedQueueRequest> for Host {
+impl TurnHost<serde_json::Value, WrappedQueueRequest> for WrappedHost {
     async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
-        <Self as TurnHost>::checkout(self, request).await
+        <Host as TurnHost>::checkout(&self.inner, request).await
     }
 
     async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
-        <Self as TurnHost>::checkout_fork(self, request).await
+        <Host as TurnHost>::checkout_fork(&self.inner, request).await
     }
 
     async fn validate_fingerprint(
@@ -135,11 +139,11 @@ impl TurnHost<serde_json::Value, WrappedQueueRequest> for Host {
         request: &TurnRequest,
         session: &TurnSession,
     ) -> Result<(), String> {
-        <Self as TurnHost>::validate_fingerprint(self, request, session).await
+        <Host as TurnHost>::validate_fingerprint(&self.inner, request, session).await
     }
 
     fn run_origin(&self, request: &TurnRequest) -> serde_json::Value {
-        <Self as TurnHost>::run_origin(self, request)
+        <Host as TurnHost>::run_origin(&self.inner, request)
     }
 
     async fn run(
@@ -152,8 +156,10 @@ impl TurnHost<serde_json::Value, WrappedQueueRequest> for Host {
         _progress: tokio::sync::mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String> {
         *self.wrapped_queue.lock().unwrap() = Some(queue);
-        self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if let (Some(started), Some(release)) = (&self.started, &self.release) {
+        self.inner
+            .runs
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let (Some(started), Some(release)) = (&self.inner.started, &self.inner.release) {
             started.notify_one();
             tokio::select! {
                 _ = release.notified() => {},
@@ -167,11 +173,11 @@ impl TurnHost<serde_json::Value, WrappedQueueRequest> for Host {
     }
 
     async fn checkin(&self, request: &TurnRequest) {
-        <Self as TurnHost>::checkin(self, request).await
+        <Host as TurnHost>::checkin(&self.inner, request).await
     }
 
     async fn cancel_children(&self, request: &TurnRequest) {
-        <Self as TurnHost>::cancel_children(self, request).await
+        <Host as TurnHost>::cancel_children(&self.inner, request).await
     }
 }
 
