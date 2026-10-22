@@ -465,6 +465,14 @@ async fn failed_generation_is_retired_before_a_slow_terminal_callback() {
             .any(|(id, event)| id == "accepted-before-failure"
                 && matches!(event, TerminalEvent::Failed { .. }))
     );
+    let classified = events.classified.lock().unwrap();
+    assert_eq!(
+        classified
+            .iter()
+            .find(|(id, _)| id == "accepted-before-failure")
+            .map(|(_, classification)| classification.message.as_str()),
+        Some("queued turn was not run: host run failed")
+    );
 }
 
 #[tokio::test]
@@ -572,6 +580,7 @@ struct BlockingFailureEvents {
     terminal_started: tokio::sync::Notify,
     release_terminal: tokio::sync::Notify,
     terminal: Mutex<Vec<(String, TerminalEvent)>>,
+    classified: Mutex<Vec<(String, FailureClassification)>>,
 }
 
 #[async_trait::async_trait]
@@ -586,6 +595,18 @@ impl EventSink for BlockingFailureEvents {
             self.terminal_started.notify_one();
             self.release_terminal.notified().await;
         }
+    }
+    async fn classified_failure(
+        &self,
+        request: &TurnRequest,
+        event: TerminalEvent,
+        classification: FailureClassification,
+    ) {
+        self.classified
+            .lock()
+            .unwrap()
+            .push((request.request_id.clone(), classification));
+        self.terminal(request, event).await;
     }
 }
 

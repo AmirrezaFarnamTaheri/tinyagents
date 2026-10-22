@@ -36,3 +36,28 @@ separate total ceiling. Either guard cancels child work and asks the
 `AgentProgress` is the canonical channel-independent progress vocabulary.
 Hosts translate it to their own event wire format; this module does not define
 channel event names or transport payloads.
+
+## Host progress and failure adapters
+
+Use one `WorkTracker` for each active turn when converting `AgentProgress` to
+runner liveness signals. Call `observe` for every progress event and forward
+any returned `WorkStarted` or `WorkFinished` signal to the runner's progress
+sender. The tracker emits only busy/idle transitions: overlapping model
+iterations and tool calls keep the turn busy until the last active item ends.
+Hosts should continue forwarding the `AgentProgress` event itself separately
+when they need to deliver detailed progress to the event sink.
+
+Implement `RequeuePayload` when a host synthesizes a queued follow-up payload.
+`requeued` builds the new payload from its thread and enqueue time; `adopt`
+copies only metadata the host considers safe to carry over from the running
+request. The new request retains ownership of its text, IDs, and timestamp.
+
+`FailureClassifier::classify` remains the minimal class-and-message API.
+Override `classify_failure` to attach host-defined structured details, then
+override `EventSink::classified_failure` to project those details to the host's
+event format. Its default forwards the terminal event to `terminal`, preserving
+existing sinks. When one generation failure retires queued requests, the runner
+rewrites each classification message to match that request's queued failure
+message while preserving its class and details.
+
+Focused unit coverage lives in `mod_tests.rs` and `mod_api_tests.rs`.
