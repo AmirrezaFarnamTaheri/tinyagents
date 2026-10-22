@@ -257,6 +257,12 @@ named scope does, on catalogue, search and dispatch alike. A bare wildcard uses 
 `with_legacy_unrestricted_tool_allowlist` opts into unrestricted fallback.
 Explicit-model runs have no hosted scope and remain unaffected.
 
+A hosted child (a `SubAgentTool` run inside a hosted parent) is narrowed to its
+parent's binding: the parent's exclusions are added to the child's, the
+parent's allowlist bounds the child's (a child with no allowlist takes the
+parent's), and the parent's rule layers stack on the child's. A child never
+widens what its parent was allowed. A root run has no parent and is unchanged.
+
 ## Unknown-tool recovery
 
 When the model calls a tool that is not registered, the agent loop's behavior is

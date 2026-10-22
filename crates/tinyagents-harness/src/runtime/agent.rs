@@ -1109,21 +1109,44 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         };
         let deferred_tools = definition.deferred_tools.iter().cloned().collect();
         let tool_rules = definition.tool_rules;
+        let mut binding = HostInvocationBinding {
+            host: host.clone(),
+            agent_id: request.agent_id.clone(),
+            model_pin: definition.model.pin(),
+            model_hint: definition.model.hint(),
+            role: definition.role,
+            allowed_tools,
+            wildcard_tools,
+            denied_tools,
+            deferred_tools,
+            tool_rules,
+            inherited_rules: Vec::new(),
+            progress: progress.clone(),
+            runtime: None,
+        };
+        // A hosted child runs in a context that still carries its parent's
+        // binding (`RunContext::child` copies it). Narrow the child to it, so
+        // a child never widens what its parent was allowed: the parent's
+        // denials apply, its allowlist bounds the child's, and its rule
+        // layers stack on the child's. A root run has no parent binding.
+        if let Some(parent) = host_invocation_binding::<State, Ctx>(context)? {
+            binding
+                .denied_tools
+                .extend(parent.denied_tools.iter().cloned());
+            binding.allowed_tools = match (binding.allowed_tools.take(), &parent.allowed_tools) {
+                (Some(child), Some(parent)) => Some(child.intersection(parent).cloned().collect()),
+                (None, Some(parent)) => Some(parent.clone()),
+                (child, None) => child,
+            };
+            binding.inherited_rules = parent
+                .tool_rules
+                .iter()
+                .chain(&parent.inherited_rules)
+                .cloned()
+                .collect();
+        }
         Ok(PreparedAgentTurn {
-            binding: HostInvocationBinding {
-                host: host.clone(),
-                agent_id: request.agent_id.clone(),
-                model_pin: definition.model.pin(),
-                model_hint: definition.model.hint(),
-                role: definition.role,
-                allowed_tools,
-                wildcard_tools,
-                denied_tools,
-                deferred_tools,
-                tool_rules,
-                progress: progress.clone(),
-                runtime: None,
-            },
+            binding,
             thread_id,
             run_id: context.run_id().clone(),
             input_text,

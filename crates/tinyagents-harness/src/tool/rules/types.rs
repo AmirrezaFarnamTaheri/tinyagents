@@ -121,6 +121,21 @@ impl ToolGate {
             .any(|pattern| tinytools::glob_matches(pattern, name))
     }
 
+    /// Stacks a hosted parent's rule layers on this gate's, so a child's
+    /// rules can only narrow what its parent was allowed. Permissive layers
+    /// are dropped, as in [`Self::new`].
+    pub(crate) fn with_inherited_rules<'a>(
+        mut self,
+        layers: impl IntoIterator<Item = &'a ToolRules>,
+    ) -> Self {
+        for layer in layers.into_iter().filter(|layer| !layer.is_permissive()) {
+            let mut merged = self.rules.as_deref().cloned().unwrap_or_default();
+            merged.push(layer.clone());
+            self.rules = Some(Arc::new(merged));
+        }
+        self
+    }
+
     /// Defers these names for this invocation without widening hidden registrations.
     pub(crate) fn with_deferred_names(mut self, names: impl IntoIterator<Item = String>) -> Self {
         self.deferred.extend(names);
