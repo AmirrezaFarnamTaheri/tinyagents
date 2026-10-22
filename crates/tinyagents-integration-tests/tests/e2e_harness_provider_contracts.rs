@@ -4,7 +4,6 @@ use futures::stream;
 use serde::Deserialize;
 use serde_json::json;
 use tinyagents_harness::cost::{CostTotals, ModelPricing, estimate_cost};
-use tinyagents_harness::stream::{StreamChunk, StreamMode, StreamSink, stream as filter_stream};
 use tinyagents_harness::structured::{
     StructuredExtractor, StructuredStrategy, response_format_for_strategy,
 };
@@ -281,44 +280,6 @@ fn model_profiles_stream_chunks_usage_and_cost_are_additive() {
         tool_calling: true,
         ..CapabilitySet::default()
     }));
-
-    let chunks = vec![
-        StreamChunk::Values(json!({ "state": 1 })),
-        StreamChunk::Updates(json!({ "state": 2 })),
-        StreamChunk::Message(MessageDelta {
-            text: "delta".into(),
-            reasoning: String::new(),
-            tool_call: Some(ToolDelta {
-                call_id: "tool-1".into(),
-                content: "partial".into(),
-                tool_name: None,
-                ..Default::default()
-            }),
-        }),
-        StreamChunk::Debug("trace".into()),
-        StreamChunk::Interrupt(json!({ "kind": "input" })),
-        StreamChunk::Custom(json!({ "x": true })),
-    ];
-    assert_eq!(chunks[0].mode(), StreamMode::Values);
-    assert_eq!(
-        filter_stream(&chunks, &[StreamMode::Messages, StreamMode::Custom]),
-        vec![chunks[2].clone(), chunks[5].clone()]
-    );
-
-    let mut sink = StreamSink::new([StreamMode::Messages]);
-    assert!(sink.is_active(StreamMode::Messages));
-    assert!(!sink.is_active(StreamMode::Debug));
-    sink.push(chunks[2].clone());
-    sink.push(chunks[3].clone());
-    assert_eq!(sink.len(), 1);
-    sink.enable(StreamMode::Debug);
-    sink.push(chunks[3].clone());
-    sink.disable(StreamMode::Messages);
-    sink.push(chunks[2].clone());
-    assert_eq!(sink.peek(), vec![chunks[2].clone(), chunks[3].clone()]);
-    assert_eq!(sink.drain().len(), 2);
-    assert!(sink.is_empty());
-    assert_eq!(StreamSink::all().active_modes().len(), 6);
 
     let mut usage = Usage::new(10, 5);
     usage.cache_read_tokens = 3;

@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use tinyagents_graph::*;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::testkit::{EventRecorder, ScriptedModel, Trajectory};
