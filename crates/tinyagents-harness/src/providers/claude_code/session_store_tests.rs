@@ -144,15 +144,9 @@ async fn reservations_coordinate_across_handles_for_the_same_scope() {
     let b = Arc::new(SessionStore::new(storage_b.documents()).unwrap());
     let fingerprints = ["same-fingerprint".to_owned()];
 
-    let (first_already, first_claim) = a
-        .claim_delivered("thread", &fingerprints)
-        .await
-        .unwrap();
+    let (first_already, first_claim) = a.claim_delivered("thread", &fingerprints).await.unwrap();
     assert!(first_already.is_empty());
-    let (second_already, _) = b
-        .claim_delivered("thread", &fingerprints)
-        .await
-        .unwrap();
+    let (second_already, _) = b.claim_delivered("thread", &fingerprints).await.unwrap();
     assert!(second_already.contains(&fingerprints[0]));
     first_claim.release().await;
     assert!(

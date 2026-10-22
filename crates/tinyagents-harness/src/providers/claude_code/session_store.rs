@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tinyagents_storage_kit::primitives::{Kv, Leases};
 use tinyagents_storage_kit::Key;
+use tinyagents_storage_kit::primitives::{Kv, Leases};
 use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::StorageError;
 
@@ -77,14 +77,17 @@ impl SessionStore {
         let _guard = STORE_LOCK.lock().await;
         let record = self.record(thread_id).await?.unwrap_or_default();
         let mut already: HashSet<String> = record.delivered.into_iter().collect();
-        let in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
-        already.extend(
-            in_flight
-                .iter()
-                .filter(|(store, thread, _)| *store == self.store_identity && thread == thread_id)
-                .map(|(_, _, fingerprint)| fingerprint.clone()),
-        );
-        drop(in_flight);
+        {
+            let in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+            already.extend(
+                in_flight
+                    .iter()
+                    .filter(|(store, thread, _)| {
+                        *store == self.store_identity && thread == thread_id
+                    })
+                    .map(|(_, _, fingerprint)| fingerprint.clone()),
+            );
+        }
         let mut claimed = Vec::new();
         let holder = uuid::Uuid::new_v4().to_string();
         let mut reservations = Vec::new();
@@ -314,8 +317,7 @@ impl DeliveryClaim {
         if let Some(heartbeat) = self.heartbeat.take() {
             heartbeat.abort();
         }
-        self.store
-            .release_in_flight(&self.thread_id, &self.claimed);
+        self.store.release_in_flight(&self.thread_id, &self.claimed);
         let reservations = std::mem::take(&mut self.reservations);
         release_reservations(&self.store.leases, &reservations).await;
     }
@@ -343,7 +345,9 @@ impl Drop for DeliveryClaim {
                         )
                         .await
                     {
-                        tracing::warn!("failed to release Claude Code delivery reservation: {error}");
+                        tracing::warn!(
+                            "failed to release Claude Code delivery reservation: {error}"
+                        );
                     }
                 }
             });

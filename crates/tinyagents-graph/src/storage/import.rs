@@ -10,8 +10,8 @@
 use serde_json::Value;
 use tinyagents_harness::ids::now_ms;
 use tinyagents_storage_kit::{
-    CollectionSpec, Cursor, ErrorKind, Filter, ID_FIELD, Key, Leases, Migrations, Precondition,
-    Query, Result, ScopedStorage, Sort, WriteOptions, primitives,
+    CollectionSpec, Cursor, ErrorKind, Filter, ID_FIELD, Key, Leases, MIGRATIONS_COLLECTION,
+    Migrations, Precondition, Query, Result, ScopedStorage, Sort, WriteOptions, primitives,
 };
 
 use super::steps::LEGACY;
@@ -76,6 +76,10 @@ pub(crate) async fn import_legacy_leases_with_lease(
     storage: &ScopedStorage,
     lease: &tinyagents_storage_kit::MigrationLease,
 ) -> Result<u64> {
+    storage
+        .documents()
+        .ensure_collection(&CollectionSpec::new(MIGRATIONS_COLLECTION))
+        .await?;
     let migrations = Migrations::new(storage);
     if migrations.done(LEASE_OWNER, "lease_import").await? {
         tracing::debug!("[graph-storage] lease import already done");
@@ -150,6 +154,10 @@ pub(crate) async fn import_legacy_task_cache_with_lease(
 ) -> Result<u64> {
     const LEGACY_COLLECTION: &str = "graph_task_cache";
     const STEP: &str = "kv_import_graph_task_cache";
+    storage
+        .documents()
+        .ensure_collection(&CollectionSpec::new(MIGRATIONS_COLLECTION))
+        .await?;
     let migrations = Migrations::new(storage);
     if migrations.done(KV_OWNER, STEP).await? {
         tracing::debug!("[graph-storage] task cache import already done");
