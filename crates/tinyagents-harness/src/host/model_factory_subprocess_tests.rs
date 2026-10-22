@@ -4,6 +4,16 @@ use super::*;
 use crate::host::model_factory::{SubprocessProviderContext, build_claude_subprocess_model_with};
 
 #[cfg(feature = "claude-code")]
+fn test_documents() -> Arc<dyn tinyagents_storage_kit::DocumentStore> {
+    use tinyagents_storage_kit::{Scope, StorageBackend};
+    use tinystoragedrivers_testkit::MemoryBackend;
+
+    let backend = MemoryBackend::new();
+    let scope = Scope::new("model-factory-tests").unwrap();
+    Arc::clone(backend.for_scope(&scope).unwrap().documents())
+}
+
+#[cfg(feature = "claude-code")]
 #[test]
 fn subprocess_route_classification_accepts_existing_claude_route_spellings() {
     use tinyinference_providers::route::{ProviderRoute, RouteKind};
@@ -33,6 +43,7 @@ fn subprocess_builder_forwards_model_paths_and_mcp_without_spawning_a_process() 
     let context = SubprocessProviderContext {
         workspace_dir: std::path::PathBuf::from("/workspace/session"),
         action_dir: std::path::PathBuf::from("/workspace/project"),
+        documents: test_documents(),
         claude_agent_sdk: crate::providers::claude_agent_sdk::ClaudeAgentSdkConfig::default(),
         mcp_provider: Some(Arc::clone(&mcp)),
     };
@@ -79,6 +90,7 @@ fn sdk_subprocess_builder_uses_route_model_and_host_config_without_calling_cli_c
     let context = SubprocessProviderContext {
         workspace_dir: std::path::PathBuf::from("/workspace/session"),
         action_dir: std::path::PathBuf::from("/workspace/project"),
+        documents: test_documents(),
         claude_agent_sdk: crate::providers::claude_agent_sdk::ClaudeAgentSdkConfig {
             default_model: "host-default".to_owned(),
             ..Default::default()
@@ -110,6 +122,7 @@ fn empty_claude_code_model_is_rejected_before_constructor_is_called() {
     let context = SubprocessProviderContext {
         workspace_dir: std::path::PathBuf::from("/workspace/session"),
         action_dir: std::path::PathBuf::from("/workspace/project"),
+        documents: test_documents(),
         claude_agent_sdk: crate::providers::claude_agent_sdk::ClaudeAgentSdkConfig::default(),
         mcp_provider: None,
     };
