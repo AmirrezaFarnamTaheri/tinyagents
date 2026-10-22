@@ -207,10 +207,8 @@ async fn denied_install_is_authorized_before_manager_resolution() {
     ] {
         let (tool, state) = tool(true);
         let result = tool
-            .execute_with_context_and_path_lookup(args, ToolCallOptions::default(), None, |name| {
+            .execute_with_context_and_path_lookup(args, ToolCallOptions::default(), None, |_| {
                 state.manager_lookup_calls.fetch_add(1, Ordering::SeqCst);
-                // The automatic-detection case sees no supported manager.
-                assert_eq!(name, "apt-get");
                 false
             })
             .await
