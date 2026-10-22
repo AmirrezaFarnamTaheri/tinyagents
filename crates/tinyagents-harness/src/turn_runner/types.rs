@@ -340,7 +340,7 @@ pub enum TurnRunnerError {
 }
 
 #[derive(Clone)]
-struct ActiveTurn<P, Q> {
+struct ActiveTurn<Q> {
     request_id: String,
     cancel: crate::CancellationToken,
     cancellable: bool,
@@ -387,7 +387,7 @@ pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value, Q = TurnRequest<P
     config: TurnRunnerConfig,
     locks: ThreadLocks,
     parallel_queues: ParallelQueueMap<Q>,
-    active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<P, Q>>>,
+    active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<Q>>>,
     parallel_active: Mutex<HashMap<(ScopeKey, String, String), crate::CancellationToken>>,
     next_generation: std::sync::atomic::AtomicU64,
 }
@@ -592,9 +592,9 @@ where
     async fn run_one(
         &self,
         mut request: TurnRequest<P>,
-        reservation: Option<ActiveTurn<P, Q>>,
-        state_out: &mut Option<ActiveTurn<P, Q>>,
-        next_out: &mut Option<(TurnRequest<P>, ActiveTurn<P, Q>)>,
+        reservation: Option<ActiveTurn<Q>>,
+        state_out: &mut Option<ActiveTurn<Q>>,
+        next_out: &mut Option<(TurnRequest<P>, ActiveTurn<Q>)>,
     ) -> Result<TurnResult, TurnRunnerError> {
         let deadline = TurnDeadline::new(request.deadline.or(self.config.deadline));
         let cancellation = reservation
@@ -1011,7 +1011,7 @@ where
         owner_generation: u64,
     ) -> (
         Vec<TurnRequest<P>>,
-        Option<(TurnRequest<P>, ActiveTurn<P, Q>)>,
+        Option<(TurnRequest<P>, ActiveTurn<Q>)>,
     ) {
         let key = (scope.clone(), thread_id.to_owned());
         let mut active = self.active.lock().await;
