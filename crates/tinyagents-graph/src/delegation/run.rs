@@ -13,7 +13,7 @@ use super::types::{
     DelegationStageOutput, DelegationState, DelegationUpdate, PendingApproval,
 };
 use crate::checkpoint::{Checkpoint, Checkpointer};
-use crate::thread_locks::ThreadLockMap;
+use crate::execution_locks::RunLockMap;
 use crate::{Command, END};
 
 /// Serializes [`run_or_resume_delegation`]'s classify-then-dispatch critical
@@ -22,10 +22,8 @@ use crate::{Command, END};
 /// — a weak-value map so an idle thread's mutex is reclaimed instead of
 /// leaking for the life of the process.
 fn thread_lock(thread_id: &str) -> Arc<Mutex<()>> {
-    static LOCKS: OnceLock<ThreadLockMap> = OnceLock::new();
-    LOCKS
-        .get_or_init(|| ThreadLockMap::new("delegation run/resume lock map"))
-        .lock_for(thread_id)
+    static LOCKS: OnceLock<RunLockMap> = OnceLock::new();
+    LOCKS.get_or_init(RunLockMap::default).lock_for(thread_id)
 }
 
 /// Run the plan→execute⇄review→finalize delegation graph, invoking `run_stage`

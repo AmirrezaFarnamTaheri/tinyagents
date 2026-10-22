@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::jobs_tests::PanickingModel;
 use super::test::BlockedModel;
+use super::test_helpers::PanickingModel;
 use crate::subagent::{SpawnAdmission, SpawnPolicy};
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::runtime::AgentHarness;

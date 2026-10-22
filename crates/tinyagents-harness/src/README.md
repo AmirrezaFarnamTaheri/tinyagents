@@ -56,7 +56,7 @@ the module map below.
 | `title` | Pure helpers for generating, sanitising and validating conversation thread titles. |
 | `token_estimation` | The crate's shared, structurally-complete token estimator (a port of LangChain's `count_tokens_approximately`). |
 | `tool` | Harness-side registration and execution support for canonical (`tinytools`) tools. See [`tool/README.md`](tool/README.md). |
-| `tools` (feature `builtin-tools`; `tools` is a deprecated alias) | Optional builtin harness tools implementing the canonical `tinytools::Tool` interface. See [`tools/README.md`](tools/README.md). |
+| Default tool implementations | Owned by `tinyagents-harness-tools`; generic registration, binding, and execution infrastructure remains under `tool`. See [`tools/README.md`](tools/README.md). |
 | `workspace` | Workspace isolation and sandbox hooks (`WorkspaceIsolation`, `SharedRootWorkspace`, path policy, git helpers). See [`workspace/README.md`](workspace/README.md). |
 
 ## How the pieces fit together

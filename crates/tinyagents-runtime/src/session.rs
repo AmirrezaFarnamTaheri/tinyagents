@@ -1,4 +1,5 @@
 use std::{future::Future, sync::Arc};
+use tinyagents_harness::tool::ToolSnapshot;
 
 use tinyagents_harness::CancellationToken;
 use tinyagents_harness::terminal::{TerminalOutcome, TerminalReason};
@@ -11,7 +12,7 @@ use tinyinference_llm::message::Message;
 use crate::{
     CommitReceipt, DriverRequest, PrefixSnapshot, ResumeMode, ResumePreparation, RuntimeError,
     SessionDriver, SessionHooks, SessionResume, SessionStateView, SessionTerminal,
-    SessionTurnOutcome, SessionTurnRequest, ToolSnapshot, TranscriptCodec, TranscriptCommitReceipt,
+    SessionTurnOutcome, SessionTurnRequest, TranscriptCodec, TranscriptCommitReceipt,
     TranscriptDelta, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 

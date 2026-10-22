@@ -15,6 +15,7 @@
 
 pub mod parallel;
 pub mod status;
+pub mod steering;
 pub mod subagent;
 pub mod teams;
 pub mod topology;

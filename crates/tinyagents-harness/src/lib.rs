@@ -13,8 +13,6 @@
 //! # Cargo features
 //!
 //! - `sqlite` — retained as a no-op for compatibility; durable stores are the `Driver*` types over `tinystoragedrivers`.
-//! - `builtin-tools` — the bundled [`tools`] (currently the time tool). The
-//!   old name `tools` is kept as a deprecated alias.
 //! - `multimodal` — image/audio/binary content resolution ([`multimodal`]),
 //!   pulling in `reqwest` and `flate2`.
 //! - `claude-code` — the Claude Code CLI and Claude Agent SDK provider
@@ -88,6 +86,7 @@ pub mod multimodal;
 pub mod no_progress;
 pub mod observability;
 pub mod oneshot;
+pub mod progress;
 pub mod prompt;
 pub mod providers;
 pub mod retriever;
@@ -106,13 +105,12 @@ pub mod thread_reasoning;
 pub mod title;
 pub mod token_estimation;
 pub mod tool;
-#[cfg(feature = "builtin-tools")]
-pub mod tools;
 pub mod turn_deadline;
 pub mod turn_outcome;
 pub mod turn_policy;
 pub mod turn_run_error;
 pub mod turn_run_finalize;
+pub mod turn_runner;
 pub mod turn_stop;
 pub mod workspace;
 
@@ -163,6 +161,7 @@ pub use observability::{DriverStatusStore, mint_run_id, reap_orphaned_runs};
 pub use observability::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
 };
+pub use progress::AgentProgress;
 pub use run_queue::{
     ForwardEvent, ForwardEventSink, ForwarderCleanup, QueueLane, QueueMode, QueueStatus,
     QueuedMessage, RunQueue, RunQueueHandle, SteeringForwarderGuard,

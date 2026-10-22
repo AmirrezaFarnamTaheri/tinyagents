@@ -15,7 +15,7 @@
 //!   runs in the background by default, returning a job id immediately; callers
 //!   can request `mode: "inline"` to await the child and receive its final
 //!   result in the same call.
-//! - [`SubAgentJobsTool`] and [`SubAgentMessageTool`] let the host or parent
+//! - [`tinyagents_harness_tools::subagents::SubAgentJobsTool`] and [`tinyagents_harness_tools::subagents::SubAgentMessageTool`] let the host or parent
 //!   query those jobs and steer live children by job id.
 //! - [`SubAgentSession`] keeps a single [`SubAgent`] alive across multiple
 //!   turns, *reusing* the same harness while accumulating the conversation
@@ -29,7 +29,7 @@
 //! - **Reuse** ([`SubAgentSession`]): the child run *completes*, the
 //!   orchestrator obtains human input, then calls the **same** sub-agent again
 //!   carrying the prior transcript. Nothing is killed or restarted.
-//! - **Steering** ([`SubAgentMessageTool`]): an orchestrator or human sends a
+//! - **Steering** ([`tinyagents_harness_tools::subagents::SubAgentMessageTool`]): an orchestrator or human sends a
 //!   message to a **still-running** job. Delivery occurs at a safe checkpoint.
 //!
 //! `SubAgentSession` implements the first. The flow is:
@@ -74,7 +74,6 @@
 //! - `*_tests.rs` files hold the focused tests.
 
 mod delegation_tool;
-mod driver_tool;
 mod jobs;
 mod policy_run;
 mod status_map;
@@ -87,19 +86,12 @@ pub use delegation_tool::{
     DELEGATION_REVIEW_PROMPT, DelegationEnvelope, DelegationRequest, DelegationTool,
     MultiTargetDelegationTool, ReviewApprovalPolicy, parse_approval, review_stage_output,
 };
-pub use driver_tool::{DriverSubAgentTool, SubagentDriverToolHost};
-pub use jobs::{
-    SubAgentJobAction, SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools,
-};
+pub use jobs::InlineJobGuard;
 pub use types::*;
 
 #[cfg(test)]
 #[path = "delegation_tool_tests.rs"]
 mod delegation_tool_tests;
-
-#[cfg(test)]
-#[path = "driver_tool_tests.rs"]
-mod driver_tool_tests;
 
 use std::sync::Arc;
 
@@ -666,102 +658,9 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
             role: crate::subagent::SubagentRole::default(),
             delegation_tools: Vec::new(),
             result_policy: crate::subagent::ResultPolicy::default(),
-            driver_dispatch: None,
             job_registry: None,
             job_owner_scope: Arc::new(|owner| owner.to_string()),
         }
-    }
-
-    /// Converts this tool declaration to a host-planned driver invocation.
-    ///
-    /// The host request factory must construct a validated request with an
-    /// owned child context. Agent selection, authorization, prompts, tools,
-    /// workspace policy, execution and persistence remain in the driver's
-    /// planner/executor/persistence seams. A requested background call runs
-    /// detached only when `delivery_target` returns a destination; otherwise
-    /// the request is executed inline and its result is returned.
-    pub fn with_driver<H>(
-        mut self,
-        driver: Arc<crate::subagent::SubagentDriver<Ctx, H>>,
-        request_factory: impl Fn(
-            &State,
-            &RunContext<Ctx>,
-            &Value,
-            &tinyagents_harness::ids::CallId,
-        ) -> std::result::Result<
-            crate::subagent::SubagentRequest<Ctx, H>,
-            crate::subagent::SubagentError,
-        > + Send
-        + Sync
-        + 'static,
-        delivery_target: impl Fn(&crate::subagent::SubagentRequest<Ctx, H>) -> Option<String>
-        + Send
-        + Sync
-        + 'static,
-    ) -> Self
-    where
-        H: Send + Sync + 'static,
-    {
-        let mut dispatch = DriverSubAgentTool::new(
-            self.tool_name.clone(),
-            self.tool_description.clone(),
-            driver,
-            request_factory,
-            delivery_target,
-        )
-        .with_parameters(self.parameters.clone())
-        .with_owner_scope(self.job_owner_scope.clone());
-        if let Some(jobs) = &self.job_registry {
-            dispatch = dispatch.with_job_registry(jobs.clone());
-        }
-        self.driver_dispatch = Some(Arc::new(dispatch));
-        self
-    }
-
-    /// Like [`Self::with_driver`], with a host callback for detached completion.
-    /// The callback receives the resolved delivery target and the neutral
-    /// outcome (or failure), allowing the host to persist/route completion.
-    pub fn with_driver_and_completion<H>(
-        mut self,
-        driver: Arc<crate::subagent::SubagentDriver<Ctx, H>>,
-        request_factory: impl Fn(
-            &State,
-            &RunContext<Ctx>,
-            &Value,
-            &tinyagents_harness::ids::CallId,
-        ) -> std::result::Result<
-            crate::subagent::SubagentRequest<Ctx, H>,
-            crate::subagent::SubagentError,
-        > + Send
-        + Sync
-        + 'static,
-        delivery_target: impl Fn(&crate::subagent::SubagentRequest<Ctx, H>) -> Option<String>
-        + Send
-        + Sync
-        + 'static,
-        completion: impl Fn(&str, std::result::Result<crate::subagent::SubagentOutcome, String>)
-        + Send
-        + Sync
-        + 'static,
-    ) -> Self
-    where
-        H: Send + Sync + 'static,
-    {
-        let mut dispatch = DriverSubAgentTool::new(
-            self.tool_name.clone(),
-            self.tool_description.clone(),
-            driver,
-            request_factory,
-            delivery_target,
-        )
-        .with_parameters(self.parameters.clone())
-        .with_owner_scope(self.job_owner_scope.clone())
-        .with_completion_handler(completion);
-        if let Some(jobs) = &self.job_registry {
-            dispatch = dispatch.with_job_registry(jobs.clone());
-        }
-        self.driver_dispatch = Some(Arc::new(dispatch));
-        self
     }
 
     /// Applies a timeout/retry/budget policy to every spawned child.
@@ -1161,9 +1060,6 @@ where
     Ctx: Send + Sync + 'static,
 {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {
-        if let Some(dispatch) = &self.driver_dispatch {
-            return dispatch.tool();
-        }
         // Built once and cached (M-4): `tool()` is called several times per
         // admitted call and once per tool per run for `schemas()`, and a
         // fresh `Arc<SubAgentToolDeclaration>` with a cloned `parameters`
@@ -1179,9 +1075,6 @@ where
     }
 
     fn output_origin(&self) -> tinyagents_harness::host::ContentOrigin {
-        if let Some(dispatch) = &self.driver_dispatch {
-            return dispatch.output_origin();
-        }
         tinyagents_harness::host::ContentOrigin::Agent
     }
 
@@ -1193,11 +1086,6 @@ where
         options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
     ) -> anyhow::Result<tinytools::ToolResult> {
-        if let Some(dispatch) = &self.driver_dispatch {
-            return dispatch
-                .execute(state, call_id, arguments, options, parent)
-                .await;
-        }
         self.invoke_in_parent_context_for_call(state, arguments, options, parent, Some(&call_id))
             .await
             .map_err(anyhow::Error::from)
@@ -1242,8 +1130,8 @@ impl tinytools::Tool for SubAgentToolDeclaration {
 mod test;
 
 #[cfg(test)]
-#[path = "mod_jobs_tests.rs"]
-mod jobs_tests;
+#[path = "test_helpers.rs"]
+mod test_helpers;
 
 #[cfg(test)]
 #[path = "mod_link_tests.rs"]

@@ -9,7 +9,8 @@ use tinyagents_session::transcript::{
 };
 use tinyinference_llm::message::Message;
 
-use crate::{PrefixSnapshot, ToolSnapshot};
+use crate::PrefixSnapshot;
+use tinyagents_harness::tool::ToolSnapshot;
 
 /// Selects the durable transcript a turn should load before execution.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

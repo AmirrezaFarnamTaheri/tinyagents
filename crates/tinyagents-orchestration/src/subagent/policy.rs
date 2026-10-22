@@ -21,7 +21,7 @@ pub use tinyagents_graph::{SubAgentBudget, SubAgentPolicy};
 use tinyagents_harness::CancellationToken;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::error::TinyAgentsError;
-use tinyagents_runtime::ToolSnapshot;
+use tinyagents_harness::tool::ToolSnapshot;
 use tinyinference_llm::message::Message;
 
 use super::{

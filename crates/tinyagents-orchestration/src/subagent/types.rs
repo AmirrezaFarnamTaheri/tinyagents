@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use tinyagents_harness::tool::ToolSnapshot;
 use tinyagents_harness::{CancellationToken, context::RunContext};
-use tinyagents_runtime::ToolSnapshot;
 use tinyagents_tasks::NotifyMode;
 use tinyinference_llm::{message::Message, usage::UsageTotals};
 
@@ -286,7 +286,7 @@ impl<C, H> SubagentRequest<C, H> {
         self
     }
 
-    pub(crate) fn resume(&self) -> Option<&SubagentResume> {
+    pub fn resume(&self) -> Option<&SubagentResume> {
         self.resume.as_ref()
     }
 
