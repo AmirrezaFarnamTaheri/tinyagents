@@ -74,11 +74,9 @@ were all merged into `runtime-comparison`.
 - **`Turn` object** (H-R1, "built once per turn, cache the tools
   fingerprint"): skipped. No `struct Turn` exists anywhere in `crates/`;
   each phase still re-derives what it needs from `RunContext` directly.
-- **`GraphLoopDriver` is not itself checkpointable**: by design, per its own
-  doc comment in `crates/tinyagents-graph/src/agent_loop/mod.rs` — it drives
-  the same phase node bodies without a checkpointer so it can be a drop-in
-  `LoopDriver`. `compile_loop`/`LoopIter` are the real `CompiledGraph` path
-  and have interrupt → checkpoint → resume tests (`loop_as_graph.rs`).
+- **Compiled graph loop (A5) descoped in TinyAgents #61**: the graph crate and
+  `GraphLoopDriver` were removed. The harness now drives runs through its
+  direct loop; graph-backed checkpointing and iteration are not available.
 - **Lease renewal loop**: exists at the orchestration layer only.
   `WorkflowEngine` has a real heartbeat that renews a short lease while a
   child run is in flight (`crates/tinyagents-orchestration/src/workflow/
@@ -213,14 +211,14 @@ Builds the vocabulary that A1–A4 and B1–B2 share; everything later
 | Lower `WorkflowDefinition` to a `CompiledGraph` behind a feature flag; keep `WorkflowStore` as the status projection and the lease as the durable lock; `workflow/tests.rs` as acceptance | L | G-I12, G-R6 |
 | `NodeHandler` takes `Arc<State>`; `Arc<Value>` send args | M | G-M2 |
 
-## Phase 5: sessions, context, and the loop as a graph (3–4 weeks)
+## Phase 5: sessions, context, and loop hardening (3–4 weeks)
 
 | Item | Effort | Refs | OpenHuman hand-off |
 |---|---|---|---|
 | Compaction rules: `find_cut_point`, split turns, iterative summaries, `CompactionRecord`, `OverflowClassifier`, `overflow → compact → retry` in `ContextCompressionMiddleware`; `before_compaction` hook may decline/replace | M | E2 | summary prompt text and `/compact` stay |
 | `AssistantMessage.origin{provider, api, model}`; `prepare_for_model(&[Message], &ModelProfile)` handoff pass | S | E3 | mid-session model switch just works |
 | Tool-effect ledger keyed by `CallId` with `ToolReplay::{Never, Safe}` on `ToolSchema`/policy; `list_unresolved_tool_effects(run_id)` | M | B5 | OpenHuman marks its tools' replay class |
-| Agent loop as a `CompiledGraph` (`plan → model → tools → settle` nodes) so checkpoints, interrupts and time travel apply to the loop; `AgentHarness::iter()` | L | A5 | `agent_graph.rs` collapses onto the SDK graph |
+| Checkpointed agent loop and `AgentHarness::iter()` | descoped in TinyAgents #61: no graph runtime is shipped; revisit only with a replacement design | A5 | no current OpenHuman hand-off |
 | `sanitize_history()` helper; `Message::Custom` | S | E4, E5 | web_chat sanitises via the SDK |
 
 ## Phase 6: tool ecosystem (2–3 weeks)
