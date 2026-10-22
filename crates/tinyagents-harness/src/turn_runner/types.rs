@@ -317,6 +317,20 @@ struct ActiveTurn<P> {
     queue: Arc<RunQueue<TurnRequest<P>>>,
 }
 
+/// A live turn owned by a runner, suitable for host-side cancellation and
+/// observability without exposing cancellation tokens or queue internals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveTurn {
+    /// Agent/profile scope that owns this turn.
+    pub scope: ScopeKey,
+    /// Conversation thread supplied by the host.
+    pub thread_id: String,
+    /// Host request identity used to scope cancellation and terminal events.
+    pub request_id: String,
+    /// Whether this turn runs on an independent parallel fork.
+    pub parallel: bool,
+}
+
 type ThreadLockKey = (ScopeKey, String);
 type ThreadLocks = Mutex<HashMap<ThreadLockKey, Weak<Mutex<()>>>>;
 type ParallelQueueKey = (ScopeKey, String, String);
@@ -390,34 +404,50 @@ where
         thread_id: &str,
         request_id: Option<&str>,
     ) -> bool {
+        !self
+            .cancel_requests(scope, thread_id, request_id)
+            .await
+            .is_empty()
+    }
+
+    /// Cancel matching active turns and return their request IDs, with the
+    /// primary turn first followed by parallel turns in request-ID order.
+    /// A stale request ID is a no-op and cannot cancel a newer generation.
+    pub async fn cancel_requests(
+        &self,
+        scope: &ScopeKey,
+        thread_id: &str,
+        request_id: Option<&str>,
+    ) -> Vec<String> {
         let key = (scope.clone(), thread_id.to_owned());
         let active = self.active.lock().await;
-        let cancelled_primary = if let Some(turn) = active
+        let mut cancelled = Vec::new();
+        if let Some(turn) = active
             .get(&key)
             .filter(|turn| request_id.is_none_or(|id| turn.request_id == id))
         {
             turn.queue.clear().await;
             turn.cancel.cancel();
-            true
-        } else {
-            false
-        };
+            cancelled.push(turn.request_id.clone());
+        }
         drop(active);
         let mut parallel = self.parallel_active.lock().await;
-        let keys: Vec<_> = parallel
+        let mut keys: Vec<_> = parallel
             .keys()
             .filter(|(owner, thread, req)| {
                 owner == scope && thread == thread_id && request_id.is_none_or(|id| req == id)
             })
             .cloned()
             .collect();
+        keys.sort_by(|left, right| left.2.cmp(&right.2));
         for key in &keys {
             if let Some(token) = parallel.remove(key) {
                 token.cancel();
             }
             self.parallel_queues.lock().await.remove(key);
+            cancelled.push(key.2.clone());
         }
-        cancelled_primary || !keys.is_empty()
+        cancelled
     }
 
     /// Whether the thread owns a primary user-authored turn cancellation slot.
@@ -434,6 +464,46 @@ where
             .await
             .get(&(scope.clone(), thread_id.to_owned()))
             .map(|turn| turn.request_id.clone())
+    }
+
+    /// Snapshot every active primary and parallel turn in deterministic order.
+    /// The result contains identities only; cancellation remains owned by the
+    /// runner and must go through [`Self::cancel_requests`].
+    pub async fn live_turns(&self) -> Vec<LiveTurn> {
+        let mut live = Vec::new();
+        for ((scope, thread_id), turn) in self.active.lock().await.iter() {
+            live.push(LiveTurn {
+                scope: scope.clone(),
+                thread_id: thread_id.clone(),
+                request_id: turn.request_id.clone(),
+                parallel: false,
+            });
+        }
+        for ((scope, thread_id, request_id), _) in self.parallel_active.lock().await.iter() {
+            live.push(LiveTurn {
+                scope: scope.clone(),
+                thread_id: thread_id.clone(),
+                request_id: request_id.clone(),
+                parallel: true,
+            });
+        }
+        live.sort_by(|left, right| {
+            (
+                left.scope.agent_id.as_str(),
+                left.scope.profile_id.as_deref(),
+                left.thread_id.as_str(),
+                left.parallel,
+                left.request_id.as_str(),
+            )
+                .cmp(&(
+                    right.scope.agent_id.as_str(),
+                    right.scope.profile_id.as_deref(),
+                    right.thread_id.as_str(),
+                    right.parallel,
+                    right.request_id.as_str(),
+                ))
+        });
+        live
     }
 
     pub async fn run(&self, request: TurnRequest<P>) -> Result<TurnResult, TurnRunnerError> {
@@ -962,6 +1032,21 @@ where
                 collects: 0,
                 total: 0,
             },
+        }
+    }
+
+    /// Non-destructively snapshot the active primary turn's queued requests in
+    /// lane order, preserving FIFO order within each lane.
+    pub async fn queue_snapshot(
+        &self,
+        scope: &ScopeKey,
+        thread_id: &str,
+    ) -> Vec<(QueueLane, TurnRequest<P>)> {
+        let key = (scope.clone(), thread_id.to_owned());
+        let active = self.active.lock().await;
+        match active.get(&key) {
+            Some(turn) => turn.queue.snapshot().await,
+            None => Vec::new(),
         }
     }
 

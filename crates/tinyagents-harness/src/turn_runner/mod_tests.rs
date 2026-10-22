@@ -1928,12 +1928,18 @@ async fn live_turns_and_cancel_requests_report_scoped_primary_before_parallel() 
         [("primary", false), ("parallel", true)]
     );
 
-    assert_eq!(runner.cancel_requests(&scope, "thread-a", None).await, [
-        "primary".to_owned(),
-        "parallel".to_owned(),
-    ]);
-    assert!(matches!(primary.await.unwrap(), Err(TurnRunnerError::Cancelled)));
-    assert!(matches!(parallel.await.unwrap(), Err(TurnRunnerError::Cancelled)));
+    assert_eq!(
+        runner.cancel_requests(&scope, "thread-a", None).await,
+        ["primary".to_owned(), "parallel".to_owned(),]
+    );
+    assert!(matches!(
+        primary.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    assert!(matches!(
+        parallel.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
     assert!(runner.live_turns().await.is_empty());
 }
 
@@ -1952,7 +1958,11 @@ async fn queue_snapshot_preserves_lane_fifo_and_does_not_drain_work() {
     ));
     let primary = {
         let runner = runner.clone();
-        tokio::spawn(async move { runner.run(request(QueueDisposition::Interrupt, false)).await })
+        tokio::spawn(async move {
+            runner
+                .run(request(QueueDisposition::Interrupt, false))
+                .await
+        })
     };
     started.notified().await;
 
@@ -1964,7 +1974,10 @@ async fn queue_snapshot_preserves_lane_fifo_and_does_not_drain_work() {
     ] {
         let mut queued = request(disposition, false);
         queued.request_id = id.into();
-        assert!(matches!(runner.run(queued).await, Err(TurnRunnerError::Queued)));
+        assert!(matches!(
+            runner.run(queued).await,
+            Err(TurnRunnerError::Queued)
+        ));
     }
     let scope = request(QueueDisposition::Interrupt, false).scope;
 
@@ -1991,5 +2004,8 @@ async fn queue_snapshot_preserves_lane_fifo_and_does_not_drain_work() {
     );
 
     runner.cancel_requests(&scope, "thread-a", None).await;
-    assert!(matches!(primary.await.unwrap(), Err(TurnRunnerError::Cancelled)));
+    assert!(matches!(
+        primary.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
 }
