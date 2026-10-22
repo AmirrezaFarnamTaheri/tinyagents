@@ -8,6 +8,7 @@ struct Host {
     release: Option<Arc<tokio::sync::Notify>>,
     fingerprint_error: bool,
     hold_checkin: bool,
+    checkin_started: Option<Arc<tokio::sync::Notify>>,
     fail_run: bool,
     fingerprint_started: Option<Arc<tokio::sync::Notify>>,
     fingerprint_release: Option<Arc<tokio::sync::Notify>>,
@@ -82,6 +83,12 @@ impl TurnHost for Host {
     async fn checkin(&self, request: &TurnRequest) {
         if self.hold_checkin
             && request.request_id == "first"
+            && let Some(started) = &self.checkin_started
+        {
+            started.notify_one();
+        }
+        if self.hold_checkin
+            && request.request_id == "first"
             && let Some(release) = &self.release
         {
             release.notified().await;
@@ -90,6 +97,47 @@ impl TurnHost for Host {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
     async fn cancel_children(&self, _request: &TurnRequest) {}
+}
+
+#[tokio::test]
+async fn completed_execution_is_not_reported_as_cancelled_during_checkin() {
+    let checkin_started = Arc::new(tokio::sync::Notify::new());
+    let release_checkin = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        hold_checkin: true,
+        checkin_started: Some(checkin_started.clone()),
+        release: Some(release_checkin.clone()),
+        ..Host::default()
+    });
+    let replies = Arc::new(Replies::default());
+    let events = Arc::new(Events::default());
+    let runner = Arc::new(runner(
+        host,
+        Arc::new(Ingress::default()),
+        replies.clone(),
+        events.clone(),
+    ));
+    let mut request = request(QueueDisposition::Interrupt, false);
+    request.request_id = "first".into();
+    let scope = request.scope.clone();
+    let run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(request).await })
+    };
+
+    checkin_started.notified().await;
+    assert!(runner
+        .cancel_requests(&scope, "thread-a", Some("first"))
+        .await
+        .is_empty());
+    release_checkin.notify_one();
+
+    assert!(run.await.unwrap().is_ok());
+    assert_eq!(replies.0.lock().unwrap().len(), 1);
+    assert!(matches!(
+        events.terminal.lock().unwrap().as_slice(),
+        [TerminalEvent::Completed { request_id, .. }] if request_id == "first"
+    ));
 }
 
 #[derive(Default)]
