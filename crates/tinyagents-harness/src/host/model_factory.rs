@@ -267,13 +267,18 @@ impl<'a, State: Send + Sync + 'static, F: ModelFactory<State> + ?Sized, G: Model
             }
         }
 
+        let has_explicit_summary_role = self.summarization_role.is_some();
         let summary_request = ModelBuildRequest {
             role: self
                 .summarization_role
                 .unwrap_or_else(|| self.primary.role.clone()),
             route: None,
             purpose: ModelPurpose::Summarization,
-            model_pin: self.summarization_pin.or(self.primary.model_pin),
+            model_pin: self.summarization_pin.or_else(|| {
+                (!has_explicit_summary_role)
+                    .then_some(self.primary.model_pin)
+                    .flatten()
+            }),
             opts: self.summarization_opts.unwrap_or(self.primary.opts),
         };
         self.gate.check(&summary_request)?;

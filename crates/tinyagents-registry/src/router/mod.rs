@@ -291,7 +291,6 @@ impl WorkloadRouter {
         !trimmed.is_empty()
             && canonical_hint_role(trimmed).is_none()
             && source.legacy_tier_role(trimmed).is_none()
-            && !trimmed.starts_with("hint:")
     }
 
     /// Typed metadata explaining that a background role will use the host's

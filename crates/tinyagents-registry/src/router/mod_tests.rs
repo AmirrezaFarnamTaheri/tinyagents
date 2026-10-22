@@ -399,5 +399,5 @@ fn model_helpers_preserve_hints_legacy_aliases_and_raw_models() {
     assert!(router.is_raw_passthrough_model("mystery", &routes));
     assert!(!router.is_raw_passthrough_model("", &routes));
     assert!(!router.is_raw_passthrough_model("old-chat", &routes));
-    assert!(!router.is_raw_passthrough_model("hint:unknown", &routes));
+    assert!(router.is_raw_passthrough_model("hint:unknown", &routes));
 }

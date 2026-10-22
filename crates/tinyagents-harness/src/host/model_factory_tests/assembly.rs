@@ -98,6 +98,25 @@ fn explicit_summary_role_pin_and_options_are_distinct() {
 }
 
 #[test]
+fn explicit_summary_role_does_not_inherit_the_primary_pin() {
+    let context = NonCloneContext {
+        primary_provider_override: None,
+    };
+    let factory = RecordingFactory::new(&context);
+    let gate = RecordingGate::default();
+    TurnModelSet::<()>::builder(&factory, &gate, "chat")
+        .without_workload_tiers()
+        .primary_model_pin("pinned-chat")
+        .summarization("summary-role", None)
+        .build()
+        .expect("default summary role route should build");
+
+    let summary = factory.requests.borrow().last().unwrap().clone();
+    assert_eq!(summary.role, "summary-role");
+    assert_eq!(summary.model_pin, None);
+}
+
+#[test]
 fn custom_workload_requests_preserve_order_and_skip_failed_or_gated_routes() {
     let context = NonCloneContext {
         primary_provider_override: None,
