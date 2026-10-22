@@ -60,11 +60,19 @@ existing sinks. When one generation failure retires queued requests, the runner
 rewrites each classification message to match that request's queued failure
 message while preserving its class and details.
 
+`TurnQueueItem<P>` lets a host store its own queue wrapper while the runner and
+agent loop share the same `RunQueue` allocation. Implement the lossless request
+conversions on the host wrapper and select it as the runner's trailing
+queue-item type; the default remains `TurnRequest<P>`. Queue snapshots and
+`TurnHost::run` expose that exact queue item type, while dispatch converts the
+item back to its complete `TurnRequest<P>`.
+
 ## Host inspection and cancellation
 
-`live_turns` returns identity-only `LiveTurn` records for active primary and
-parallel turns. Hosts can filter these records by `ScopeKey` and thread to
-prepare cancellation notes without receiving runner-owned tokens. Use
+`live_turns` returns identity-only `LiveTurn` records for primary and parallel
+turns tracked through cleanup, including turns already canceled or completing.
+Hosts can filter these records by `ScopeKey` and thread to prepare cancellation
+notes without receiving runner-owned tokens. Use
 `cancel_requests` to cancel matching turns and receive the request IDs it
 actually stopped; when an unscoped cancellation matches multiple turns, the
 primary request ID comes first, followed by parallel request IDs in
