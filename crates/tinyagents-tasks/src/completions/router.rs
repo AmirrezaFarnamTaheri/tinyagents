@@ -9,7 +9,7 @@ use tinyagents_harness::run_queue::{QueueLane, RunQueueHandle};
 
 use super::format::{CompletionFormatter, NeutralCompletionFormatter};
 use super::store::CompletionStore;
-use super::types::{CompletionRecord, CompletionState, NotifyMode};
+use super::types::{CompletionRecord, CompletionResult, CompletionState, NotifyMode};
 
 const LOG_PREFIX: &str = "[completion-router]";
 
@@ -548,10 +548,13 @@ impl CompletionRouter {
             if record.state != CompletionState::Pending || record.attempts < self.max_attempts {
                 continue;
             }
+            // The stored copy keeps its result until every give-up in the batch
+            // has landed: a later put failing returns Err, and this record's
+            // result would otherwise be gone with no one holding it.
             let result = std::mem::take(&mut record.result);
             record.settle(CompletionState::GaveUp);
-            state.store.put(&record)?;
             record.result = result;
+            state.store.put(&record)?;
             tracing::warn!(
                 task_id = %record.task_id,
                 parent_key = %record.parent_key,
@@ -559,6 +562,15 @@ impl CompletionRouter {
                 "{LOG_PREFIX} gave up"
             );
             gave_up.push(record);
+        }
+        for record in &gave_up {
+            let settled = CompletionRecord {
+                result: CompletionResult::default(),
+                ..record.clone()
+            };
+            if let Err(error) = state.store.put(&settled) {
+                tracing::warn!(task_id = %record.task_id, %error, "{LOG_PREFIX} could not drop a given-up result");
+            }
         }
         Ok(gave_up)
     }
