@@ -390,6 +390,7 @@ pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value, Q = TurnRequest<P
     active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<Q>>>,
     parallel_active: Mutex<HashMap<(ScopeKey, String, String), crate::CancellationToken>>,
     next_generation: std::sync::atomic::AtomicU64,
+    payload: std::marker::PhantomData<fn() -> P>,
 }
 
 impl<H, I, R, E, F, S, P, Q> TurnRunner<H, I, R, E, F, S, P, Q>
@@ -425,6 +426,7 @@ where
             active: Mutex::new(HashMap::new()),
             parallel_active: Mutex::new(HashMap::new()),
             next_generation: std::sync::atomic::AtomicU64::new(1),
+            payload: std::marker::PhantomData,
         }
     }
 
