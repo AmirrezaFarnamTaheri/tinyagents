@@ -4,11 +4,10 @@
 
 TinyAgents is a Rust 2024 virtual workspace rooted at `Cargo.toml`. It has no
 compatibility facade crate: consumers depend directly on the focused package
-that owns an API. The public packages are `crates/tinyagents-graph/` (durable
-typed state graphs), `crates/tinyagents-harness/` (provider-neutral model
+that owns an API. The public packages are `crates/tinyagents-harness/` (provider-neutral model
 calls, tools, middleware, and streaming), `crates/tinyagents-registry/` (the named
 capability catalog), `crates/tinyagents-session/` (durable session data),
-`crates/tinyagents-tasks/` (graph-independent detached-task registry,
+`crates/tinyagents-tasks/` (detached-task registry,
 task stores and orchestration controls), and
 `crates/tinyagents-orchestration/` (direct and durable subagent invocation,
 tools, sessions, lifecycle logic, and focused tests).
@@ -29,24 +28,22 @@ smallest useful API.
 Cargo features are package-local. `tinyagents-harness` exposes `sqlite`,
 `multimodal`, `png-optimize`, `media`, `claude-code`, `langfuse`,
 `storage-drivers`, and `tracing`; `tinyagents-harness-tools` exposes default
-`todos`, `goals`, and `skills`, plus opt-in `subagents`; `tinyagents-graph`
-exposes `sqlite`, `storage-drivers`, and `tracing`; session exposes
+`todos`, `goals`, and `skills`, plus opt-in `subagents`; session exposes
 `storage-drivers` and `tracing`; registry exposes `tracing`. The
 `storage-drivers` features put each store on `tinystoragedrivers` ports. The harness's own
 `tracing` instrumentation is always compiled in; the `tracing` features forward
 to `tinytools-agent/tracing`, which enables that crate's `debug!`/`warn!`
 diagnostics (native-call parsing, malformed arguments).
 
-Integration tests are in `crates/tinyagents-integration-tests/tests/`, covering serialization, graph routing,
+Integration tests are in `crates/tinyagents-integration-tests/tests/`, covering serialization,
 registry binding, streaming,
 and provider contracts (including live, network-gated tests such as
 `tests/live_*.rs`). Subagent-specific E2E and live tests live with their owner
 in `crates/tinyagents-orchestration/tests/`. Runnable usage examples are in
-`crates/tinyagents-integration-tests/examples/`, especially `basic_graph.rs`.
+`crates/tinyagents-integration-tests/examples/`, especially `openai_chat.rs`.
 Design notes and module-level specifications live
 in `docs/`, with `docs/spec/README.md` as the top-level architecture
-reference and `docs/modules/` holding per-surface design docs (`graph/`,
-`harness/`, `registry/`). A `wiki/`
+reference and `docs/modules/` holding per-surface design docs (`harness/` `registry/`). A `wiki/`
 git submodule holds the published GitHub wiki pages; do not edit it as part
 of unrelated work, and commit its pointer update separately when it does
 change.
@@ -59,7 +56,7 @@ change.
   tests, and examples, treating warnings as failures.
 - `cargo build --workspace --all-targets`: compile all crate targets.
 - `cargo test --workspace`: run the full test suite.
-- `cargo run -p tinyagents-integration-tests --example basic_graph`: run the bundled graph execution example.
+- `cargo run -p tinyagents-integration-tests --example openai_chat`: run the bundled graph execution example.
 
 Run commands from the repository root unless a future workspace layout changes
 the crate location.
@@ -77,7 +74,7 @@ have a predictable surface.
 
 Place integration tests in `crates/tinyagents-integration-tests/tests/` and use descriptive test names such as
 `serializes_chat_messages`. Add focused tests when changing serialization,
-graph routing, tool invocation, or public model request/response shapes. For
+tool invocation, or public model request/response shapes. For
 async behavior, use the existing `tokio` dev dependency rather than introducing
 another runtime.
 
