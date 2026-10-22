@@ -256,7 +256,7 @@ async fn reservations_coordinate_for_same_handle_but_not_different_scopes() {
             .0
             .is_empty()
     );
-    drop(claim);
+    claim.release().await;
 }
 
 #[tokio::test]
