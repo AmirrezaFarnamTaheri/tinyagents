@@ -238,6 +238,57 @@ async fn denied_install_is_authorized_before_manager_resolution() {
 }
 
 #[tokio::test]
+async fn authorized_install_manager_resolution_failure_is_audited_without_execution() {
+    let cases = [
+        (
+            json!({"package":"ripgrep"}),
+            "auto",
+            "No supported package manager detected on PATH. Pass 'manager' explicitly (e.g. brew, pipx, npm, cargo).",
+        ),
+        (
+            json!({"package":"ripgrep","manager":"unsupported"}),
+            "unsupported",
+            "Unsupported package manager 'unsupported'",
+        ),
+    ];
+
+    for (args, expected_manager, expected_error) in cases {
+        let (tool, state) = tool(false);
+        let lookup_state = state.clone();
+        let result = tool
+            .execute_with_context_and_path_lookup(
+                args,
+                ToolCallOptions::default(),
+                None,
+                move |_| {
+                    lookup_state
+                        .manager_lookup_calls
+                        .fetch_add(1, Ordering::SeqCst);
+                    false
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.text(), expected_error);
+        assert_eq!(state.authorization_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(state.backend_calls.load(Ordering::SeqCst), 0);
+        let events = state.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].authorized);
+        assert!(!events[0].allowed);
+        assert!(!events[0].process_attempted);
+        assert_eq!(
+            events[0].operation,
+            ExecOperation::Install {
+                package: "ripgrep".to_owned(),
+                manager: expected_manager.to_owned(),
+            }
+        );
+    }
+}
+
+#[tokio::test]
 async fn install_uses_exact_manager_argv_and_no_shell_command() {
     let (tool, state) = tool(false);
     let result = tool
