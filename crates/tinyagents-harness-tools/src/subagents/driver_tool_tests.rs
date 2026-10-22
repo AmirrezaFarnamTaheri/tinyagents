@@ -7,7 +7,7 @@ use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::CallId;
-use tinyagents_harness::run_queue::{QueueLane, RunQueue};
+use tinyagents_harness::run_queue::{AGENT_STEER_PREFIX, QueueLane, RunQueue, fence_agent_message};
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
 use tinyagents_harness::tool::ToolDispatch;
@@ -512,15 +512,14 @@ async fn message_alias_routes_unique_contents_to_queue_lanes_or_default_steering
     assert_eq!((status.steers, status.collects, status.total), (2, 1, 3));
     let queued = queue.snapshot().await;
     assert!(queued.iter().any(|(lane, message)| {
-        *lane == QueueLane::Collect && message.text() == "collect payload"
+        *lane == QueueLane::Collect && message.text() == fence_agent_message("collect payload")
     }));
-    assert!(
-        queued.iter().any(|(lane, message)| {
-            *lane == QueueLane::Steer && message.text() == "steer payload"
-        })
-    );
     assert!(queued.iter().any(|(lane, message)| {
-        *lane == QueueLane::Steer && message.text() == "unknown falls back to steer"
+        *lane == QueueLane::Steer && message.text() == fence_agent_message("steer payload")
+    }));
+    assert!(queued.iter().any(|(lane, message)| {
+        *lane == QueueLane::Steer
+            && message.text() == fence_agent_message("unknown falls back to steer")
     }));
 
     let default_steering = SubAgentMessageTool::new(jobs)
@@ -545,7 +544,8 @@ async fn message_alias_routes_unique_contents_to_queue_lanes_or_default_steering
     assert_eq!(commands.len(), 1);
     assert!(matches!(
         &commands[0],
-        SteeringCommand::InjectMessage(message) if message.text() == "default steering payload"
+        SteeringCommand::InjectMessage(message)
+            if message.text() == format!("{AGENT_STEER_PREFIX}{}", fence_agent_message("default steering payload"))
     ));
 }
 
