@@ -84,7 +84,6 @@ mod research_budget;
 mod resilience;
 mod response_shape;
 mod shell_turn_budget;
-mod stop_hooks;
 mod tool_exposure_shadow;
 mod tool_outcome_capture;
 mod tool_policy;
@@ -164,7 +163,6 @@ pub use shell_turn_budget::{
     ShellTimeoutClampMiddleware, ShellTimeoutNoteMiddleware, ShellTurnBudget, clamp_shell_timeout,
     install_time_notes,
 };
-pub use stop_hooks::StopHookMiddleware;
 pub use tool_exposure_shadow::{ExposureDivergence, ToolExposureShadowMiddleware};
 pub use tool_outcome_capture::ToolOutcomeCaptureMiddleware;
 pub use transcript_snapshot::{

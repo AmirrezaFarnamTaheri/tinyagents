@@ -27,10 +27,8 @@
 //! first hook that errors short-circuits the stack: every middleware's
 //! [`Middleware::on_error`] runs, then the original error is returned.
 
-mod stop_hook;
 mod types;
 
-pub use stop_hook::{StopDecision, StopHook, StopHookMetrics, StopReport, TurnState};
 pub use types::*;
 
 pub mod library;

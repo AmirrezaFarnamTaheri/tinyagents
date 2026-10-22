@@ -33,14 +33,6 @@ healthy request is not treated as idle. The optional wall deadline remains a
 separate total ceiling. Either guard cancels child work and asks the
 `Summarizer` for a bounded grounded close before classifying the turn as failed.
 
-`WorkTracker` folds `AgentProgress` into balanced work signals. It emits only
-when the turn moves between idle and busy, including when model calls and tool
-calls overlap. `RequeuePayload` lets a host create a placeholder payload for a
-queued request and selectively inherit safe metadata from the active turn.
-`FailureClassification` carries the stable class and message with optional
-host-defined JSON details; `EventSink::classified_failure` receives it while
-the default implementation preserves the existing terminal event behavior.
-
 `AgentProgress` is the canonical channel-independent progress vocabulary.
 Hosts translate it to their own event wire format; this module does not define
 channel event names or transport payloads.

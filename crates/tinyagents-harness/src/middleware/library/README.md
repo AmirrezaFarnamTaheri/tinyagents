@@ -76,11 +76,6 @@ Grouped by extension shape:
 
 ### Budget (`Middleware` lifecycle hooks)
 
-- `StopHookMiddleware` — evaluates host-owned async stop hooks after each model
-  response, folds usage into per-run metrics, and turns the first stop vote into
-  an interrupt at the next safe loop checkpoint. Hooks run in registration
-  order; `with_stop_observer` receives the winning hook's report.
-
 - `BudgetLimits` / `BudgetTracker` / `BudgetSpend` — declarative token/cost
   limits, a shared accumulating spend tracker (clone to roll up spend across a
   parent and its sub-agents), and a point-in-time snapshot.
