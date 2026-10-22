@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use super::types::ModelBuildGate;
 use tinyinference_llm::model::ChatModel;
 
 /// Host-owned context passed to the Claude subprocess provider constructors.
@@ -17,7 +16,7 @@ pub struct SubprocessProviderContext {
 }
 
 /// Builds one supported Claude subprocess route, returning `None` for other
-/// provider kinds. Hosts must run their [`ModelBuildGate`] before calling this
+/// provider kinds. Hosts must run their [`crate::host::model_factory::ModelBuildGate`] before calling this
 /// function. The default Claude Code constructor probes the installed CLI and
 /// resolves its credential through the existing provider; it does not mutate
 /// the process environment. Use [`build_claude_subprocess_model_with`] to
