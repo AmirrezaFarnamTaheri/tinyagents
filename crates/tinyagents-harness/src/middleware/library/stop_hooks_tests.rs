@@ -46,7 +46,13 @@ fn hook(
 
 fn response() -> ModelResponse {
     ModelResponse {
-        message: tinyinference_llm::message::AssistantMessage::default(),
+        message: tinyinference_llm::message::AssistantMessage {
+            id: None,
+            content: Vec::new(),
+            tool_calls: Vec::new(),
+            usage: None,
+            origin: None,
+        },
         usage: Some(tinyinference_llm::usage::Usage {
             input_tokens: 10,
             output_tokens: 2,
