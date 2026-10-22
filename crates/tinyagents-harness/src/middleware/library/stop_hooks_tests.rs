@@ -46,12 +46,19 @@ fn hook(
 
 fn response() -> ModelResponse {
     ModelResponse {
+        message: tinyinference_llm::message::AssistantMessage::default(),
         usage: Some(tinyinference_llm::usage::Usage {
             input_tokens: 10,
             output_tokens: 2,
             ..Default::default()
         }),
-        ..Default::default()
+        finish_reason: None,
+        raw: None,
+        resolved_model: None,
+        continue_turn: None,
+        served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
