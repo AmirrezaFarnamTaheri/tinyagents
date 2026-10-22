@@ -5,9 +5,9 @@ use std::sync::Arc;
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::{TaskId, next_seq};
-use tinyagents_harness::run_queue::QueueLane;
+use tinyagents_harness::run_queue::{QueueLane, fence_agent_message};
 use tinyagents_harness::steering::{
-    SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy,
+    MAX_STEER_TEXT_BYTES, SteeringCommandKind, SteeringHandle, SteeringPolicy,
 };
 use tinyagents_tasks::DetachedTaskRegistryError;
 use tinyinference_llm::message::Message;
@@ -700,8 +700,10 @@ impl SubAgentJobRegistry {
         jobs
     }
 
-    /// Queues a user message for delivery at the running child's next safe
-    /// steering checkpoint.
+    /// Queues a parent agent's message for delivery at the running child's
+    /// next safe steering checkpoint. The text is fenced and labelled as the
+    /// parent agent's (never the user's) and refused over
+    /// `MAX_STEER_TEXT_BYTES`.
     #[allow(dead_code)]
     pub fn send_message_owned(
         &self,
@@ -772,6 +774,12 @@ impl SubAgentJobRegistry {
         } else {
             None
         };
+        let message = message.into();
+        if message.len() > MAX_STEER_TEXT_BYTES {
+            return Err(SubAgentJobError::MessageTooLong {
+                limit: MAX_STEER_TEXT_BYTES,
+            });
+        }
         if let Some(request_id) = request_id {
             match self.tasks.claim_steer_request(&task_id, request_id) {
                 Ok(false) => {
@@ -785,13 +793,18 @@ impl SubAgentJobRegistry {
                 Err(_) => return Err(not_found()),
             }
         }
-        let message = message.into();
+        // A parent agent wrote this, not the user: fence it so it cannot forge
+        // lines such as `[System]:`, and frame it as agent-origin.
+        let message = fence_agent_message(&message);
         if let Some(lane) = lane {
             lane_queue
                 .expect("lane queue was validated before claiming the request id")
                 .push_now(lane, Message::user(message));
         } else {
-            handle.send(SteeringCommand::InjectMessage(Message::user(message)));
+            handle.send(
+                crate::steering::steering_command_for_lane(QueueLane::Steer, &message)
+                    .expect("the steer lane maps to a command"),
+            );
         }
         Ok(false)
     }

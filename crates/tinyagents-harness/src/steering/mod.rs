@@ -579,6 +579,11 @@ pub fn apply_pending_steering<Ctx>(
     }
 }
 
+/// Longest steer text (in bytes) a parent agent may send a child, checked
+/// where agent-origin steers are produced. Matches the session ledger's
+/// `MAX_TOOL_OUTPUT_BYTES`: a steer is an instruction, not a payload channel.
+pub const MAX_STEER_TEXT_BYTES: usize = 32 * 1024;
+
 /// Validation failure from [`RecentRequestIds::claim`].
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

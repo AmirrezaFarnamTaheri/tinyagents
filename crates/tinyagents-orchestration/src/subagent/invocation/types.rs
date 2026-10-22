@@ -415,4 +415,10 @@ pub enum SubAgentJobError {
     /// The request identifier exceeds the bounded registry size.
     #[error("subagent request id is too long")]
     RequestIdTooLong,
+    /// The message exceeds `tinyagents_harness::steering::MAX_STEER_TEXT_BYTES`.
+    #[error("subagent message is too long (limit {limit} bytes)")]
+    MessageTooLong {
+        /// The byte limit the message exceeded.
+        limit: usize,
+    },
 }
