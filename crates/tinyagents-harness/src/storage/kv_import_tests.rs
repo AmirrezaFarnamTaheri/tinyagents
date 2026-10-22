@@ -150,6 +150,7 @@ async fn namespaced_items_keep_their_segments_creation_time_and_expiry() {
         json!({
             "owner": "harness", "ns": "namespaced:memories.alice",
             "key": "likes", "value": {"food": "tea"},
+            "created_at_ms": 1_700_000_000_000_i64,
         })
     );
     assert_eq!(row.doc["created_at_ms"], 1_700_000_000_000_i64);
