@@ -1671,6 +1671,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 response.message.content = content;
             }
             if let ModelStreamItem::Completed(response) = &mut item
+                && saw_tool_delta
+            {
+                // The terminal response carries richer metadata, but its raw
+                // tool calls are not authoritative after delta middleware has
+                // transformed them. Reconstruct from the exact forwarded
+                // fragments so a changed name, id, or argument payload cannot
+                // be restored just before dispatch. Runs before the scrubber's
+                // calls are appended below, so assigning here cannot wipe them.
+                response.message.tool_calls =
+                    transformed_tools.clone().finish()?.message.tool_calls;
+            }
+
+            if let ModelStreamItem::Completed(response) = &mut item
                 && text_scrubber
                     .as_ref()
                     .is_some_and(super::dialect::DeltaScrubber::has_calls)
@@ -1685,18 +1698,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // drop the narrated one whenever a native call was present.
                 response.message.tool_calls.extend(scrubber.into_calls());
             }
-            if let ModelStreamItem::Completed(response) = &mut item
-                && saw_tool_delta
-            {
-                // The terminal response carries richer metadata, but its raw
-                // tool calls are not authoritative after delta middleware has
-                // transformed them. Reconstruct from the exact forwarded
-                // fragments so a changed name, id, or argument payload cannot
-                // be restored just before dispatch.
-                response.message.tool_calls =
-                    transformed_tools.clone().finish()?.message.tool_calls;
-            }
-
             accumulator.push(&item);
         }
 

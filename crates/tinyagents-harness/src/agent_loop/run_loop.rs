@@ -1051,7 +1051,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     messages,
                     &mut turn_recovery,
                     &turn,
-                ) {
+                )? {
                     continue;
                 }
 

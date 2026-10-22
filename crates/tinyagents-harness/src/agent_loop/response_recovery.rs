@@ -197,7 +197,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Recovery for a response with no real tool call that is not yet a usable
     /// answer. Returns `true` when the loop must continue for recovery or its
     /// existing limit handling; `false` when the response stands and the caller
-    /// goes on to resolve the turn.
+    /// goes on to resolve the turn. Errors when a reply cut off inside a
+    /// text-dialect call block outlasts the truncated-empty ladder.
     ///
     /// The checks run in a fixed order: a withheld call, a truncated-empty
     /// retry, a truncated-empty nudge, a non-truncated empty retry, and a
@@ -210,7 +211,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         messages: &mut Vec<Message>,
         turn_recovery: &mut TurnRecovery,
         turn: &ResponseTurn<'_>,
-    ) -> bool {
+    ) -> Result<bool> {
         let ResponseTurn {
             call_id,
             response,
@@ -263,7 +264,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 attempt: turn_recovery.withheld_call_nudges_used as usize,
             });
             status.set_last_event(record.id);
-            return true;
+            return Ok(true);
         }
 
         // Truncated-empty recovery (runs before structured extraction,
@@ -275,9 +276,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // token budget when one was set) instead of surfacing the blank.
         // A structured tool hit carries a real payload, so it is never
         // treated as truncated-empty.
+        // A length stop inside a text-dialect call block is the same dead
+        // call: the lead-in prose and the released half block are not an
+        // answer, so it takes the same ladder.
+        let cut_inside_call = text_dialect_calls_recoverable && recovery.dropped.unterminated() > 0;
         let truncated_empty = tool_calls.is_empty()
             && crate::finish_reason::is_length_stop(response.finish_reason.as_deref())
-            && response.text().trim().is_empty();
+            && (response.text().trim().is_empty() || cut_inside_call);
         if truncated_empty {
             turn_recovery.dead_calls_this_run += 1;
             let sticky_after = self.policy.truncated_empty_reasoning_off_sticky_after;
@@ -338,7 +343,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 attempt: turn_recovery.truncated_empty_retries_used as usize,
             });
             status.set_last_event(record.id);
-            return true;
+            return Ok(true);
         }
         // A retry that cannot grow the cap re-sends the transcript that just
         // died at this cap, and one that would run past half the remaining
@@ -463,7 +468,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     + turn_recovery.truncated_empty_nudges_used) as usize,
             });
             status.set_last_event(record.id);
-            return true;
+            return Ok(true);
+        }
+
+        // The ladder is spent and the reply still stops inside a call block.
+        // Its text is a lead-in plus half-written markup, never an answer, so
+        // fail closed as a cut-off native call does rather than hand it back.
+        if truncated_empty && cut_inside_call {
+            messages.pop();
+            ctx.retract_transcript(messages.len());
+            return Err(TinyAgentsError::LimitExceeded(format!(
+                "run `{}` stopped: model call `{call_id}` was cut off by the output token \
+                 limit inside a tool-call block on every retry",
+                ctx.run_id(),
+            )));
         }
 
         // A provider can also finish normally after sending only a
@@ -500,7 +518,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 attempt: turn_recovery.empty_response_retries_used as usize,
             });
             status.set_last_event(record.id);
-            return true;
+            return Ok(true);
         }
 
         // Dropped tool call: the provider says the model stopped to
@@ -534,7 +552,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // Let the loop apply its limit policy without recording a retry
                 // that cannot run. Returning false would accept this response
                 // as final instead of preserving the limit stop.
-                return true;
+                return Ok(true);
             }
             turn_recovery.dropped_tool_call_nudges_used += 1;
             let nudge = if undecodable_text_call {
@@ -557,9 +575,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 attempt: turn_recovery.dropped_tool_call_nudges_used as usize,
             });
             status.set_last_event(record.id);
-            return true;
+            return Ok(true);
         }
 
-        false
+        Ok(false)
     }
 }

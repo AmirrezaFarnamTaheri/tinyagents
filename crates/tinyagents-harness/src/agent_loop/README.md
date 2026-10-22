@@ -172,6 +172,12 @@ allowed call ends on the blank reply instead of failing with
 `0` to restore exact-replay behavior. The recovery lives in the shared
 `run_loop`, so it applies identically to the unary and streaming paths.
 
+A length stop inside a text-dialect tool-call block (an opener with no closer)
+takes the same ladder even though the reply has visible text: the lead-in prose
+and the released half block are not an answer. Once the ladder is spent, or no
+model call is left for it, the run fails with `LimitExceeded` rather than
+returning text that ends in half-written call markup.
+
 A provider can also end a stream normally after emitting only reasoning, with
 no visible text or tool call. Hosts may set
 `RunPolicy::empty_response_retries` to retry that non-truncated blank result;
