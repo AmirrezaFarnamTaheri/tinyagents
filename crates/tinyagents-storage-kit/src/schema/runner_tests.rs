@@ -2,12 +2,78 @@ use super::*;
 
 use std::sync::Arc;
 
-use crate::{Owner, Registry, Schema, ScopeClass, Step, TargetRecord};
+use crate::{CollectionSpec, Key, Owner, Registry, Schema, ScopeClass, Step, TargetRecord};
 use serde_json::json;
 use tinystoragedrivers_api::{Storage, StorageBackend as PortStorageBackend};
 use tinystoragedrivers_busproxy::{Admission, BusStorage, Loopback, StorageServer};
 use tinystoragedrivers_testkit::{Failing, FaultPlan, memory_backend};
 use tinystoragedrivers_types::{ErrorKind, Scope, WriteOptions};
+
+#[tokio::test]
+async fn stream_resume_refuses_a_target_with_a_foreign_appended_entry() {
+    let scope = Scope::new("stream-resume-foreign-entry").unwrap();
+    let backend = memory_backend();
+    let schema = Schema::new(Owner::new("stream_owner").unwrap())
+        .stream("stream_owner.events", ScopeClass::Tenant)
+        .step(
+            Step::stream("copy", "stream_owner.events", 1, 2, |source, values| {
+                Ok(Some((
+                    format!("stream_owner.events/{}", source.rsplit('/').next().unwrap()),
+                    values,
+                )))
+            })
+            .source_prefix("legacy/events"),
+        );
+    let registry = Registry::compose([schema]).unwrap();
+    registry.prepare(&backend).await.unwrap();
+    let storage = backend.for_scope(&scope).unwrap();
+    let source = "legacy/events/session";
+    let target = "stream_owner.events/session";
+    storage
+        .streams()
+        .append_batch(source, vec![json!("first"), json!("second")])
+        .await
+        .unwrap();
+    storage
+        .streams()
+        .append(target, json!("foreign"))
+        .await
+        .unwrap();
+    storage
+        .documents()
+        .ensure_collection(&CollectionSpec::new("tsd.migrations"))
+        .await
+        .unwrap();
+    let progress_id = Key::of(["stream_owner", "stream_owner.events", "copy", source])
+        .unwrap()
+        .to_string();
+    storage
+        .documents()
+        .put(
+            "tsd.migrations",
+            &progress_id,
+            json!({
+                "owner": "stream_owner",
+                "step": "copy",
+                "from": 1,
+                "to": 2,
+                "cursor": target,
+                "written": 0,
+                "done": false
+            }),
+            tinystoragedrivers_types::Precondition::Absent,
+        )
+        .await
+        .unwrap();
+
+    let error = registry
+        .migrate(&storage, &MigrateOptions::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Conflict);
+    assert_eq!(storage.streams().len(target).await.unwrap(), 1);
+    assert_eq!(storage.streams().len(source).await.unwrap(), 2);
+}
 
 #[tokio::test]
 async fn retry_accepts_host_created_target_metadata_after_progress_write_failure() {
