@@ -4,11 +4,13 @@ use crate::middleware::{Middleware, StopHook};
 use std::sync::Mutex;
 use tinyinference_llm::model::ModelResponse;
 
+type ObservedState = Arc<Mutex<Vec<(u32, u32, u32, String)>>>;
+
 struct VoteHook {
     name: &'static str,
     vote: StopDecision,
     order: Arc<Mutex<Vec<&'static str>>>,
-    observed: Option<Arc<Mutex<Vec<(u32, u32, u32, String)>>>>,
+    observed: Option<ObservedState>,
 }
 
 #[async_trait]
