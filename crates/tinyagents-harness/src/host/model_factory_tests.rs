@@ -7,11 +7,11 @@ use crate::host::model_resolver::{ModelResolveRequest, ModelResolver};
 use tinyinference_llm::model::budget::{Budget, CallBudget, SpendLimits};
 use tinyinference_llm::model::{ModelProfile, ModelRequest, ModelResponse, ProfileOverrideModel};
 
-#[path = "model_factory_tests/assembly.rs"]
+#[path = "model_factory_assembly_tests.rs"]
 mod assembly;
-#[path = "model_factory_tests/resolver.rs"]
+#[path = "model_factory_resolver_tests.rs"]
 mod resolver;
-#[path = "model_factory_tests/subprocess.rs"]
+#[path = "model_factory_subprocess_tests.rs"]
 mod subprocess;
 
 fn workload(role: &str, route: &str, model_pin: Option<&str>) -> ModelBuildRequest {
