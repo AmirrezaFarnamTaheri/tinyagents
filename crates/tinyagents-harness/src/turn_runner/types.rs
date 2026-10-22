@@ -601,9 +601,9 @@ where
     async fn run_one(
         &self,
         mut request: TurnRequest<P>,
-        reservation: Option<ActiveTurn<P>>,
-        state_out: &mut Option<ActiveTurn<P>>,
-        next_out: &mut Option<(TurnRequest<P>, ActiveTurn<P>)>,
+        reservation: Option<ActiveTurn<P, Q>>,
+        state_out: &mut Option<ActiveTurn<P, Q>>,
+        next_out: &mut Option<(TurnRequest<P>, ActiveTurn<P, Q>)>,
     ) -> Result<TurnResult, TurnRunnerError> {
         let deadline = TurnDeadline::new(request.deadline.or(self.config.deadline));
         let cancellation = reservation
@@ -678,7 +678,10 @@ where
                 if let Some(lane) = queue_lane(request.disposition)
                     && let Some(current) = active.get(&key)
                 {
-                    current.queue.push(lane, request.clone()).await;
+                    current
+                        .queue
+                        .push(lane, Q::from_turn_request(request.clone()))
+                        .await;
                     return Err(TurnRunnerError::Queued);
                 }
                 let queue = Arc::new(RunQueue::new());
@@ -877,7 +880,7 @@ where
         }
     }
 
-    async fn parallel_queue_for(&self, key: ParallelQueueKey) -> Arc<RunQueue<TurnRequest<P>>> {
+    async fn parallel_queue_for(&self, key: ParallelQueueKey) -> Arc<RunQueue<Q>> {
         let mut queues = self.parallel_queues.lock().await;
         Arc::clone(
             queues
@@ -926,7 +929,13 @@ where
         active.remove(&key);
         let mut queued = Vec::new();
         for lane in [QueueLane::Steer, QueueLane::Followup, QueueLane::Collect] {
-            queued.extend(turn.queue.take(lane, QueueMode::All).await);
+            queued.extend(
+                turn.queue
+                    .take(lane, QueueMode::All)
+                    .await
+                    .into_iter()
+                    .map(TurnQueueItem::into_turn_request),
+            );
         }
         queued
     }
@@ -1009,7 +1018,10 @@ where
         scope: &ScopeKey,
         thread_id: &str,
         owner_generation: u64,
-    ) -> (Vec<TurnRequest<P>>, Option<(TurnRequest<P>, ActiveTurn<P>)>) {
+    ) -> (
+        Vec<TurnRequest<P>>,
+        Option<(TurnRequest<P>, ActiveTurn<P, Q>)>,
+    ) {
         let key = (scope.clone(), thread_id.to_owned());
         let mut active = self.active.lock().await;
         if active
@@ -1021,13 +1033,20 @@ where
         let Some(current) = active.get(&key).cloned() else {
             return (Vec::new(), None);
         };
-        let collected = current.queue.take(QueueLane::Collect, QueueMode::All).await;
+        let collected = current
+            .queue
+            .take(QueueLane::Collect, QueueMode::All)
+            .await
+            .into_iter()
+            .map(TurnQueueItem::into_turn_request)
+            .collect();
         let next = current
             .queue
             .take(QueueLane::Steer, QueueMode::OneAtATime)
             .await
             .into_iter()
-            .next();
+            .next()
+            .map(TurnQueueItem::into_turn_request);
         let next = if next.is_none() {
             current
                 .queue
@@ -1035,6 +1054,7 @@ where
                 .await
                 .into_iter()
                 .next()
+                .map(TurnQueueItem::into_turn_request)
         } else {
             next
         };
@@ -1064,7 +1084,7 @@ where
         thread_id: &str,
         lane: QueueLane,
         mode: QueueMode,
-    ) -> Vec<TurnRequest<P>> {
+    ) -> Vec<Q> {
         let key = (scope.clone(), thread_id.to_owned());
         let active = self.active.lock().await;
         match active.get(&key) {
@@ -1093,7 +1113,7 @@ where
         &self,
         scope: &ScopeKey,
         thread_id: &str,
-    ) -> Vec<(QueueLane, TurnRequest<P>)> {
+    ) -> Vec<(QueueLane, Q)> {
         let key = (scope.clone(), thread_id.to_owned());
         let active = self.active.lock().await;
         match active.get(&key) {
@@ -1152,7 +1172,7 @@ where
         session: &TurnSession,
         origin: &serde_json::Value,
         cancellation: crate::CancellationToken,
-        queue: Arc<RunQueue<TurnRequest<P>>>,
+        queue: Arc<RunQueue<Q>>,
         deadline: TurnDeadline,
     ) -> Result<TurnResult, String> {
         let (progress_tx, mut progress_rx) = mpsc::channel(32);
