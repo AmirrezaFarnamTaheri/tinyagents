@@ -279,6 +279,11 @@ async fn authorized_install_manager_resolution_failure_is_audited_without_execut
         assert!(!events[0].allowed);
         assert!(!events[0].process_attempted);
         assert_eq!(
+            events[0].outcome,
+            ExecAuditOutcome::InstallManagerResolutionFailed
+        );
+        assert_eq!(events[0].backend_selection.as_deref(), Some("test"));
+        assert_eq!(
             events[0].operation,
             ExecOperation::Install {
                 package: "ripgrep".to_owned(),

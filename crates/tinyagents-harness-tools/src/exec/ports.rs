@@ -64,6 +64,9 @@ pub enum ExecRefusalKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecAuditOutcome {
     GateDenied,
+    /// The host authorized an install, but the requested or automatic package
+    /// manager could not be resolved. No process launch was attempted.
+    InstallManagerResolutionFailed,
     BackendRefused { kind: ExecRefusalKind },
     LaunchFailed,
     Completed { success: bool, timed_out: bool },

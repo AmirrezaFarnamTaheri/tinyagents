@@ -182,15 +182,27 @@ async fn execute_install(
             return Ok(ToolResult::error(denied.0));
         }
     };
+    let backend_selection = permit.backend_selection.clone();
     let (manager, program, prefix) = match resolve_manager(requested_manager, on_path) {
         Ok(resolved) => resolved,
-        Err(error) => return Ok(ToolResult::error(error)),
+        Err(error) => {
+            tool.gate.record(ExecAuditEvent {
+                operation: authorization_operation,
+                approval_required,
+                authorized: true,
+                allowed: false,
+                backend_selection: Some(backend_selection.clone()),
+                process_attempted: false,
+                outcome: ExecAuditOutcome::InstallManagerResolutionFailed,
+                duration: started.elapsed(),
+            });
+            return Ok(ToolResult::error(error));
+        }
     };
     let operation = ExecOperation::Install {
         package: package.to_owned(),
         manager: manager.clone(),
     };
-    let backend_selection = permit.backend_selection.clone();
     let mut argv = prefix.iter().map(OsString::from).collect::<Vec<_>>();
     argv.push(package.into());
     let request = ExecRequest {
