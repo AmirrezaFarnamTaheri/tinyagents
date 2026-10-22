@@ -1,4 +1,5 @@
 use super::*;
+use crate::progress::AgentProgress;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Payload {
@@ -52,8 +53,8 @@ fn work_tracker_emits_balanced_signals_for_overlapping_tool_calls() {
     };
 
     assert!(matches!(tracker.observe(&started("a")), Some(TurnSignal::WorkStarted)));
-    assert_eq!(tracker.observe(&started("b")), None);
-    assert_eq!(tracker.observe(&tool_completed("a")), None);
+    assert!(tracker.observe(&started("b")).is_none());
+    assert!(tracker.observe(&tool_completed("a")).is_none());
     assert!(matches!(
         tracker.observe(&tool_completed("b")),
         Some(TurnSignal::WorkFinished)
