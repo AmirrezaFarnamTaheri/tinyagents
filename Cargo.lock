@@ -2176,7 +2176,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-storage-kit"
-version = "2.2.0"
+version = "2.11.0"
 dependencies = [
  "data-encoding",
  "serde",
