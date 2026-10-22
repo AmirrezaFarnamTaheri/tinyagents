@@ -569,7 +569,7 @@ assertion from both source test files. Do not copy
 the new root modules and keep sanitization with TinyTools. The remaining
 source map is directory-to-directory, with file contents preserved
 mechanically. Before deleting the source dependency, search all workspace
-members and examples for references to the retired standard-tools crate and
+members and examples for references to the retired `tinytools-std` crate and
 package; replace each actual implementation import with the new owning
 crate/module. Do not retain a
 compatibility re-export in TinyTools. Check every former `tinytools-std` public
@@ -800,7 +800,7 @@ Remove `tinytools-std` from every workspace package manifest and from
 `Cargo.lock` through Cargo resolution. Keep TinyTools' definitions-only
 boundary intact and do not touch the TinyTools gitlink. Search the full
 TinyAgents workspace and test fixtures for references to the retired
-standard-tools crate or package, its former sanitization module, OpenHuman
+`tinytools-std` crate or package, its former sanitization module, OpenHuman
 module names, and OpenHuman crate paths. The only remaining `sanitize` imports must resolve to
 the already-merged TinyTools API; there must be no `tinytools-std` dependency
 or compatibility path. Update harness-tools README with feature selection,
