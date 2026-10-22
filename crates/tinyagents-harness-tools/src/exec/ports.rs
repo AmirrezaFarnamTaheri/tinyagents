@@ -67,9 +67,14 @@ pub enum ExecAuditOutcome {
     /// The host authorized an install, but the requested or automatic package
     /// manager could not be resolved. No process launch was attempted.
     InstallManagerResolutionFailed,
-    BackendRefused { kind: ExecRefusalKind },
+    BackendRefused {
+        kind: ExecRefusalKind,
+    },
     LaunchFailed,
-    Completed { success: bool, timed_out: bool },
+    Completed {
+        success: bool,
+        timed_out: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
