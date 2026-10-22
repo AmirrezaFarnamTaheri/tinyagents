@@ -1,4 +1,4 @@
-use super::*;
+use crate::progress::AgentProgress;
 
 #[test]
 fn context_compacting_is_a_progress_event() {
