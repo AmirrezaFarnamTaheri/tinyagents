@@ -40,6 +40,7 @@ pub mod budget_gate;
 pub mod context_composer;
 pub mod experience_store;
 pub mod learning_sink;
+pub mod model_factory;
 pub mod model_resolver;
 pub mod progress_sink;
 pub mod security_gate;
@@ -53,13 +54,23 @@ pub use budget_gate::{
 };
 pub use context_composer::{ContextComposer, StaticContextComposer, TurnContextRequest};
 pub use experience_store::{Experience, ExperienceStore, InMemoryExperienceStore};
-pub use learning_sink::{LearningSink, NoopLearningSink, TurnSummary};
-pub use model_resolver::{FixedModelResolver, ModelResolveRequest, ModelResolver};
+pub use learning_sink::{
+    LearningSink, NoopLearningSink, ToolOutcomeRecord, TurnSummary, classify_tool_failure,
+};
+pub use model_factory::{
+    BuildOpts, ModelBuildGate, ModelBuildRequest, ModelFactory, ModelPurpose, TurnModelSet,
+    TurnModelSetBuilder,
+};
+pub use model_resolver::{
+    FixedModelResolver, ModelResolveRequest, ModelResolver, PrebuiltModelResolver,
+};
 pub use progress_sink::{NoopProgressSink, ProgressEvent, ProgressSink, RecordingProgressSink};
 pub use security_gate::{
     AllowAllSecurityGate, ContentOrigin, GateDecision, ScreenOutcome, SecurityGate, ToolCallRequest,
 };
-pub use tool_outcome_classifier::{ErrorFieldClassifier, OutcomeClass, ToolOutcomeClassifier};
+pub use tool_outcome_classifier::{
+    ErrorFieldClassifier, OutcomeClass, ToolOutcomeClassifier, ToolStatusClassifier,
+};
 
 use std::sync::Arc;
 
@@ -103,15 +114,11 @@ pub struct HostCapabilities<State: Send + Sync> {
     /// Procedural memory of how this agent has performed before. `None` means
     /// no experience is recorded or recalled.
     pub experience: Option<Arc<dyn ExperienceStore>>,
-    /// Whether a resolved [`tinyagents_definition::AgentDefinition`] that declares no tools (an
-    /// empty or absent `tools` list) denies every tool, instead of granting
-    /// the whole registered catalogue.
+    /// Whether an unresolved wildcard tool scope denies every tool.
     ///
-    /// Defaults to `true` (fail-closed): policy metadata that is missing is
-    /// treated as "nothing authorized", not as "unrestricted" (I-9). Set to
-    /// `false` only to restore the legacy behavior for a host that relied on
-    /// an empty list meaning unrestricted — new hosts should leave this on
-    /// and declare tools explicitly.
+    /// Defaults to `true`: hosts must explicitly authorize a named scope or
+    /// opt into the legacy wildcard fallback. An explicit empty named scope
+    /// always denies every tool, regardless of this setting.
     pub fail_closed_tool_allowlist: bool,
 }
 
@@ -213,4 +220,5 @@ impl<State: Send + Sync> Clone for HostCapabilities<State> {
 }
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;

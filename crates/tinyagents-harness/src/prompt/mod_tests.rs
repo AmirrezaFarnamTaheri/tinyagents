@@ -1,0 +1,623 @@
+//! Tests for prompt assembly: `{name}` placeholder substitution and escaping,
+//! unknown/unclosed-placeholder errors, per-role message rendering,
+//! `MessagesTemplate` ordering and error propagation, and `PromptBuilder`
+//! segment composition (cacheability by segment type and stable-prefix
+//! fingerprinting).
+
+use super::*;
+use serde_json::{Map, json};
+use tinyinference_llm::model::ModelProfile;
+
+#[test]
+fn dynamic_prompt_tier_markers_preserve_literal_body_slices() {
+    let body = format!(
+        "é stable\r\n  {context}\t\r\ncontext\r\n<!--prompt-tier:unknown-->\ninline {volatile} marker\r\n{volatile}\n📎 tail",
+        context = PROMPT_TIER_CONTEXT_MARKER,
+        volatile = PROMPT_TIER_VOLATILE_MARKER,
+    );
+
+    assert_eq!(
+        split_prompt_tiers(&body, PromptTier::Volatile),
+        vec![
+            TieredPromptPart::new(PromptTier::Volatile, "é stable\r\n"),
+            TieredPromptPart::new(
+                PromptTier::Context,
+                "context\r\n<!--prompt-tier:unknown-->\ninline <!--prompt-tier:volatile--> marker\r\n",
+            ),
+            TieredPromptPart::new(PromptTier::Volatile, "📎 tail"),
+        ],
+        "trimmed marker lines change tier, while CRLF body bytes, unknown comments, and inline markers stay literal"
+    );
+}
+
+#[test]
+fn dynamic_prompt_tier_markers_keep_defaults_and_discard_empty_slices() {
+    assert_eq!(
+        split_prompt_tiers("  only this body  ", PromptTier::Stable),
+        vec![TieredPromptPart::new(
+            PromptTier::Stable,
+            "  only this body  ",
+        )]
+    );
+    assert_eq!(
+        split_prompt_tiers(
+            &format!(
+                "{context}\n{context}\ncontent",
+                context = PROMPT_TIER_CONTEXT_MARKER
+            ),
+            PromptTier::Volatile,
+        ),
+        vec![TieredPromptPart::new(PromptTier::Context, "content")]
+    );
+    assert!(split_prompt_tiers(" \n ", PromptTier::Stable).is_empty());
+}
+
+#[test]
+fn tiered_prompt_composition_keeps_stable_prefix_when_later_context_changes() {
+    struct Section(&'static str, PromptTier);
+    impl DynamicPromptSection<String> for Section {
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn render(&self, context: &String) -> Result<Vec<TieredPromptPart>> {
+            Ok(vec![TieredPromptPart::new(
+                self.1,
+                if self.1 == PromptTier::Stable {
+                    "fixed"
+                } else {
+                    context
+                },
+            )])
+        }
+    }
+
+    let mut composer = PromptComposer::new();
+    composer.push(Section("volatile", PromptTier::Volatile));
+    composer.push(Section("stable", PromptTier::Stable));
+    composer.push(Section("context", PromptTier::Context));
+    let first = composer.build(&"project A".to_string()).unwrap();
+    let second = composer.build(&"project B".to_string()).unwrap();
+    assert_eq!(
+        first.parts[0],
+        (PromptTier::Stable, "fixed\n\n".to_string())
+    );
+    assert_eq!(first.parts[0], second.parts[0]);
+    assert_eq!(first.parts[1].1, "project A\n\n");
+    assert_eq!(second.parts[1].1, "project B\n\n");
+    assert_eq!(first.parts[2].0, PromptTier::Volatile);
+    assert_ne!(first.parts[2].1, second.parts[2].1);
+    assert!(first.breakpoints[0] < first.text.len());
+
+    let mut request = PromptBuilder::new();
+    request.push_tiered_system_prompt(&first);
+    let built = request.build(vec![]);
+    assert_eq!(built.messages.len(), 3);
+    assert!(built.cache_segments[0].id.contains("tier:stable"));
+    assert!(built.cache_segments[1].id.contains("tier:context"));
+    assert!(!built.cache_segments[2].cacheable);
+}
+
+#[test]
+fn prompt_tier_order_is_deterministic_and_each_section_renders_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Counted(AtomicUsize);
+    impl DynamicPromptSection<()> for Counted {
+        fn name(&self) -> &str {
+            "counted"
+        }
+        fn render(&self, _: &()) -> Result<Vec<TieredPromptPart>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![
+                TieredPromptPart::new(PromptTier::Context, "context"),
+                TieredPromptPart::new(PromptTier::Stable, "stable"),
+            ])
+        }
+    }
+    let section = std::sync::Arc::new(Counted(AtomicUsize::new(0)));
+    let mut composer = PromptComposer::new();
+    composer.push(section.clone());
+    composer.push(|_: &()| {
+        Ok(vec![TieredPromptPart::new(
+            PromptTier::Volatile,
+            "volatile",
+        )])
+    });
+    let a = composer.build(&()).unwrap();
+    let b = composer.build(&()).unwrap();
+    assert_eq!(section.0.load(Ordering::SeqCst), 2);
+    assert_eq!(a.text, "stable\n\ncontext\n\nvolatile\n");
+    assert_eq!(a.parts, b.parts);
+}
+
+#[test]
+fn gated_families_get_execution_discipline_and_others_do_not() {
+    for model in [
+        "openrouter/deepseek/deepseek-v4-flash",
+        "deepseek-chat",
+        "openrouter/z-ai/glm-5.3-flash",
+        "qwen3-235b",
+        "gpt-5.1",
+        "o3-mini",
+        "grok-4",
+        "moonshotai/kimi-k2",
+        "mistral-large",
+        "meta-llama/llama-4",
+    ] {
+        assert!(needs_execution_discipline(model), "{model}");
+        assert_eq!(execution_discipline_for(model), Some(EXECUTION_DISCIPLINE));
+    }
+    for model in [
+        "claude-opus-5",
+        "anthropic/claude-sonnet-5",
+        "gemini-3-pro",
+        "chat-v1",
+        "test-model",
+        "",
+        "   ",
+    ] {
+        assert!(!needs_execution_discipline(model), "{model}");
+        assert_eq!(execution_discipline_for(model), None);
+    }
+}
+
+#[test]
+fn execution_discipline_never_list_wins_over_family_marker() {
+    assert!(!needs_execution_discipline("gpt-oss-proxy/claude-haiku"));
+    assert!(!needs_execution_discipline("Gemini-Qwen-Router"));
+}
+
+#[test]
+fn profile_execution_discipline_uses_provider_for_blank_or_opaque_models() {
+    for model in [None, Some(""), Some("   "), Some("chat-v1")] {
+        let profile = ModelProfile {
+            model: model.map(str::to_string),
+            provider: Some("deepseek".to_string()),
+            ..ModelProfile::default()
+        };
+        assert_eq!(
+            execution_discipline_for_profile(&profile),
+            Some(EXECUTION_DISCIPLINE)
+        );
+    }
+
+    let profile = ModelProfile {
+        model: Some("claude-opus-5".to_string()),
+        provider: Some("deepseek".to_string()),
+        ..ModelProfile::default()
+    };
+    assert_eq!(execution_discipline_for_profile(&profile), None);
+}
+
+#[test]
+fn execution_discipline_block_stays_small() {
+    assert!(
+        EXECUTION_DISCIPLINE.len() <= 900,
+        "{}",
+        EXECUTION_DISCIPLINE.len()
+    );
+    assert!(EXECUTION_DISCIPLINE.starts_with("## Execution discipline"));
+}
+
+#[test]
+fn section_assembly_preserves_order_budget_and_truncation_provenance() {
+    let sections = vec![
+        PromptSection::new("first", "α"),
+        PromptSection::new("second", "second section"),
+    ];
+    let assembled = assemble_sections(&sections, "α\n\nse".len());
+    assert_eq!(assembled.text, "α\n\nse");
+    assert_eq!(assembled.included_sections, vec!["first"]);
+    assert_eq!(
+        assembled.truncation,
+        Some(PromptTruncation {
+            section: "second".into(),
+            omitted_bytes: "cond section".len(),
+        })
+    );
+}
+
+#[test]
+fn reusable_render_helpers_are_exact_and_stable() {
+    assert_eq!(render_heading("Tools"), "## Tools");
+    assert_eq!(render_optional_section("Empty", Some("  ")), "");
+    assert_eq!(
+        render_optional_section("Notes", Some("keep")),
+        "## Notes\n\nkeep"
+    );
+    assert_eq!(
+        render_tool_catalogue(&[("z".into(), "last".into()), ("a".into(), "first".into())]),
+        "- `a`: first\n- `z`: last"
+    );
+    let sections = [
+        PromptSection::new("one", "one two"),
+        PromptSection::new("two", "three"),
+    ];
+    let assembled = assemble_sections_with_budget(
+        &sections,
+        PromptBudget {
+            max_bytes: 64,
+            max_tokens: 2,
+        },
+        |text| text.split_whitespace().count(),
+    );
+    assert_eq!(assembled.text, "one two");
+    assert_eq!(assembled.truncation.unwrap().section, "two");
+}
+
+#[test]
+fn section_budget_tokenizes_rendered_separators() {
+    let sections = [
+        PromptSection::new("first", "first"),
+        PromptSection::new("second", "second"),
+    ];
+    // This deliberately charges a token for the renderer's `\n\n` separator.
+    // Counting only each section's content would incorrectly accept both.
+    let tokenize = |text: &str| text.split_whitespace().count() + text.matches("\n\n").count();
+    let budget = PromptBudget {
+        max_bytes: 64,
+        max_tokens: 2,
+    };
+
+    let assembled = assemble_sections_with_budget(&sections, budget, tokenize);
+
+    assert_eq!(assembled.text, "first");
+    assert_eq!(assembled.included_sections, vec!["first"]);
+    assert_eq!(assembled.truncation.unwrap().section, "second");
+    assert!(tokenize(&assembled.text) <= budget.max_tokens);
+}
+
+#[test]
+fn renders_simple_placeholder() {
+    let tpl = PromptTemplate::new("Hello, {name}!");
+    let mut vars = Map::new();
+    vars.insert("name".to_string(), json!("world"));
+    assert_eq!(tpl.render(&vars).unwrap(), "Hello, world!");
+}
+
+#[test]
+fn escapes_double_braces() {
+    let tpl = PromptTemplate::new("literal {{braces}}");
+    let vars = Map::new();
+    assert_eq!(tpl.render(&vars).unwrap(), "literal {braces}");
+}
+
+#[test]
+fn errors_on_unknown_placeholder() {
+    let tpl = PromptTemplate::new("{missing}");
+    let vars = Map::new();
+    assert!(tpl.render(&vars).is_err());
+}
+
+#[test]
+fn builder_produces_cache_segments() {
+    let mut builder = PromptBuilder::new();
+    builder.push_system("sys", vec![Message::system("You are helpful.")]);
+    builder.push_volatile("user-turn", vec![Message::user("Hi")]);
+    let req = builder.build(vec![]);
+    assert_eq!(req.cache_segments.len(), 2);
+    assert!(req.cache_segments[0].cacheable);
+    assert!(!req.cache_segments[1].cacheable);
+    assert!(req.prompt_fingerprint.is_some());
+}
+
+// ── PromptTemplate rendering ──────────────────────────────────────────────────
+
+#[test]
+fn renders_non_string_value() {
+    let tpl = PromptTemplate::new("count={n}");
+    let mut vars = Map::new();
+    vars.insert("n".to_string(), json!(42));
+    assert_eq!(tpl.render(&vars).unwrap(), "count=42");
+}
+
+#[test]
+fn errors_on_unclosed_placeholder() {
+    let tpl = PromptTemplate::new("hello {name");
+    let vars = Map::new();
+    let err = tpl.render(&vars).unwrap_err();
+    assert!(err.to_string().contains("unclosed"));
+}
+
+#[test]
+fn render_message_role_helpers() {
+    let tpl = PromptTemplate::new("hi {who}");
+    let mut vars = Map::new();
+    vars.insert("who".to_string(), json!("there"));
+
+    assert!(matches!(
+        tpl.render_message(TemplateRole::System, &vars).unwrap(),
+        Message::System(_)
+    ));
+    assert!(matches!(
+        tpl.render_system(&vars).unwrap(),
+        Message::System(_)
+    ));
+    assert!(matches!(tpl.render_user(&vars).unwrap(), Message::User(_)));
+    let assistant = tpl.render_assistant(&vars).unwrap();
+    assert!(matches!(assistant, Message::Assistant(_)));
+    assert_eq!(assistant.text(), "hi there");
+}
+
+#[test]
+fn messages_template_renders_roles_in_order() {
+    let mut tpl = MessagesTemplate::new();
+    tpl.push(TemplateRole::System, PromptTemplate::new("sys {v}"))
+        .push(TemplateRole::User, PromptTemplate::new("user {v}"));
+    let mut vars = Map::new();
+    vars.insert("v".to_string(), json!("X"));
+
+    let msgs = tpl.render(&vars).unwrap();
+    assert_eq!(msgs.len(), 2);
+    assert!(matches!(msgs[0], Message::System(_)));
+    assert_eq!(msgs[0].text(), "sys X");
+    assert!(matches!(msgs[1], Message::User(_)));
+    assert_eq!(msgs[1].text(), "user X");
+}
+
+#[test]
+fn messages_template_propagates_render_error() {
+    let mut tpl = MessagesTemplate::new();
+    tpl.push(TemplateRole::User, PromptTemplate::new("{missing}"));
+    assert!(tpl.render(&Map::new()).is_err());
+}
+
+// ── PromptBuilder segment composition ─────────────────────────────────────────
+
+#[test]
+fn builder_cacheability_by_segment_type() {
+    use tinyinference_llm::tool::ToolSchema;
+
+    let mut builder = PromptBuilder::new();
+    builder
+        .push_system("sys", vec![Message::system("S")])
+        .push_tools_segment(
+            "tools",
+            vec![ToolSchema::new("calc", "adds numbers", json!({}))],
+        )
+        .push_instructions("inst", vec![Message::system("follow rules")])
+        .push_history("hist", vec![Message::user("earlier")])
+        .push_volatile("vol", vec![Message::user("now")]);
+
+    let req = builder.build(vec![Message::user("tail")]);
+
+    // Five segments in push order.
+    assert_eq!(req.cache_segments.len(), 5);
+    let cacheable: Vec<bool> = req.cache_segments.iter().map(|s| s.cacheable).collect();
+    assert_eq!(cacheable, vec![true, true, true, false, false]);
+
+    // Tool accumulated into the request.
+    assert_eq!(req.tools.len(), 1);
+    assert_eq!(req.tools[0].name, "calc");
+
+    // Messages from system + instructions + history + volatile + tail; tools
+    // segment carries no messages.
+    let texts: Vec<String> = req.messages.iter().map(|m| m.text()).collect();
+    assert_eq!(texts, vec!["S", "follow rules", "earlier", "now", "tail"]);
+}
+
+#[test]
+fn fingerprint_stable_for_same_stable_prefix() {
+    let mut a = PromptBuilder::new();
+    a.push_system("sys", vec![Message::system("stable")]);
+    a.push_volatile("vol", vec![Message::user("turn-1")]);
+
+    let mut b = PromptBuilder::new();
+    b.push_system("sys", vec![Message::system("stable")]);
+    // Different volatile (non-cacheable) content must not change fingerprint.
+    b.push_volatile("vol", vec![Message::user("turn-2")]);
+
+    assert_eq!(a.fingerprint(), b.fingerprint());
+}
+
+#[test]
+fn fingerprint_changes_with_stable_prefix() {
+    let mut a = PromptBuilder::new();
+    a.push_system("sys", vec![Message::system("stable")]);
+
+    let mut b = PromptBuilder::new();
+    b.push_system("sys", vec![Message::system("DIFFERENT")]);
+
+    assert_ne!(a.fingerprint(), b.fingerprint());
+
+    // The built request carries the same fingerprint as the builder.
+    assert_eq!(a.build(vec![]).prompt_fingerprint.unwrap(), a.fingerprint());
+}
+
+// ── Fingerprint content coverage and stability ───────────────────────────────
+
+#[test]
+fn fingerprint_is_64_hex_and_deterministic() {
+    let mut builder = PromptBuilder::new();
+    builder.push_system("sys", vec![Message::system("stable")]);
+    let fp = builder.fingerprint();
+    assert_eq!(fp.len(), 64, "SHA-256 hex digest");
+    assert!(fp.chars().all(|c| c.is_ascii_hexdigit()));
+    assert_eq!(fp, builder.fingerprint());
+}
+
+#[test]
+fn fingerprint_changes_with_tool_schema_not_just_name() {
+    use tinyinference_llm::tool::ToolSchema;
+
+    let tool_v1 = ToolSchema::new("calc", "adds numbers", json!({"type": "object"}));
+    let mut tool_v2 = tool_v1.clone();
+    tool_v2.parameters = json!({"type": "object", "required": ["a"]});
+
+    let mut a = PromptBuilder::new();
+    a.push_tools_segment("tools", vec![tool_v1]);
+    let mut b = PromptBuilder::new();
+    b.push_tools_segment("tools", vec![tool_v2]);
+
+    assert_ne!(
+        a.fingerprint(),
+        b.fingerprint(),
+        "a parameter-schema change must change the fingerprint even when the tool name is unchanged"
+    );
+}
+
+#[test]
+fn fingerprint_changes_with_image_content_and_message_role() {
+    use tinyinference_llm::message::{ContentBlock, ImageRef, UserMessage};
+
+    // Same (empty) text, different image URL.
+    let image = |url: &str| {
+        Message::User(UserMessage {
+            content: vec![ContentBlock::Image(ImageRef {
+                url: url.to_string(),
+                mime_type: Some("image/png".to_string()),
+            })],
+        })
+    };
+    let mut a = PromptBuilder::new();
+    a.push_system("sys", vec![image("https://example.com/a.png")]);
+    let mut b = PromptBuilder::new();
+    b.push_system("sys", vec![image("https://example.com/b.png")]);
+    assert_ne!(
+        a.fingerprint(),
+        b.fingerprint(),
+        "image content must participate in the fingerprint"
+    );
+
+    // Same text, different role.
+    let mut sys = PromptBuilder::new();
+    sys.push_system("seg", vec![Message::system("same text")]);
+    let mut user = PromptBuilder::new();
+    user.push_system("seg", vec![Message::user("same text")]);
+    assert_ne!(
+        sys.fingerprint(),
+        user.fingerprint(),
+        "message role must participate in the fingerprint"
+    );
+}
+
+/// Pins the fingerprint of a fixed prefix so accidental changes to the hash
+/// input or algorithm are caught: the value must be stable across processes,
+/// platforms, and Rust versions. Update this constant only on a deliberate,
+/// documented fingerprint-format change.
+#[test]
+fn fingerprint_value_is_pinned_for_cross_process_stability() {
+    let mut builder = PromptBuilder::new();
+    builder.push_system("sys", vec![Message::system("pinned prefix")]);
+    assert_eq!(
+        builder.fingerprint(),
+        "0c8eb74fc9194b5d7845d787735eb2e36a68dc9d2ed91e5e7e07a13035d7d2a6"
+    );
+}
+
+#[test]
+fn system_segment_ids_number_every_leading_system_message() {
+    assert_eq!(system_segment_id(0), "system");
+    assert_eq!(system_segment_id(1), "system.1");
+    assert_eq!(system_segment_id(12), "system.12");
+    for id in ["system", "system.1", "system.42"] {
+        assert!(is_system_segment_id(id), "{id}");
+    }
+    for id in [
+        "tools",
+        "system.",
+        "system.0",
+        "system.00",
+        "system.01",
+        "system.0002",
+        "system.x",
+        "systemic",
+        "system.1.2",
+        "",
+    ] {
+        assert!(!is_system_segment_id(id), "{id}");
+    }
+}
+
+#[test]
+fn repeated_system_message_appends_keep_segment_ids_unique() {
+    let mut builder = PromptBuilder::new();
+    builder.push_system_messages(&[Message::system("first")]);
+    builder.push_system_messages(&[Message::system("second"), Message::system("third")]);
+
+    let ids = builder
+        .build(Vec::new())
+        .cache_segments
+        .into_iter()
+        .map(|segment| segment.id)
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["system", "system.1", "system.2"]);
+}
+
+#[test]
+fn push_system_messages_keeps_one_cacheable_segment_per_tier() {
+    let stable = Message::system("identity and rules");
+    let volatile = Message::system("connected services for this session");
+    let mut builder = PromptBuilder::new();
+    builder.push_system_messages(&[stable.clone(), volatile.clone()]);
+    let request = builder.build(vec![Message::user("hi")]);
+
+    assert_eq!(request.messages.len(), 3);
+    assert_eq!(request.messages[0], stable);
+    assert_eq!(request.messages[1], volatile);
+    let ids: Vec<&str> = request
+        .cache_segments
+        .iter()
+        .map(|segment| segment.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["system", "system.1"]);
+    assert!(
+        request
+            .cache_segments
+            .iter()
+            .all(|segment| segment.cacheable)
+    );
+    assert!(
+        request
+            .cache_segments
+            .iter()
+            .all(|segment| segment.role == SegmentRole::System)
+    );
+
+    // Rewriting only the volatile tier changes the fingerprint (the whole
+    // prefix is what a provider caches) but the stable segment keeps its id,
+    // so the layout guard can attribute the change to the second tier.
+    let mut other = PromptBuilder::new();
+    other.push_system_messages(&[stable, Message::system("different session")]);
+    assert_ne!(builder.fingerprint(), other.fingerprint());
+
+    let mut empty = PromptBuilder::new();
+    empty.push_system_messages(&[]);
+    assert!(empty.build(vec![]).cache_segments.is_empty());
+}
+
+#[test]
+fn fingerprint_is_independent_of_nested_json_object_insertion_order() {
+    use tinyinference_llm::tool::ToolSchema;
+    let first: Value =
+        serde_json::from_str(r#"{"z":[{"b":4,"a":3},5],"a":{"b":2,"a":1}}"#).unwrap();
+    let second: Value =
+        serde_json::from_str(r#"{"a":{"a":1,"b":2},"z":[{"a":3,"b":4},5]}"#).unwrap();
+    assert_eq!(first, second);
+    let fingerprint = |parameters| {
+        let mut builder = PromptBuilder::new();
+        builder.push_system("sys", vec![Message::system("pinned prefix")]);
+        builder.push_tools_segment(
+            "tools",
+            vec![ToolSchema::new("tool", "description", parameters)],
+        );
+        builder.fingerprint()
+    };
+    assert_eq!(fingerprint(first), fingerprint(second));
+}
+
+#[test]
+fn fingerprint_keeps_nested_json_array_order_significant() {
+    use tinyinference_llm::tool::ToolSchema;
+    let fingerprint = |parameters| {
+        let mut builder = PromptBuilder::new();
+        builder.push_tools_segment(
+            "tools",
+            vec![ToolSchema::new("tool", "description", parameters)],
+        );
+        builder.fingerprint()
+    };
+    assert_ne!(
+        fingerprint(json!({"nested": [{"value": 1}, {"value": 2}]})),
+        fingerprint(json!({"nested": [{"value": 2}, {"value": 1}]})),
+    );
+}

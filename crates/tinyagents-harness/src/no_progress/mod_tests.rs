@@ -1,0 +1,706 @@
+//! Unit tests for the no-progress escalation ladder.
+
+use super::*;
+use std::sync::Arc;
+
+fn fail<'a>(tool: &'a str, fp: &'a str, err: &'a str) -> ToolAttempt<'a> {
+    ToolAttempt {
+        tool,
+        arg_fingerprint: fp,
+        error: Some(err),
+        hard_reject: false,
+        recoverable_miss: false,
+    }
+}
+
+fn ok<'a>(tool: &'a str, fp: &'a str) -> ToolAttempt<'a> {
+    ToolAttempt {
+        tool,
+        arg_fingerprint: fp,
+        error: None,
+        hard_reject: false,
+        recoverable_miss: false,
+    }
+}
+
+#[test]
+fn identical_failure_nudges_then_halts() {
+    let t = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
+    // First identical failure: not enough repetition yet.
+    assert_eq!(
+        t.record(1, &fail("read_file", "a", "not found")),
+        NoProgress::Continue
+    );
+    // Second: nudge the model to change strategy before the retry cap.
+    match t.record(2, &fail("read_file", "a", "not found")) {
+        NoProgress::Nudge(msg) => {
+            assert!(msg.contains("no progress since step 2"));
+            assert!(msg.contains("read_file"));
+            assert!(msg.contains("Change strategy"));
+        }
+        other => panic!("expected a nudge on the second identical failure, got {other:?}"),
+    }
+    // Third: same-strategy retries exhausted → halt.
+    match t.record(3, &fail("read_file", "a", "not found")) {
+        NoProgress::Halt(msg) => assert!(msg.contains("retried 3 times")),
+        other => panic!("expected a halt on the third identical failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_success_resets_the_ladder() {
+    let t = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
+    let _ = t.record(1, &fail("t", "a", "boom"));
+    let _ = t.record(2, &fail("t", "a", "boom")); // nudge
+    assert_eq!(t.record(3, &ok("t", "a")), NoProgress::Continue);
+    // After the reset, two more identical failures only re-nudge — no halt.
+    assert_eq!(t.record(4, &fail("t", "a", "boom")), NoProgress::Continue);
+    assert!(matches!(
+        t.record(5, &fail("t", "a", "boom")),
+        NoProgress::Nudge(_)
+    ));
+}
+
+#[test]
+fn changed_arguments_clear_the_identical_streak() {
+    let t = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
+    let _ = t.record(1, &fail("read_file", "a", "not found"));
+    // The model heeded the nudge and changed args: a new signature, so the
+    // identical-repeat counter starts over and never reaches the halt.
+    assert_eq!(
+        t.record(2, &fail("read_file", "b", "not found")),
+        NoProgress::Continue
+    );
+    assert_eq!(
+        t.record(3, &fail("list_dir", "c", "denied")),
+        NoProgress::Continue
+    );
+}
+
+#[test]
+fn a_hard_rejection_halts_on_the_second_identical_repeat() {
+    let t = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
+    let mut a = fail("send_email", "a", "[policy-blocked] denied");
+    a.hard_reject = true;
+    assert_eq!(t.record(1, &a), NoProgress::Continue);
+    let mut b = fail("send_email", "a", "[policy-blocked] denied");
+    b.hard_reject = true;
+    assert!(matches!(t.record(2, &b), NoProgress::Halt(msg) if msg.contains("security policy")));
+}
+
+#[test]
+fn varied_failures_nudge_then_hit_the_backstop() {
+    let t = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
+    // Distinct signatures each time: the identical counter never climbs, but
+    // the any-failure streak does.
+    for i in 1..=3 {
+        let (fp, err) = (format!("fp{i}"), format!("err{i}"));
+        assert_eq!(t.record(i, &fail("t", &fp, &err)), NoProgress::Continue);
+    }
+    // Fourth consecutive varied failure → nudge to step back.
+    assert!(matches!(
+        t.record(4, &fail("t", "fp4", "err4")),
+        NoProgress::Nudge(_)
+    ));
+    assert_eq!(t.record(5, &fail("t", "fp5", "err5")), NoProgress::Continue);
+    // Sixth → the no-progress backstop halts.
+    assert!(matches!(
+        t.record(6, &fail("t", "fp6", "err6")),
+        NoProgress::Halt(msg) if msg.contains("in a row failed")
+    ));
+}
+
+#[test]
+fn unknown_tool_recovery_does_not_feed_the_backstop() {
+    let t = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
+    // Six correctable misses with *distinct* signatures must not trip the
+    // any-failure backstop (they don't count toward `consecutive`).
+    for i in 0..6 {
+        let (fp, err) = (format!("fp{i}"), format!("unknown tool foo{i}"));
+        let mut a = fail("__unknown_tool__", &fp, &err);
+        a.recoverable_miss = true;
+        assert_eq!(t.record(i, &a), NoProgress::Continue);
+    }
+}
+
+#[test]
+fn identical_halt_threshold_is_clamped_above_the_nudge() {
+    // A caller asking for a halt threshold of 1 or 2 still gets a nudge
+    // before the halt (the nudge lands at 2, so the halt must be >= 3).
+    let t = NoProgressTracker::new(1);
+    assert_eq!(t.record(1, &fail("t", "a", "boom")), NoProgress::Continue);
+    assert!(matches!(
+        t.record(2, &fail("t", "a", "boom")),
+        NoProgress::Nudge(_)
+    ));
+    assert!(matches!(
+        t.record(3, &fail("t", "a", "boom")),
+        NoProgress::Halt(_)
+    ));
+}
+
+#[test]
+fn identical_output_halts_at_threshold_and_changes_reset() {
+    let tracker = SuccessfulRepeatTracker::new(3, 10);
+    assert_eq!(
+        tracker.record_output("same", false),
+        SuccessfulRepeat::Continue
+    );
+    assert_eq!(
+        tracker.record_call_batch("call-1", true, false),
+        SuccessfulRepeat::Continue
+    );
+    assert_eq!(
+        tracker.record_output("same", false),
+        SuccessfulRepeat::Continue
+    );
+    assert_eq!(
+        tracker.record_call_batch("call-2", true, false),
+        SuccessfulRepeat::Continue
+    );
+    assert_eq!(
+        tracker.record_output("same", false),
+        SuccessfulRepeat::Continue,
+        "output cannot halt before its tool batch is classified"
+    );
+    assert!(matches!(
+        tracker.record_call_batch("call-3", true, false),
+        SuccessfulRepeat::Halt(message) if message.contains("3 iterations")
+    ));
+    assert_eq!(
+        tracker.record_output("different", false),
+        SuccessfulRepeat::Continue
+    );
+}
+
+#[test]
+fn successful_call_batches_halt_but_failures_reset() {
+    let tracker = SuccessfulRepeatTracker::new(4, 2);
+    assert_eq!(
+        tracker.record_call_batch("tool:args", true, false),
+        SuccessfulRepeat::Continue
+    );
+    assert!(matches!(
+        tracker.record_call_batch("tool:args", true, false),
+        SuccessfulRepeat::Halt(message) if message.contains("2 times")
+    ));
+    assert_eq!(
+        tracker.record_call_batch("tool:args", false, false),
+        SuccessfulRepeat::Continue
+    );
+    assert_eq!(
+        tracker.record_call_batch("tool:args", true, false),
+        SuccessfulRepeat::Continue
+    );
+}
+
+#[test]
+fn failed_call_batches_reset_output_repeats() {
+    let tracker = SuccessfulRepeatTracker::new(2, 2);
+    assert_eq!(
+        tracker.record_output("same", false),
+        SuccessfulRepeat::Continue
+    );
+    assert_eq!(
+        tracker.record_call_batch("first-call", true, false),
+        SuccessfulRepeat::Continue
+    );
+    assert_eq!(
+        tracker.record_output("same", false),
+        SuccessfulRepeat::Continue,
+        "a threshold crossing is pending until batch success is known"
+    );
+    assert_eq!(
+        tracker.record_call_batch("failed-call", false, false),
+        SuccessfulRepeat::Continue
+    );
+    assert_eq!(
+        tracker.record_output("same", false),
+        SuccessfulRepeat::Continue,
+        "a failed prior batch must not count toward a successful output loop"
+    );
+}
+
+#[test]
+fn exempt_batches_reset_both_streaks() {
+    let tracker = SuccessfulRepeatTracker::new(2, 2);
+    assert_eq!(
+        tracker.record_output("poll", false),
+        SuccessfulRepeat::Continue
+    );
+    assert_eq!(
+        tracker.record_call_batch("poll", true, true),
+        SuccessfulRepeat::Continue
+    );
+    assert_eq!(
+        tracker.record_output("poll", false),
+        SuccessfulRepeat::Continue,
+        "an exempt completed batch must clear its already-recorded output"
+    );
+
+    assert_eq!(
+        tracker.record_call_batch("poll", true, false),
+        SuccessfulRepeat::Continue
+    );
+    assert_eq!(
+        tracker.record_call_batch("poll", true, true),
+        SuccessfulRepeat::Continue
+    );
+    assert_eq!(
+        tracker.record_call_batch("poll", true, false),
+        SuccessfulRepeat::Continue
+    );
+}
+
+#[test]
+fn cycling_identical_calls_halt_for_any_cycle_length() {
+    for cycle_len in 2..=5 {
+        let tracker = SuccessfulRepeatTracker::new(4, 3);
+        let calls: Vec<String> = (0..cycle_len).map(|i| format!("call-{i}")).collect();
+        let mut halted_at = None;
+        for step in 0..cycle_len * 3 {
+            let call = &calls[step % cycle_len];
+            // The adjacent streak never sees two identical batches in a row.
+            assert_eq!(
+                tracker.record_call_batch(call, true, false),
+                SuccessfulRepeat::Continue
+            );
+            if let SuccessfulRepeat::Halt(message) =
+                tracker.record_call_outcome(call, "same result")
+            {
+                assert!(message.contains("3 times"), "unexpected message: {message}");
+                halted_at = Some(step);
+                break;
+            }
+        }
+        assert_eq!(
+            halted_at,
+            Some(cycle_len * 2),
+            "a {cycle_len}-call cycle with identical results must halt on the first call's third recurrence"
+        );
+    }
+}
+
+#[test]
+fn identical_call_with_a_changed_result_is_not_a_recurrence() {
+    let tracker = SuccessfulRepeatTracker::new(4, 3);
+    for i in 0..10 {
+        assert_eq!(
+            tracker.record_call_outcome("read_status", &format!("result-{i}")),
+            SuccessfulRepeat::Continue,
+            "a re-read whose result changed is progress, not a repeat"
+        );
+        assert_eq!(
+            tracker.record_call_outcome("other", &format!("other-{i}")),
+            SuccessfulRepeat::Continue
+        );
+    }
+}
+
+#[test]
+fn failed_and_exempt_batches_do_not_clear_recurrences() {
+    let tracker = SuccessfulRepeatTracker::new(4, 3);
+    assert_eq!(
+        tracker.record_call_outcome("read_doc", "doc"),
+        SuccessfulRepeat::Continue
+    );
+    // A failing sibling call in the same batch.
+    let _ = tracker.record_call_batch("read_doc+missing_tool", false, false);
+    assert_eq!(
+        tracker.record_call_outcome("read_doc", "doc"),
+        SuccessfulRepeat::Continue
+    );
+    let _ = tracker.record_call_batch("wait", true, true);
+    assert!(
+        matches!(
+            tracker.record_call_outcome("read_doc", "doc"),
+            SuccessfulRepeat::Halt(_)
+        ),
+        "failed or exempt batches in between must not hide an identical re-read"
+    );
+}
+
+#[test]
+fn reset_clears_recurrences() {
+    let tracker = SuccessfulRepeatTracker::new(4, 2);
+    assert_eq!(
+        tracker.record_call_outcome("read_doc", "doc"),
+        SuccessfulRepeat::Continue
+    );
+    tracker.reset();
+    assert_eq!(
+        tracker.record_call_outcome("read_doc", "doc"),
+        SuccessfulRepeat::Continue,
+        "reset must forget earlier recurrences"
+    );
+}
+
+#[test]
+fn zero_thresholds_are_fail_safe() {
+    let tracker = SuccessfulRepeatTracker::new(0, 0);
+    assert_eq!(
+        tracker.record_output("same", false),
+        SuccessfulRepeat::Continue
+    );
+    assert!(matches!(
+        tracker.record_call_batch("same", true, false),
+        SuccessfulRepeat::Halt(_)
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// C5: the API a wave-2 `after_tool` driver actually needs
+// ---------------------------------------------------------------------------
+
+mod drivable {
+    use serde_json::json;
+
+    use crate::no_progress::{
+        DEFAULT_IDENTICAL_HALT_THRESHOLD, NoProgress, NoProgressTracker, ToolAttempt,
+        fingerprint_arguments,
+    };
+
+    #[test]
+    fn argument_fingerprints_ignore_object_key_order() {
+        // The identical-repeat rung compares fingerprints, so a driver that
+        // rendered arguments with `Value::to_string` would see two logically
+        // identical calls as different (insertion order is preserved) and let
+        // the loop run to the tool-call cap instead of tripping the ladder.
+        let a = fingerprint_arguments(&json!({"path": "/tmp", "depth": 2, "glob": "*.rs"}));
+        let b = fingerprint_arguments(&json!({"glob": "*.rs", "depth": 2, "path": "/tmp"}));
+        assert_eq!(a, b);
+
+        // Nested objects too.
+        let n1 = fingerprint_arguments(&json!({"o": {"x": 1, "y": 2}}));
+        let n2 = fingerprint_arguments(&json!({"o": {"y": 2, "x": 1}}));
+        assert_eq!(n1, n2);
+    }
+
+    #[test]
+    fn argument_fingerprints_distinguish_real_differences() {
+        let base = fingerprint_arguments(&json!({"path": "/tmp"}));
+        assert_ne!(base, fingerprint_arguments(&json!({"path": "/var"})));
+        assert_ne!(base, fingerprint_arguments(&json!({"pathx": "/tmp"})));
+        // Array order is semantic and must NOT be canonicalised away.
+        assert_ne!(
+            fingerprint_arguments(&json!({"a": [1, 2]})),
+            fingerprint_arguments(&json!({"a": [2, 1]}))
+        );
+        // Type differences matter.
+        assert_ne!(
+            fingerprint_arguments(&json!({"a": 1})),
+            fingerprint_arguments(&json!({"a": "1"}))
+        );
+    }
+
+    #[test]
+    fn fingerprints_are_short_and_stable_across_calls() {
+        let value = json!({"path": "/tmp"});
+        let first = fingerprint_arguments(&value);
+        assert_eq!(first.len(), 16);
+        assert_eq!(first, fingerprint_arguments(&value));
+    }
+
+    #[test]
+    fn tool_attempt_constructors_cover_every_driver_case() {
+        let fp = fingerprint_arguments(&json!({"q": "x"}));
+
+        let ok = ToolAttempt::success("search", &fp);
+        assert!(ok.error.is_none() && !ok.hard_reject && !ok.recoverable_miss);
+
+        let bad = ToolAttempt::failure("search", &fp, "boom");
+        assert_eq!(bad.error, Some("boom"));
+
+        let blocked = ToolAttempt::failure("shell", &fp, "denied").hard_reject();
+        assert!(blocked.hard_reject);
+
+        let missing = ToolAttempt::failure("nope", &fp, "unknown tool").recoverable_miss();
+        assert!(missing.recoverable_miss);
+    }
+
+    #[test]
+    fn a_driver_can_run_the_whole_ladder_through_the_public_api_only() {
+        // The end-to-end shape of the middleware wave 2 has to write: a shared
+        // `&self` tracker, a fingerprint, a constructor, and verdict accessors —
+        // no field literals, no hand-rolled hashing, no enum matching.
+        let tracker = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
+        let args = json!({"path": "/missing"});
+        let fp = fingerprint_arguments(&args);
+
+        let verdicts: Vec<NoProgress> = (1..=3)
+            .map(|step| tracker.record(step, &ToolAttempt::failure("read", &fp, "ENOENT")))
+            .collect();
+
+        assert!(matches!(verdicts[0], NoProgress::Continue));
+        assert!(verdicts[1].is_nudge(), "expected a nudge on the repeat");
+        assert!(
+            verdicts[2].is_halt(),
+            "expected a halt once retries ran out"
+        );
+
+        // The accessors give a driver everything it needs without a match.
+        assert!(verdicts[0].message().is_none());
+        assert!(verdicts[1].message().unwrap().contains("no progress since"));
+        assert!(verdicts[2].message().unwrap().contains("Stopping"));
+        assert_eq!(
+            verdicts.iter().map(NoProgress::as_str).collect::<Vec<_>>(),
+            vec!["continue", "nudge", "halt"]
+        );
+    }
+
+    #[test]
+    fn record_takes_a_shared_reference_so_an_after_tool_hook_needs_no_refcell() {
+        // `after_tool` hooks receive `&self`; the tracker must be usable through
+        // a shared reference or every driver would need interior mutability of
+        // its own.
+        fn drive(tracker: &NoProgressTracker, fp: &str) -> NoProgress {
+            tracker.record(1, &ToolAttempt::failure("t", fp, "boom"))
+        }
+        let tracker = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
+        let fp = fingerprint_arguments(&json!({}));
+        assert_eq!(drive(&tracker, &fp), NoProgress::Continue);
+        assert!(drive(&tracker, &fp).is_nudge());
+    }
+
+    #[test]
+    fn a_success_between_failures_clears_the_ladder() {
+        // The driver contract says a success resets progress tracking; pinned
+        // here because a wave-2 middleware relies on it to avoid halting a run
+        // that is genuinely making progress with an occasional failure.
+        let tracker = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
+        let fp = fingerprint_arguments(&json!({"a": 1}));
+
+        assert_eq!(
+            tracker.record(1, &ToolAttempt::failure("t", &fp, "boom")),
+            NoProgress::Continue
+        );
+        assert_eq!(
+            tracker.record(2, &ToolAttempt::success("t", &fp)),
+            NoProgress::Continue
+        );
+        // The repeat counter restarted, so this is a first failure again.
+        assert_eq!(
+            tracker.record(3, &ToolAttempt::failure("t", &fp, "boom")),
+            NoProgress::Continue
+        );
+    }
+}
+
+// ── Volatility-aware outcome fingerprinting ─────────────────────────────
+
+/// A fingerprinter that treats every outcome as the same one.
+struct ConstantFingerprinter;
+
+impl OutcomeFingerprinter for ConstantFingerprinter {
+    fn fingerprint(&self, _outcome: &str) -> String {
+        "same".to_string()
+    }
+}
+
+/// A fingerprinter that never normalizes, i.e. the pre-existing behavior.
+struct VerbatimFingerprinter;
+
+impl OutcomeFingerprinter for VerbatimFingerprinter {
+    fn fingerprint(&self, outcome: &str) -> String {
+        outcome.to_string()
+    }
+}
+
+#[test]
+fn timestamped_identical_outputs_trip_the_recurrence_halt() {
+    let tracker = SuccessfulRepeatTracker::new(4, 3);
+    let call = "get_status\u{1}abc";
+    assert_eq!(
+        tracker.record_call_outcome(
+            call,
+            "ok at 2026-10-06T12:00:01Z in 12ms (req 123e4567-e89b-12d3-a456-426614174000)"
+        ),
+        SuccessfulRepeat::Continue
+    );
+    assert_eq!(
+        tracker.record_call_outcome(
+            call,
+            "ok at 2026-10-06T12:00:09Z in 340ms (req 00000000-1111-2222-3333-444444444444)"
+        ),
+        SuccessfulRepeat::Continue
+    );
+    assert!(matches!(
+        tracker.record_call_outcome(call, "ok at 2026-10-06T12:01:30Z in 7ms (req aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee)"),
+        SuccessfulRepeat::Halt(message) if message.contains("identical result")
+    ));
+}
+
+#[test]
+fn genuinely_different_outputs_do_not_trip_the_recurrence_halt() {
+    let tracker = SuccessfulRepeatTracker::new(4, 3);
+    for i in 0..10 {
+        assert_eq!(
+            tracker.record_call_outcome(
+                "get_status\u{1}abc",
+                &format!("ok at 2026-10-06T12:00:0{i}Z rows={i}")
+            ),
+            SuccessfulRepeat::Continue,
+            "outputs that differ outside volatile spans are progress"
+        );
+    }
+}
+
+#[test]
+fn custom_fingerprinter_is_honored_by_the_successful_repeat_tracker() {
+    let constant =
+        SuccessfulRepeatTracker::new(4, 3).with_fingerprinter(Arc::new(ConstantFingerprinter));
+    constant.record_call_outcome("c", "alpha");
+    constant.record_call_outcome("c", "beta");
+    assert!(matches!(
+        constant.record_call_outcome("c", "gamma"),
+        SuccessfulRepeat::Halt(_)
+    ));
+
+    let verbatim =
+        SuccessfulRepeatTracker::new(4, 3).with_fingerprinter(Arc::new(VerbatimFingerprinter));
+    for second in 10..20 {
+        assert_eq!(
+            verbatim.record_call_outcome("c", &format!("at 12:00:{second}")),
+            SuccessfulRepeat::Continue,
+            "a verbatim fingerprinter must not normalize the timestamp"
+        );
+    }
+}
+
+#[test]
+fn failure_with_changing_timestamps_counts_as_identical() {
+    let t = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
+    assert_eq!(
+        t.record(
+            1,
+            &fail(
+                "fetch",
+                "a",
+                "timeout at 2026-10-06T12:00:01Z after 5012ms (attempt 1 of 3)"
+            )
+        ),
+        NoProgress::Continue
+    );
+    assert!(matches!(
+        t.record(
+            2,
+            &fail(
+                "fetch",
+                "a",
+                "timeout at 2026-10-06T12:00:09Z after 5003ms (attempt 2 of 3)"
+            )
+        ),
+        NoProgress::Nudge(_)
+    ));
+    assert!(matches!(
+        t.record(
+            3,
+            &fail(
+                "fetch",
+                "a",
+                "timeout at 2026-10-06T12:00:17Z after 4999ms (attempt 3 of 3)"
+            )
+        ),
+        NoProgress::Halt(_)
+    ));
+}
+
+#[test]
+fn genuinely_different_failures_are_not_identical() {
+    let t = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
+    assert_eq!(
+        t.record(1, &fail("fetch", "a", "timeout at 2026-10-06T12:00:01Z")),
+        NoProgress::Continue
+    );
+    assert_eq!(
+        t.record(
+            2,
+            &fail("fetch", "a", "connection refused at 2026-10-06T12:00:09Z")
+        ),
+        NoProgress::Continue,
+        "a different failure message restarts the identical-repeat count"
+    );
+}
+
+#[test]
+fn multiline_failures_keep_stable_context_after_volatile_first_lines() {
+    let t = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
+
+    assert_eq!(
+        t.record(
+            1,
+            &fail("fetch", "a", "2026-10-06T12:00:01Z\nconnection refused")
+        ),
+        NoProgress::Continue
+    );
+    assert!(matches!(
+        t.record(
+            2,
+            &fail("fetch", "a", "2026-10-06T12:00:09Z\nconnection refused")
+        ),
+        NoProgress::Nudge(_)
+    ));
+    assert!(matches!(
+        t.record(
+            3,
+            &fail("fetch", "a", "2026-10-06T12:00:17Z\nconnection refused")
+        ),
+        NoProgress::Halt(_)
+    ));
+}
+
+#[test]
+fn custom_fingerprinter_is_honored_by_the_failure_ladder() {
+    let t = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD)
+        .with_fingerprinter(Arc::new(ConstantFingerprinter));
+    assert_eq!(t.record(1, &fail("t", "a", "one")), NoProgress::Continue);
+    assert!(matches!(
+        t.record(2, &fail("t", "a", "two")),
+        NoProgress::Nudge(_)
+    ));
+
+    let verbatim = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD)
+        .with_fingerprinter(Arc::new(VerbatimFingerprinter));
+    verbatim.record(1, &fail("t", "a", "boom at 12:00:01"));
+    assert_eq!(
+        verbatim.record(2, &fail("t", "a", "boom at 12:00:02")),
+        NoProgress::Continue,
+        "a verbatim fingerprinter must not normalize the clock time"
+    );
+}
+
+#[test]
+fn distinct_hex_only_outputs_do_not_trip_the_recurrence_halt() {
+    let tracker = SuccessfulRepeatTracker::new(4, 3);
+    for sha in [
+        "0123456789abcdef0123456789abcdef01234567\n",
+        "fedcba9876543210fedcba9876543210fedcba98\n",
+        "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678\n",
+        "99999999aaaaaaaa99999999aaaaaaaa99999999\n",
+    ] {
+        assert_eq!(
+            tracker.record_call_outcome("git_rev_parse\u{1}abc", sha),
+            SuccessfulRepeat::Continue,
+            "a bare id is the content, not noise around it"
+        );
+    }
+}
+
+#[test]
+fn distinct_epoch_and_byte_count_outputs_do_not_trip_the_recurrence_halt() {
+    let tracker = SuccessfulRepeatTracker::new(4, 3);
+    for out in [
+        "1759752896\n",
+        "1759752897\n",
+        "1759752898\n",
+        "1759752899\n",
+        "-rw-r--r-- 1 u g 1073741824 Oct 6 a.bin\n",
+        "-rw-r--r-- 1 u g 1073741825 Oct 6 a.bin\n",
+        "-rw-r--r-- 1 u g 1073741826 Oct 6 a.bin\n",
+    ] {
+        assert_eq!(
+            tracker.record_call_outcome("poll\u{1}abc", out),
+            SuccessfulRepeat::Continue
+        );
+    }
+}

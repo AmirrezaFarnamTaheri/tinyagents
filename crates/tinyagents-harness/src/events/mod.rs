@@ -27,8 +27,20 @@
 //! - [`HarnessRunStatus`] — a compact run status snapshot readable without
 //!   holding an in-process stream.
 
+mod generation_enrichment;
 mod types;
 
+pub mod call_dedupe;
+pub mod cap_pauser;
+pub mod compaction_log;
+pub mod ordered_sender;
+
+pub use call_dedupe::{CallDedupe, IterationCursor, advance_iteration};
+pub use cap_pauser::{CapPauser, PauseRecorder};
+pub use compaction_log::log_compacted;
+pub(crate) use generation_enrichment::is_valid_provider_id;
+pub use generation_enrichment::{GenerationEnrichment, GenerationPricing};
+pub use ordered_sender::{DEFAULT_MAX_OVERFLOW, OrderedSender, SendFailure};
 pub use types::*;
 // EventSinkInner is pub(crate) so bring it into scope explicitly for impls
 // below; it is not re-exported by `pub use types::*`.
@@ -84,6 +96,13 @@ impl Drop for DispatchGuard<'_> {
 // ---------------------------------------------------------------------------
 // EventSink impls
 // ---------------------------------------------------------------------------
+
+/// The id a sink whose stream id is `stream_id` mints for the event at
+/// `offset`: `{stream_id}-evt-{offset}`. Persisted ids are reproducible from
+/// the pair, which the durable journal relies on to avoid storing them.
+pub(crate) fn canonical_event_id(stream_id: &str, offset: u64) -> crate::ids::EventId {
+    crate::ids::EventId::new(format!("{stream_id}-evt-{offset}"))
+}
 
 impl EventSink {
     /// Creates a new, empty event sink with no registered listeners.
@@ -163,7 +182,7 @@ impl EventSink {
             let mut inner = lock_recovering(&self.inner);
             let offset = inner.next_offset;
             inner.next_offset += 1;
-            let id = crate::ids::EventId::new(format!("{}-evt-{offset}", inner.stream_id));
+            let id = canonical_event_id(&inner.stream_id, offset);
             let record = EventRecord { id, offset, event };
             // The id/offset must still be minted with no listeners — callers
             // (e.g. `HarnessRunStatus::set_last_event`) rely on the returned
@@ -385,6 +404,18 @@ impl HarnessRunStatus {
         self.updated_at = now;
     }
 
+    /// Advances the run to [`ExecutionStatus::Cancelled`], records the reason,
+    /// and records the end time. Mirrors the field writes of
+    /// [`Self::mark_failed`] so a cancelled run is terminal in every listing.
+    pub fn mark_cancelled(&mut self, reason: impl Into<String>) {
+        self.status = ExecutionStatus::Cancelled;
+        self.current_phase = HarnessPhase::Done;
+        self.error = Some(reason.into());
+        let now = SystemTime::now();
+        self.ended_at = Some(now);
+        self.updated_at = now;
+    }
+
     /// Marks the run as interrupted (waiting for external input).
     pub fn mark_interrupted(&mut self) {
         self.status = ExecutionStatus::Interrupted;
@@ -417,4 +448,5 @@ impl HarnessRunStatus {
 }
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;

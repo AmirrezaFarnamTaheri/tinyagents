@@ -47,6 +47,10 @@ pub struct TurnOptions<C = ()> {
     pub cancellation: CancellationToken,
     /// Explicit live execution context consumed by the driver.
     pub run_context: RunContext<C>,
+    /// Host-neutral controls for a [`crate::turn_driver::TurnDriver`]: the
+    /// model-call cap and pause-at-cap, early-exit tools, steering, child
+    /// scope and deferred completion. Other drivers ignore them.
+    pub controls: crate::turn_driver::TurnControls,
 }
 
 /// The codec-visible, durable subset of one turn's explicit options.
@@ -109,7 +113,7 @@ impl TranscriptTarget {
     /// and launches — the property a `{unix_ts}_{agent}` stem never had.
     ///
     /// `meta.session_id`/`parent_session_id` are populated from `session`
-    /// here, the same way [`Self::rebind_session`] keeps them in sync after a
+    /// here, the same way `Self::rebind_session` keeps them in sync after a
     /// compaction. Leaving them as whatever the caller passed in (typically
     /// `None`, since a newly bound target usually has no opinion on session
     /// identity yet) would otherwise let a session-addressed transcript carry
@@ -204,8 +208,11 @@ pub struct ResumePreparation {
 /// Values prepared by `SessionHooks::before_turn` for exactly one driver call.
 #[derive(Clone, Default)]
 pub struct TurnPreparation {
-    /// A replacement prefix allowed before the first committed turn. It is
-    /// reconciled against any decoded resumed history without duplication.
+    /// A replacement prefix, normally allowed only before the first committed turn.
+    /// Opt into later replacement with [`PrefixSnapshot::refreshing`]. Later refreshes
+    /// preserve conversation rows and become committed only after persistence succeeds;
+    /// identical prefixes are no-ops. Session targets record a successor generation,
+    /// while stem targets use compaction. Initial prefixes reconcile resumed history.
     pub prefix: Option<PrefixSnapshot>,
     /// The immutable tool declarations for this driver request. `None` uses
     /// the builder's compatibility default and is never retained from a prior
@@ -253,10 +260,13 @@ pub enum TranscriptDelta {
 }
 
 /// Durable transcript information supplied after a successful append.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TranscriptCommitReceipt {
     pub path: PathBuf,
     pub delta: TranscriptDelta,
+    /// Lossless durable rows written by this commit: appended rows for an
+    /// extension, or the complete replacement set for a new generation.
+    pub rows: Vec<TranscriptMessage>,
 }
 
 /// Exactly-once post-durability observation data.
@@ -291,6 +301,7 @@ impl Default for TurnOptions<()> {
             session: None,
             run_context: RunContext::new(RunConfig::new("session"), ())
                 .with_cancellation(cancellation.clone()),
+            controls: crate::turn_driver::TurnControls::default(),
             cancellation,
         }
     }
@@ -340,4 +351,26 @@ pub enum SessionTerminal {
     Cancelled,
     /// The turn ended with an error after any recoverable partial persistence.
     Failed(String),
+}
+
+impl SessionTerminal {
+    /// A best-effort typed outcome derived from this terminal alone.
+    ///
+    /// A failure carries only its message here, so it classifies as
+    /// `Internal`. The precise outcome (timeout, provider failure, ...) is
+    /// delivered separately through
+    /// [`SessionHooks::on_terminal_outcome`][crate::SessionHooks::on_terminal_outcome].
+    pub fn outcome(&self) -> tinyagents_harness::terminal::TerminalOutcome {
+        use tinyagents_harness::terminal::{TerminalOutcome, TerminalReason};
+        match self {
+            Self::Completed(turn) if turn.interrupted => {
+                TerminalOutcome::new(TerminalReason::Paused, "turn interrupted before completion")
+            }
+            Self::Completed(_) => TerminalOutcome::completed(),
+            Self::Cancelled => TerminalOutcome::new(TerminalReason::Cancelled, "turn cancelled"),
+            Self::Failed(message) => {
+                TerminalOutcome::new(TerminalReason::Internal, message.clone())
+            }
+        }
+    }
 }

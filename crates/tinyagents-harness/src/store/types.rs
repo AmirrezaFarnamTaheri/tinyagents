@@ -4,7 +4,6 @@
 //! callers import from `crate::store` directly.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -81,11 +80,95 @@ pub trait AppendStore: Send + Sync {
     /// `Vec` rather than an error.
     async fn read_from(&self, stream: &str, offset: u64) -> Result<Vec<(u64, Value)>>;
 
+    /// Returns at most `limit` entries of `stream` whose offset is `>= offset`,
+    /// in offset order. The default reads from `offset` and truncates;
+    /// backends override it so a bounded read never materialises the whole
+    /// tail.
+    async fn read_window(
+        &self,
+        stream: &str,
+        offset: u64,
+        limit: usize,
+    ) -> Result<Vec<(u64, Value)>> {
+        let mut entries = self.read_from(stream, offset).await?;
+        entries.truncate(limit);
+        Ok(entries)
+    }
+
     /// Returns the number of entries currently stored in `stream`.
     ///
     /// This equals the offset the next [`append`](Self::append) will receive.
     /// Returns `0` for a stream that has never been written.
     async fn len(&self, stream: &str) -> Result<u64>;
+
+    /// Closes `stream` to further appends once its owner is done with it.
+    ///
+    /// Sealing never changes what a reader observes: offsets, values and
+    /// [`len`](Self::len) stay exactly as they were, so a sealed stream is
+    /// read with the same calls as an open one. A durable backend uses the
+    /// seal to store the finished stream compactly. Sealing is idempotent, and
+    /// sealing a stream that was never written is a no-op.
+    ///
+    /// The default does nothing: a store with no compact form for finished
+    /// streams (the in-memory one) keeps accepting appends. A backend that
+    /// seals refuses later appends to a sealed stream.
+    async fn seal(&self, stream: &str) -> Result<()> {
+        let _ = stream;
+        Ok(())
+    }
+}
+
+// ── Shared handles ──────────────────────────────────────────────────────────
+
+/// A store shared behind an [`Arc`] (including `Arc<dyn Store>`) is a store,
+/// so code generic over [`Store`] accepts a host-injected trait object.
+#[async_trait]
+impl<S: Store + ?Sized> Store for Arc<S> {
+    async fn get(&self, namespace: &str, key: &str) -> Result<Option<Value>> {
+        (**self).get(namespace, key).await
+    }
+
+    async fn put(&self, namespace: &str, key: &str, value: Value) -> Result<()> {
+        (**self).put(namespace, key, value).await
+    }
+
+    async fn delete(&self, namespace: &str, key: &str) -> Result<()> {
+        (**self).delete(namespace, key).await
+    }
+
+    async fn list(&self, namespace: &str) -> Result<Vec<String>> {
+        (**self).list(namespace).await
+    }
+}
+
+/// An append store shared behind an [`Arc`] (including
+/// `Arc<dyn AppendStore>`) is an append store.
+#[async_trait]
+impl<S: AppendStore + ?Sized> AppendStore for Arc<S> {
+    async fn append(&self, stream: &str, value: Value) -> Result<u64> {
+        (**self).append(stream, value).await
+    }
+
+    async fn read_from(&self, stream: &str, offset: u64) -> Result<Vec<(u64, Value)>> {
+        (**self).read_from(stream, offset).await
+    }
+
+    async fn read_window(
+        &self,
+        stream: &str,
+        offset: u64,
+        limit: usize,
+    ) -> Result<Vec<(u64, Value)>> {
+        (**self).read_window(stream, offset, limit).await
+    }
+
+    async fn len(&self, stream: &str) -> Result<u64> {
+        (**self).len(stream).await
+    }
+
+    async fn seal(&self, stream: &str) -> Result<()> {
+        (**self).seal(stream).await
+    }
 }
 
 // ── StoreRecord ───────────────────────────────────────────────────────────────
@@ -124,29 +207,6 @@ pub struct StoreRecord {
 pub struct InMemoryStore {
     /// `namespace → (key → value)` map protected by a standard mutex.
     pub(crate) data: Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
-}
-
-// ── FileStore ────────────────────────────────────────────────────────────────
-
-/// File-system-backed key-value store.
-///
-/// Each **namespace** maps to a subdirectory of `root_dir`. Each **key** maps
-/// to a file `<key>.json` inside that subdirectory.
-///
-/// # Key and namespace sanitization
-/// Both namespace names and key names are validated: only ASCII alphanumerics,
-/// hyphens (`-`), underscores (`_`), and dots (`.`) are allowed. This blocks
-/// path traversal attacks (e.g., `..`, `/`, `\`).
-///
-/// # Concurrency
-/// Operations use [`std::fs`], which is blocking. Concurrent writes to the
-/// same key from separate tasks are serialised at the OS level through
-/// atomic-write semantics, but no advisory lock is held. For high-concurrency
-/// workloads prefer `InMemoryStore` or a future `MongoStore`.
-#[derive(Clone, Debug)]
-pub struct FileStore {
-    /// The root directory under which namespace subdirectories live.
-    pub(crate) root_dir: PathBuf,
 }
 
 // ── InMemoryAppendStore ───────────────────────────────────────────────────────
@@ -198,52 +258,6 @@ pub(crate) struct StreamBuffer {
 /// A single in-memory append entry: `(created_at_ms, value)`.
 pub(crate) type AppendEntry = (u64, Value);
 
-// ── JsonlAppendStore ──────────────────────────────────────────────────────────
-
-/// JSONL-file-backed [`AppendStore`] for local development and durable journals.
-///
-/// Each **stream** maps to a `<stream>.jsonl` file inside `root_dir`. An append
-/// writes exactly one JSON line — a [`StoreRecord`] object holding the offset,
-/// the value, and the append timestamp — and `read_from` reads lines back from
-/// the requested offset. The files are append-only and easy to tail or inspect
-/// with ordinary shell tools.
-///
-/// # Stream-name sanitization
-/// Stream names are validated the same way [`FileStore`] validates namespaces:
-/// only ASCII alphanumerics, hyphens (`-`), underscores (`_`), and dots (`.`)
-/// are allowed, and all-dot names are rejected. This blocks path traversal.
-///
-/// # Offsets are read from the file, not remembered
-/// The next offset is derived from the **tail of the stream file** on every
-/// append: the last complete record's offset plus one. That is O(1) per append
-/// (a bounded read from the end, not a full parse), so it costs no more than
-/// the in-memory counter it replaced — and unlike that counter it is correct
-/// when more than one `JsonlAppendStore` addresses the same directory.
-///
-/// The counter it replaced was learned once per *instance*: a second instance
-/// over the same root started counting from the length it happened to observe,
-/// so two instances routinely handed out the same offset for different records.
-/// Since [`AppendStore::read_from`] resolves by offset, a stream with duplicate
-/// offsets returns a window that does not match the labels on its own entries.
-///
-/// # Concurrency
-/// Operations use blocking [`std::fs`] (no async-fs dependency is pulled in for
-/// this local backend), but `append` runs that I/O on a blocking thread
-/// (`spawn_blocking`) when a tokio runtime is present so it never stalls an
-/// async worker. Appends use `OpenOptions::append`, which is atomic per line on
-/// POSIX for small writes. A per-instance guard serialises appends from within
-/// one process; across processes the tail read makes duplicate offsets far less
-/// likely but does not make the append atomic, so a server backend is still the
-/// right answer for genuinely concurrent multi-process writers.
-#[derive(Clone, Debug, Default)]
-pub struct JsonlAppendStore {
-    /// The root directory under which `<stream>.jsonl` files live.
-    pub(crate) root_dir: PathBuf,
-    /// Serialises appends issued through this instance (and its clones) so two
-    /// tasks cannot read the same tail offset and then both write it.
-    pub(crate) append_guard: Arc<Mutex<()>>,
-}
-
 // ── StoreRegistry ────────────────────────────────────────────────────────────
 
 /// Registry of named [`Store`] backends.
@@ -258,7 +272,7 @@ pub struct JsonlAppendStore {
 /// # Example
 /// ```rust,ignore
 /// let mut reg = StoreRegistry::new();
-/// reg.register("events", Arc::new(FileStore::new("./data/events")));
+/// reg.register("events", Arc::new(DriverStore::new(documents)));
 /// reg.register("cache", Arc::new(InMemoryStore::new()));
 /// ```
 #[derive(Clone)]

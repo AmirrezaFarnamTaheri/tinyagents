@@ -37,6 +37,7 @@ pub mod parallel;
 pub mod recursion;
 pub mod reducer;
 pub mod status;
+pub mod storage;
 pub mod stream;
 pub mod subagent_node;
 pub mod subgraph;
@@ -46,24 +47,24 @@ pub mod todos;
 
 pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
+#[cfg(test)]
+mod test_support;
+
 // --- Durable execution model ---
 pub use builder::{
     END, ForkId, GraphBuilder, GraphDefaults, IdleClock, NodeCachePolicy, NodeContext, NodeFuture,
     NodeHandler, NodePolicy, Route, RouterFn, START,
 };
-#[cfg(feature = "sqlite")]
-pub use cache::SqliteTaskCache;
-pub use cache::{InMemoryTaskCache, TaskCache, TaskCacheKey};
+pub use cache::{DriverTaskCache, InMemoryTaskCache, TaskCache, TaskCacheKey};
 pub use channel::{
     Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, ChannelWrite,
     Delta, Ephemeral, LastValue, Messages, NamedBarrier, ReducerRegistry, Topic, Untracked,
 };
-#[cfg(feature = "sqlite")]
-pub use checkpoint::SqliteCheckpointer;
+pub use checkpoint::DriverCheckpointer;
 pub use checkpoint::{
     BarrierArrivals, CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointConfig, CheckpointMetadata,
     CheckpointSource, CheckpointTuple, Checkpointer, CompletedTask, DurabilityMode,
-    FileCheckpointer, InMemoryCheckpointer, PendingActivation, PendingWrite,
+    InMemoryCheckpointer, PendingActivation, PendingWrite,
 };
 pub use command::{Command, Interrupt, NodeResult, RouteTarget, Send};
 pub use compiled::{
@@ -78,26 +79,26 @@ pub use delegation::{
     run_delegation_durable, run_or_resume_delegation,
 };
 pub use export::{
-    ChannelInfo, ConditionalEdgeInfo, EdgeInfo, GraphPolicySummary, GraphTopology, NodeInfo,
-    NodePolicySummary, RouteInfo, ValidationReport, WaitingEdgeInfo, from_json, to_json,
-    to_mermaid,
+    ChannelInfo, ConditionalEdgeInfo, EdgeInfo, GraphPolicySummary, GraphTopology,
+    GraphTopologyReport, NodeInfo, NodePolicySummary, RouteInfo, ValidationReport, WaitingEdgeInfo,
+    from_json, to_json, to_mermaid,
 };
 pub use goals::store as goal_store;
 pub use goals::{
-    BudgetVerdict, GoalBudgetGuard, GoalProgress, GoalTool, GoalToolKind, ThreadGoal,
-    ThreadGoalStatus, TurnOutcome, account_turn, accrues_usage, active_goal_context_block,
-    goal_gate_node, goal_tools, note_user_turn, register_goal_tools, run_continuation_tick,
-    turn_tokens,
+    BudgetVerdict, GoalBudgetGuard, GoalProgress, GoalTool, GoalToolKind, GoalUpdateHook,
+    ThreadGoal, ThreadGoalStatus, TurnOutcome, account_turn, accrues_usage,
+    active_goal_context_block, goal_gate_node, goal_tools, note_user_turn, register_goal_tools,
+    run_continuation_tick, turn_tokens,
 };
 pub use observability::{
     GraphEventJournal, GraphHealthSummary, GraphLangfuseExporter, GraphLatencyMetrics,
     GraphNodeHealth, GraphNodeLatency, GraphObservation, GraphStatusStore, GraphStepLatency,
-    InMemoryGraphEventJournal, InMemoryGraphStatusStore, JournalGraphSink, SpanMetadataFn,
-    StoreGraphEventJournal,
+    GraphTracingSink, InMemoryGraphEventJournal, InMemoryGraphStatusStore, JournalGraphSink,
+    SpanMetadataFn, StoreGraphEventJournal, build_graph_langfuse_batch,
 };
 pub use orchestration::{
     CancelledDetachedTask, DetachedTaskRegistry, DetachedTaskRegistryError, DetachedTaskSnapshot,
-    DetachedTaskWaitOutcome, InMemoryTaskStore, JsonlTaskStore, OrchestrationControlOutcome,
+    DetachedTaskWaitOutcome, DriverTaskStore, InMemoryTaskStore, OrchestrationControlOutcome,
     OrchestrationTaskFilter, OrchestrationTaskKind, OrchestrationTaskRecord,
     OrchestrationTaskResult, OrchestrationTaskSpec, OrchestrationTaskStatus, OrchestrationTool,
     OrchestrationToolKind, SteeringRegistry, TaskStore, orchestration_tool_schema,
@@ -113,10 +114,12 @@ pub use reducer::{
     OverwriteStateReducer, Reducer, SetUnionReducer, StateReducer,
 };
 pub use status::GraphRunStatus;
+pub use storage::{import_legacy_leases, import_legacy_task_cache, storage_schema};
 pub use stream::{
     CollectingSink, GraphEvent, GraphEventEnvelope, GraphEventSink, NoopSink, StreamMode,
     StreamProjection, project_graph_event,
 };
+#[allow(deprecated)]
 pub use subagent_node::{
     AgentInvocation, AgentInvocationBinding, AgentInvoker, InputMapper, OutputMapper,
     SubAgentBudget, SubAgentInput, SubAgentNode, SubAgentOutput, SubAgentPolicy, subagent_node,
@@ -129,6 +132,6 @@ pub use testkit::{
 };
 pub use todos::store as todo_store;
 pub use todos::{
-    TodoItem, TodoList, TodoStatus, TodoTool, TodosSnapshot, normalise_list, parse_status,
-    register_todo_tools, render_markdown, todo_tools,
+    TodoItem, TodoList, TodoSequenceMiddleware, TodoStatus, TodoTool, TodosSnapshot,
+    normalise_list, parse_status, register_todo_tools, render_markdown, todo_tools,
 };

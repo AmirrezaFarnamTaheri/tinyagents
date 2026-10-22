@@ -61,19 +61,54 @@
 //! `as_str()` gives a stable telemetry label.
 
 mod classified;
+mod classified_ladder;
+mod escalation;
+mod fingerprint;
+mod loop_patterns;
+mod monitor;
+mod post_compaction;
+mod recoverable;
 mod stream_text;
 mod successful_repeat;
 mod types;
+mod util;
 
 pub use classified::{ClassifiedFailure, ClassifiedFailureTracker};
+pub use classified_ladder::{
+    ClassifiedStep, ClassifiedStepWithCause, ClassifiedStopCause, RECOVERY_CLASSES,
+    UNCERTAIN_SIDE_EFFECT_HALT_SUFFIX, class_has_nudge, classified_step,
+    classified_step_with_cause, clear_recovered, json_error_recovery, recovery_nudge,
+};
+pub use escalation::{DEFAULT_BLOCK_AFTER_WARN, DEFAULT_BLOCKS_BEFORE_HALT};
+pub use fingerprint::{OutcomeFingerprinter, VolatileSpanNormalizer, normalize_volatile};
+pub use loop_patterns::{
+    DEFAULT_CHURN_CALLS_PER_VARIANT, DEFAULT_CHURN_VARIANTS, DEFAULT_PING_PONG_ALTERNATIONS,
+};
+pub use post_compaction::DEFAULT_POST_COMPACTION_WINDOW;
+pub use recoverable::{
+    ARGUMENT_SCHEMA_RECOVERY, COMMAND_EXIT_REPORT_PREFIX, FailurePolicy, RecoverableFailureLadder,
+    RecoveryDecision, RecoveryPolicy, first_error_line, is_argument_rejection,
+    is_command_exit_report, is_pre_execution_failure,
+};
 pub use stream_text::StreamTextStallDetector;
 pub use successful_repeat::{DEFAULT_REPEAT_CALL_THRESHOLD, DEFAULT_REPEAT_OUTPUT_THRESHOLD};
 use types::LadderState;
 pub use types::{
-    NoProgress, NoProgressTracker, SuccessfulRepeat, SuccessfulRepeatTracker, ToolAttempt,
+    ArgumentChurnDetector, CallGate, CallObservation, NoProgress, NoProgressTracker,
+    PingPongDetector, PostCompactionGuard, RepeatEscalation, RepeatMonitor, RepeatProgressConfig,
+    SuccessfulRepeat, SuccessfulRepeatTracker, ToolAttempt,
 };
 
-use std::sync::Mutex;
+/// A no-progress verdict with typed metadata for terminal halts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NoProgressAssessment {
+    /// Existing ladder verdict, unchanged from [`NoProgressTracker::record`].
+    pub verdict: NoProgress,
+    /// Class and operation for a halt, when the ladder has enough information.
+    pub failure_cause: Option<ClassifiedStopCause>,
+}
+
+use std::sync::{Arc, Mutex};
 
 /// Consecutive **identical** (tool + args + error) failures tolerated before the
 /// ladder halts the run — a call re-issued unchanged that keeps failing can
@@ -172,8 +207,18 @@ impl NoProgressTracker {
     pub fn new(identical_halt_threshold: usize) -> Self {
         Self {
             identical_halt_threshold: identical_halt_threshold.max(IDENTICAL_NUDGE_THRESHOLD + 1),
+            fingerprinter: Arc::new(VolatileSpanNormalizer),
             state: Mutex::new(LadderState::default()),
         }
+    }
+
+    /// Replaces the fingerprinter that reduces a failure message to the
+    /// identity the identical-repeat rung compares. The default is
+    /// [`VolatileSpanNormalizer`], so the same failure carrying a fresh
+    /// timestamp, duration or attempt counter still counts as identical.
+    pub fn with_fingerprinter(mut self, fingerprinter: Arc<dyn OutcomeFingerprinter>) -> Self {
+        self.fingerprinter = fingerprinter;
+        self
     }
 
     /// Clear every counter. Called after a halt so a resumed run does not
@@ -187,20 +232,32 @@ impl NoProgressTracker {
     /// the ladder's verdict. On a [`NoProgress::Halt`] the internal state is
     /// reset for the caller.
     pub fn record(&self, step: usize, attempt: &ToolAttempt) -> NoProgress {
+        self.record_with_cause(step, attempt).verdict
+    }
+
+    /// Record an outcome and preserve the ladder's structured terminal class
+    /// and operation beside its existing human-readable verdict.
+    pub fn record_with_cause(&self, step: usize, attempt: &ToolAttempt) -> NoProgressAssessment {
+        // Fingerprint before taking the lock: it scans the whole line.
+        let err_identity = attempt.error.map(|err| self.fingerprinter.fingerprint(err));
         let mut state = self.state.lock().unwrap();
 
         let Some(err) = attempt.error else {
             // Success → progress was made; clear every counter.
             *state = LadderState::default();
-            return NoProgress::Continue;
+            return NoProgressAssessment {
+                verdict: NoProgress::Continue,
+                failure_cause: None,
+            };
         };
 
-        // Signature: tool name + argument fingerprint + first error line (the
-        // deterministic parts; a huge payload tail must not dominate the
-        // identical-repeat comparison).
-        let err_line = err.lines().next().unwrap_or(err);
+        // Signature: tool name + argument fingerprint + the fingerprinted error
+        // (the deterministic parts; volatile spans such as timestamps must not
+        // make a repeated failure look novel, including when stable context is
+        // on a later line. The complete multiline error is fingerprinted.)
+        let err_identity = err_identity.unwrap_or_default();
         let sig = format!(
-            "{}\u{1f}{}\u{1f}{err_line}",
+            "{}\u{1f}{}\u{1f}{err_identity}",
             attempt.tool, attempt.arg_fingerprint
         );
 
@@ -239,7 +296,7 @@ impl NoProgressTracker {
                 truncate_for_halt(err),
             );
             *state = LadderState::default();
-            return NoProgress::Halt(summary);
+            return no_progress_halt(summary, "policy", attempt.tool);
         }
         if same_count >= self.identical_halt_threshold {
             let summary = format!(
@@ -250,7 +307,7 @@ impl NoProgressTracker {
                 truncate_for_halt(err),
             );
             *state = LadderState::default();
-            return NoProgress::Halt(summary);
+            return no_progress_halt(summary, "repeated_failure", attempt.tool);
         }
         if state.consecutive >= NO_PROGRESS_HALT_THRESHOLD {
             let summary = format!(
@@ -262,7 +319,7 @@ impl NoProgressTracker {
                 truncate_for_halt(err),
             );
             *state = LadderState::default();
-            return NoProgress::Halt(summary);
+            return no_progress_halt(summary, "varied_failures", attempt.tool);
         }
 
         // ── Nudge: cap retries *before* forcing an alternative ──────────────
@@ -270,7 +327,10 @@ impl NoProgressTracker {
         // corrective chance to change strategy before the halt threshold.
         if same_count == IDENTICAL_NUDGE_THRESHOLD && state.nudged_sig.as_deref() != Some(&sig) {
             state.nudged_sig = Some(sig);
-            return NoProgress::Nudge(identical_nudge(step, attempt.tool, same_count, err));
+            return NoProgressAssessment {
+                verdict: NoProgress::Nudge(identical_nudge(step, attempt.tool, same_count, err)),
+                failure_cause: None,
+            };
         }
         // Varied failures piling up with no success: step back before the
         // any-failure backstop halts.
@@ -279,10 +339,32 @@ impl NoProgressTracker {
             && !state.nudged_streak
         {
             state.nudged_streak = true;
-            return NoProgress::Nudge(varied_nudge(step, attempt.tool, state.consecutive, err));
+            return NoProgressAssessment {
+                verdict: NoProgress::Nudge(varied_nudge(
+                    step,
+                    attempt.tool,
+                    state.consecutive,
+                    err,
+                )),
+                failure_cause: None,
+            };
         }
 
-        NoProgress::Continue
+        NoProgressAssessment {
+            verdict: NoProgress::Continue,
+            failure_cause: None,
+        }
+    }
+}
+
+fn no_progress_halt(summary: String, class: &str, operation: &str) -> NoProgressAssessment {
+    NoProgressAssessment {
+        verdict: NoProgress::Halt(summary.clone()),
+        failure_cause: Some(ClassifiedStopCause {
+            class: class.to_owned(),
+            operation: operation.to_owned(),
+            summary,
+        }),
     }
 }
 
@@ -315,14 +397,13 @@ fn varied_nudge(step: usize, tool: &str, count: usize, err: &str) -> String {
 /// retain the deterministic leading detail the model/user needs). Char-safe so a
 /// multibyte boundary is never split.
 fn truncate_for_halt(text: &str) -> String {
-    const MAX: usize = 600;
-    if text.chars().count() <= MAX {
-        text.to_string()
-    } else {
-        let head: String = text.chars().take(MAX).collect();
-        format!("{head}…")
-    }
+    crate::turn_stop::truncate_with_suffix(text, 600, "…")
 }
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;
+
+#[cfg(test)]
+#[path = "typed_halt_tests.rs"]
+mod typed_halt_tests;

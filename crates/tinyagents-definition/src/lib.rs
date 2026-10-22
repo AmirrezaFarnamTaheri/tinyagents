@@ -1,9 +1,9 @@
-//! Host-owned agent definition vocabulary.
+//! Portable agent authoring vocabulary, TOML loading, and catalogue ports.
 //!
-//! This lower-level crate deliberately knows only what a runtime may ask about
-//! an agent: its identity, description, declared model/tools/delegates, and a
-//! read-only catalogue seam. Authorization, prompt construction, and execution
-//! remain with the host and harness.
+//! [`AgentDefinition`] shares model, tool, iteration, delegation, and prompt
+//! declarations across hosts. Its flattened extension parameter holds host
+//! fields; prompt functions, catalogue roots, authorization, and execution
+//! remain host responsibilities.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -42,109 +42,28 @@ impl fmt::Display for DefinitionRegistryError {
 
 impl std::error::Error for DefinitionRegistryError {}
 
-/// What the runtime is permitted to know about an agent.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentDefinition {
-    /// Host-assigned opaque identifier.
-    pub id: String,
-    /// Human-readable name for prompts and display.
-    pub name: String,
-    /// Concise capability summary for a delegating parent.
-    pub description: String,
-    /// Host-defined routing role, when the host classifies this agent.
-    #[serde(default)]
-    pub role: Option<String>,
-    /// Preferred model identifier, if this agent pins one.
-    #[serde(default)]
-    pub model: Option<String>,
-    /// Agent ids this agent declares as eligible delegates.
-    #[serde(default)]
-    pub subagents: Vec<String>,
-    /// Canonical tool names this agent may use.
-    #[serde(default)]
-    pub tools: Vec<String>,
-}
+pub use definition::{
+    AgentDefinition, EXTENDED_MAX_TOOL_ITERATIONS, Extensions, IterationPolicy, ToolScopeResolution,
+};
+pub use definition_set::DefinitionSet;
+pub use execution_spec::{ModelSpec, SPAWN_TOOL_NAMES, SandboxMode, ToolScope};
+pub use loader::{
+    DefinitionValidation, load_dir, load_dir_with_validation, load_file, load_file_with_validation,
+    parse_str,
+};
+pub use prompt::PromptSource;
+pub use source::DefinitionSource;
+pub use subagents::{SkillsWildcard, SubagentEntry};
+pub use tier::{AgentTier, validate_tier_transition};
 
-impl AgentDefinition {
-    /// Creates a definition with the required host-owned fields.
-    #[must_use]
-    pub fn new(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        description: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            name: name.into(),
-            description: description.into(),
-            role: None,
-            model: None,
-            subagents: Vec::new(),
-            tools: Vec::new(),
-        }
-    }
-
-    /// Sets the preferred model identifier.
-    #[must_use]
-    pub fn with_model(mut self, model: impl Into<String>) -> Self {
-        self.model = Some(model.into());
-        self
-    }
-
-    /// Sets declared delegate ids.
-    #[must_use]
-    pub fn with_subagents<I, S>(mut self, subagents: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.subagents = subagents.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// Sets permitted tool names.
-    #[must_use]
-    pub fn with_tools<I, S>(mut self, tools: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.tools = tools.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// Sets the host-defined routing role.
-    #[must_use]
-    pub fn with_role(mut self, role: impl Into<String>) -> Self {
-        self.role = Some(role.into());
-        self
-    }
-
-    /// Returns deterministic diagnostics for malformed or ambiguous data.
-    #[must_use]
-    pub fn diagnostics(&self) -> Vec<AgentDefinitionDiagnostic> {
-        let mut diagnostics = Vec::new();
-        required_field(&mut diagnostics, "id", &self.id);
-        required_field(&mut diagnostics, "name", &self.name);
-        required_field(&mut diagnostics, "description", &self.description);
-        duplicate_values(&mut diagnostics, "subagents", &self.subagents);
-        duplicate_values(&mut diagnostics, "tools", &self.tools);
-        for (field, values) in [("subagents", &self.subagents), ("tools", &self.tools)] {
-            for value in values {
-                if value.trim().is_empty() {
-                    diagnostics.push(AgentDefinitionDiagnostic::empty_entry(field));
-                }
-            }
-        }
-        diagnostics
-    }
-
-    /// Whether every required field and declared list entry is valid.
-    #[must_use]
-    pub fn is_valid(&self) -> bool {
-        self.diagnostics().is_empty()
-    }
-}
+mod definition;
+mod definition_set;
+mod execution_spec;
+mod loader;
+mod prompt;
+mod source;
+mod subagents;
+mod tier;
 
 /// A deterministic, machine-readable definition validation finding.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -270,37 +189,19 @@ impl DefinitionRegistry for InMemoryDefinitionRegistry {
             .index
             .get(id)
             .and_then(|position| self.definitions.get(*position))
-            .map(|definition| definition.subagents.clone())
+            .map(AgentDefinition::allowed_subagent_ids)
             .unwrap_or_default())
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+#[path = "lib_tests.rs"]
+mod tests;
 
-    #[tokio::test]
-    async fn catalogue_is_stable_first_wins_and_absence_is_not_an_error() {
-        let registry = InMemoryDefinitionRegistry::new(vec![
-            AgentDefinition::new("planner", "Planner", "first").with_subagents(["research"]),
-            AgentDefinition::new("planner", "Other", "ignored"),
-            AgentDefinition::new("research", "Research", "second"),
-        ]);
-        assert_eq!(
-            registry
-                .resolve("planner")
-                .await
-                .unwrap()
-                .unwrap()
-                .description,
-            "first"
-        );
-        assert_eq!(registry.list().await.unwrap().len(), 2);
-        assert_eq!(
-            registry.delegates_for("planner").await.unwrap(),
-            ["research"]
-        );
-        assert!(registry.resolve("missing").await.unwrap().is_none());
-        assert!(registry.delegates_for("missing").await.unwrap().is_empty());
-    }
-}
+#[cfg(test)]
+#[path = "lib_vocabulary_tests.rs"]
+mod vocabulary_tests;
+
+#[cfg(test)]
+#[path = "execution_spec_tests.rs"]
+mod execution_spec_tests;

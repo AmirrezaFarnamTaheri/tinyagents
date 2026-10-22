@@ -32,9 +32,9 @@
 //!    - if the assistant requested tools, execute them (enforcing the tool-call
 //!      cap, running `before_tool`/`after_tool`, emitting tool events) and
 //!      append the tool results, then continue. Multi-call turns run
-//!      concurrently when no tool-wrap middleware is registered — see the
+//!      concurrently when every tool-wrap middleware is `concurrent_safe` — see the
 //!      `tools` submodule for the dispatch rules, the semantics preserved in
-//!      each mode, and why tool-wrap middleware forces serial execution,
+//!      each mode, and how tool-wrap middleware runs inside each concurrent call,
 //!    - otherwise extract structured output when configured and break.
 //! 4. Run `after_agent` middleware and emit [`AgentEvent::RunCompleted`].
 //!
@@ -109,6 +109,7 @@ use crate::middleware::{
 use crate::model_registry::{ResolvedModelBinding, model_eligible};
 use crate::runtime::{AgentHarness, EndStrategy, InvalidArgsPolicy, UnknownToolPolicy};
 use crate::structured::{StructuredExtractor, StructuredStrategy};
+use crate::terminal::{TerminalClass, TerminalOutcome, TimeoutPhase};
 use futures::StreamExt;
 use serde_json::Value;
 use tinyinference_llm::message::{Message, MessageDelta};
@@ -121,24 +122,79 @@ use tinyinference_llm::tool::{ToolCall, ToolSchema};
 mod dialect;
 mod entry;
 mod handoff_transform;
+mod host_budget;
+mod lifecycle;
+mod mixed_turn;
 mod model_call;
+mod model_switch;
+mod model_turn;
+mod nested;
 pub mod phases;
+mod response_recovery;
 mod run_loop;
 pub(crate) mod stream;
+mod structured_plan;
+mod tool_call_wrapper;
 mod tool_changes;
+mod tool_surface;
+mod tool_timing;
 mod tools;
+mod turn_control;
+mod turn_recovery;
 mod unknown_tool;
 
+pub(crate) use lifecycle::TurnTracker;
 pub use stream::AgentStreamItem;
 pub(crate) use stream::{StreamRunner, invoke_stream_with_runner};
 
 #[cfg(test)]
+#[path = "deferred_tests.rs"]
 mod deferred_test;
 #[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod lifecycle_test;
+#[cfg(test)]
+#[path = "model_profile_preview_tests.rs"]
+mod model_profile_preview_test;
+
+#[cfg(test)]
+#[path = "model_switch_tests.rs"]
+mod model_switch_test;
+#[cfg(test)]
+#[path = "nested_tests.rs"]
+mod nested_test;
+#[cfg(test)]
+#[path = "rich_tool_tests.rs"]
 mod rich_tool_test;
 #[cfg(test)]
+#[path = "run_queue_tests.rs"]
 mod run_queue_test;
 #[cfg(test)]
+#[path = "stream_idle_timeout_tests.rs"]
+mod stream_idle_timeout_test;
+#[cfg(test)]
+#[path = "terminal_outcome_tests.rs"]
+mod terminal_outcome_test;
+#[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;
 #[cfg(test)]
+#[path = "tool_rules_tests.rs"]
+mod tool_rules_test;
+#[cfg(test)]
+#[path = "tools_args_recovery_tests.rs"]
+mod tools_args_recovery_test;
+#[cfg(test)]
+#[path = "truncated_tool_call_tests.rs"]
+mod truncated_tool_call_test;
+#[cfg(test)]
+#[path = "unknown_tool_tests.rs"]
 mod unknown_tool_test;
+
+#[cfg(test)]
+#[path = "wrap_concurrency_tests.rs"]
+mod wrap_concurrency_test;
+
+#[cfg(test)]
+#[path = "run_depth_tests.rs"]
+mod run_depth_test;

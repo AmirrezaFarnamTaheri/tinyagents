@@ -30,7 +30,7 @@ use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::run_queue::QueueMode;
 use crate::tool::{ToolRegistry, ToolTimeoutSettings};
 use tinyinference_llm::cache::CachePolicy;
-use tinyinference_llm::model::ResponseFormat;
+use tinyinference_llm::model::{ReasoningConfig, ResponseFormat};
 
 /// Model and identity selected by one live host-driven invocation.
 ///
@@ -46,19 +46,24 @@ pub(crate) struct HostInvocationBinding<State: Send + Sync, Ctx: Send + Sync> {
     /// Definition-selected pin passed to the host resolver at every provider
     /// call. It is advisory; the host remains the routing authority.
     pub(crate) model_pin: Option<String>,
+    /// Definition routing hint passed separately from concrete model pins.
+    pub(crate) model_hint: Option<String>,
     pub(crate) role: Option<String>,
     /// Canonical names the resolved definition authorizes for this exact run.
     ///
-    /// `None` means the definition declared no tools at all (an empty or
-    /// absent list) — [`crate::agent_loop`]'s `resolve_tool_allowlist` treats
-    /// that as fail-closed (deny every tool) by default, controlled by
-    /// [`HostCapabilities::fail_closed_tool_allowlist`]. `Some(set)` is
-    /// always the declared set, checked by plain membership: an empty
-    /// `HashSet` is never stored here (a declared-but-empty list is
-    /// collapsed to `None` at construction, so "nothing declared" and
-    /// "declared empty" share one fail-closed code path instead of an empty
-    /// set silently meaning "unrestricted", as it used to (I-9)).
+    /// A bare wildcard leaves the host's fallback policy in force via None.
+    /// Named scopes use Some(set); an empty set is
+    /// explicitly deny-all, including under the legacy unrestricted fallback.
     pub(crate) allowed_tools: Option<HashSet<String>>,
+    /// An explicit wildcard policy applies to live toolsets as well as registered tools.
+    pub(crate) wildcard_tools: bool,
+    /// Exact definition exclusions, checked against every live tool catalogue.
+    pub(crate) denied_tools: HashSet<String>,
+    /// Definition-local discovery exposure; never changes global registration.
+    pub(crate) deferred_tools: HashSet<String>,
+    /// The resolved definition's pattern rules, stacked on the harness
+    /// policy's by the loop's tool gate.
+    pub(crate) tool_rules: Option<tinytools::ToolRules>,
     /// Per-turn ordered, nonblocking projection to the optional progress sink.
     pub(crate) progress: Option<super::agent::ProgressSender>,
     /// The exact invocation-local runtime inherited by authorized children.
@@ -71,8 +76,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> Clone for HostInvocationBinding<State
             host: self.host.clone(),
             agent_id: self.agent_id.clone(),
             model_pin: self.model_pin.clone(),
+            model_hint: self.model_hint.clone(),
             role: self.role.clone(),
             allowed_tools: self.allowed_tools.clone(),
+            wildcard_tools: self.wildcard_tools,
+            denied_tools: self.denied_tools.clone(),
+            deferred_tools: self.deferred_tools.clone(),
+            tool_rules: self.tool_rules.clone(),
             progress: self.progress.clone(),
             runtime: self.runtime.clone(),
         }
@@ -124,7 +134,8 @@ pub enum UnknownToolPolicy {
 ///
 /// The default is [`InvalidArgsPolicy::ReturnToolError`]: a missing `required`
 /// field, wrong type, or bad `enum` is model output the model can fix, so the
-/// validation detail plus the expected schema go back into the transcript
+/// validation detail plus a compact signature of the expected arguments
+/// (`{skill: "a" | "b", tool?: string}`) go back into the transcript
 /// instead of aborting the turn. The recovery consumes a tool-call budget slot,
 /// so [`RunLimits::max_tool_calls`] bounds any invalid-args loop. Mirrors
 /// [`UnknownToolPolicy`] for the schema-validation seam — including why the
@@ -134,8 +145,8 @@ pub enum InvalidArgsPolicy {
     /// Abort the run with
     /// [`TinyAgentsError::Validation`][crate::error::TinyAgentsError::Validation].
     Fail,
-    /// Inject a tool-error result (carrying the validation detail and the
-    /// tool's expected parameter schema) back into the transcript and continue
+    /// Inject a tool-error result (carrying the validation detail and a
+    /// compact signature of the tool's expected arguments) back into the transcript and continue
     /// the loop, letting the model retry with corrected arguments. The default.
     #[default]
     ReturnToolError,
@@ -209,6 +220,8 @@ impl PayloadCapture {
 /// - `default_response_format`: when set, attached to every [`tinyinference_llm::model::ModelRequest`]
 ///   the loop builds; a [`ResponseFormat::JsonSchema`] also drives structured
 ///   output extraction on the final response.
+/// - `default_reasoning`: when set, attached to every model request that does
+///   not already carry a reasoning config.
 ///
 /// [`RunPolicy::default`] yields the crate-default limits and retry policy, no
 /// fallback chain, no response format, and a [`CachePolicy`] whose response
@@ -230,6 +243,17 @@ pub struct RunPolicy {
     pub fallback: Option<FallbackPolicy>,
     /// Response format attached to every model request when set.
     pub default_response_format: Option<ResponseFormat>,
+    /// Reasoning configuration attached to every model request that does not
+    /// already carry one.
+    ///
+    /// This is how a host turns a user's "thinking level" choice into the
+    /// provider-neutral [`ReasoningConfig`] each call sends. A request that
+    /// already has `reasoning` set (by middleware or the caller) keeps its own.
+    /// After it is attached, the resolved model's
+    /// [`ModelProfile::thinking_level_map`](tinyinference_llm::model::ModelProfile::thinking_level_map)
+    /// may still rewrite a named effort into a model-tuned config. `None`
+    /// (the default) leaves reasoning to the provider's own default.
+    pub default_reasoning: Option<ReasoningConfig>,
     /// Whether the loop captures model/tool payloads onto completion events.
     ///
     /// Defaults to [`PayloadCapture::default`] (payload-free), preserving the
@@ -296,8 +320,11 @@ pub struct RunPolicy {
     /// `3`; `0` disables it.
     pub dropped_tool_call_nudges: u32,
     /// Number of automatic retries when a model call returns a *truncated
-    /// empty* completion — `finish_reason == "length"` with no visible text, no
-    /// tool calls, and no structured output.
+    /// empty* completion — a length stop (`finish_reason` of `length`, or
+    /// `max_tokens` / `MAX_TOKENS` as Anthropic and some gateways spell it)
+    /// with no visible text, no tool calls, and no structured output. An empty
+    /// `max_tokens` reply therefore takes this retry path rather than ending
+    /// the run as a blank final.
     ///
     /// This is the failure mode of local reasoning models (for example
     /// `qwen3` via Ollama) that intermittently spend the entire token budget on
@@ -310,9 +337,31 @@ pub struct RunPolicy {
     /// The retry runs *before* [`Self::error_on_empty_response`]; only once
     /// these retries are exhausted does that guard (if enabled) apply.
     ///
-    /// Defaults to `1` (one retry, two attempts total). Set to `0` to disable
-    /// for exact-replay callers that must not re-issue a call.
+    /// The first retry re-sends at the same cap (most dead calls are a long
+    /// think the model does not repeat); the second doubles it, clamped at 4x,
+    /// for the step that genuinely no longer fits. A retry that would run past
+    /// half the run's remaining wall clock is skipped in favour of the nudge.
+    ///
+    /// Defaults to `2` (two retries, three attempts total): one at the same
+    /// cap and one with room. Set to `0` to disable for exact-replay callers
+    /// that must not re-issue a call.
     pub truncated_empty_retries: u32,
+    /// Re-prompts after [`Self::truncated_empty_retries`] are spent and the
+    /// model *still* returned a truncated-empty completion.
+    ///
+    /// A hosted reasoning model with a high effort setting can deliberate past
+    /// every output budget it is given, so a bare retry (even a boosted one)
+    /// fails the same way. Rather than finishing the run on that blank reply —
+    /// which a host then closes as if the model were done — the loop drops
+    /// the blank row and appends a user message saying the reply ran out of
+    /// output tokens while reasoning and asking for the next step now (the
+    /// tool call when tools are callable, a short answer otherwise). The loop
+    /// then continues. Each nudge is a model call; it is only sent while
+    /// `limits.max_model_calls` leaves room for it.
+    ///
+    /// Defaults to `1`. Set to `0` (together with `truncated_empty_retries =
+    /// 0`) for exact-replay callers that must not re-issue a call.
+    pub truncated_empty_nudges: u32,
     /// Automatic retries for a completion with no visible text, tool calls, or
     /// structured output when the provider did not report length truncation.
     /// Reasoning-only `stop` responses are one example: the model spent tokens
@@ -324,9 +373,59 @@ pub struct RunPolicy {
     /// and because another provider call may be billable. Hosts that require a
     /// visible reply can opt in to one bounded retry.
     pub empty_response_retries: u32,
+    /// Whether the tool call a length-truncated response was cut off inside is
+    /// refused.
+    ///
+    /// When a model response ends with a length stop (`finish_reason` of
+    /// `length`, or Anthropic's `max_tokens`) the output cap cut it off
+    /// mid-message. Only the **last** call of such a response can be
+    /// incomplete — every earlier one was finished before the cut — but it may
+    /// still parse (a best-effort JSON salvage, a text grammar closing an open
+    /// `{`/`[` or running a payload to end-of-text) and still validate against
+    /// the schema, and running a half-written `write_file` call is worse than
+    /// not running it. With this enabled the loop answers that call — native or
+    /// recovered from text alike — and any call the provider flagged `invalid`
+    /// (a repair could turn it into a plausible-looking but incomplete call),
+    /// with a synthetic error result: "output limit hit mid-call, re-issue with
+    /// complete (possibly smaller) arguments". It runs the earlier calls
+    /// normally and continues so the model can retry. The call is chosen by
+    /// position, not by id, so duplicate or empty provider ids fail closed.
+    ///
+    /// A refused call still gets its paired `ToolStarted` / `ToolCompleted`
+    /// events and result row, spends no tool-call budget slot, and its turn
+    /// cannot terminate the run. The retry is given a larger output cap
+    /// (doubled, clamped at 4x the original, like the truncated-empty retry)
+    /// and is bounded by [`Self::truncated_tool_call_retries`].
+    ///
+    /// Provider spellings of the length stop are matched by the harness itself
+    /// (`length`, `max_tokens`, `MAX_TOKENS`); normalising them belongs
+    /// upstream in `tinyinference`.
+    ///
+    /// Defaults to `true`. Set to `false` to execute the calls as parsed.
+    pub reject_truncated_tool_calls: bool,
+    /// How many consecutive length-truncated tool turns may be answered with
+    /// [`Self::reject_truncated_tool_calls`] errors and retried.
+    ///
+    /// A model whose calls never fit its output cap would otherwise loop on
+    /// synthetic errors until `limits.max_model_calls`. When the budget is
+    /// spent and the next turn is cut off again, the run stops with
+    /// [`crate::error::TinyAgentsError::LimitExceeded`] naming the cause. The
+    /// budget is per logical turn: a tool turn that is not cut off resets it
+    /// (and the boosted output cap).
+    ///
+    /// The counter lives in the running loop: a run resumed in a fresh context
+    /// (for example after a deferral) starts the budget over.
+    ///
+    /// Defaults to `2` (three truncated turns in a row stop the run).
+    ///
+    /// Independently of the budget, a tool cut off on two consecutive
+    /// truncated turns gets a stronger "stop sending calls this large"
+    /// corrective, and one more cut-off call of that tool stops the run: the
+    /// model is re-sending the same oversized shape.
+    pub truncated_tool_call_retries: u32,
     /// How [`tinytools::ToolExposure::Deferred`] tools are surfaced: never in
     /// the request's `tools` array, but findable through the intrinsic
-    /// `tool_search` / `tool_call` bridge. See
+    /// `tool_search` bridge, then called by their own name. See
     /// [`crate::tool::discover::ToolDiscoveryPolicy`].
     pub discovery: crate::tool::discover::ToolDiscoveryPolicy,
     /// Optional projection applied to every advertised tool schema before it
@@ -339,6 +438,13 @@ pub struct RunPolicy {
     /// to. Admission still validates arguments against the *declared* schema,
     /// which is never looser than the projected one.
     pub tool_schemas: Option<crate::tool::SchemaPreparation>,
+    /// Pattern rules deciding which tools the model may see (catalogue and
+    /// tool search) and call, evaluated in the policy's context. Stacks with
+    /// a hosted definition's own rules and its exact `tools` allowlist; see
+    /// [`crate::tool::ToolRulePolicy`].
+    ///
+    /// The default holds no rules and admits every tool.
+    pub tool_rules: crate::tool::ToolRulePolicy,
     /// Whether the loop parses `<tool_call>`-style text-dialect markup out of
     /// an assistant's visible text under a native tool dialect (see
     /// [`RunPolicy::tool_dialect`]). A forced text dialect
@@ -355,7 +461,11 @@ pub struct RunPolicy {
     /// still answered in prose was not making a tool call — it was
     /// explaining, quoting, or documenting the format, and executing that
     /// text as a real call would silently strip visible text the caller
-    /// asked to see). See [`TextDialectRecovery`].
+    /// asked to see). One streaming exception: under `Auto` such a model's
+    /// own chat-template special-token calls (DeepSeek DSML, `<|tool_call>`)
+    /// are still run, and its other markup is scrubbed but not run. Use
+    /// [`TextDialectRecovery::Off`] to parse nothing. See
+    /// [`TextDialectRecovery`].
     pub text_dialect_recovery: TextDialectRecovery,
     /// Bounds the output-validation retry loop (A3): how many times the loop
     /// re-asks the model after the final turn's structured extraction fails
@@ -403,6 +513,16 @@ pub struct RunPolicy {
     /// [`crate::error::TinyAgentsError::Validation`] rather than silently
     /// falling back to `Direct`.
     pub execution: LoopExecution,
+    /// Whether each executed tool's result row ends with how long the call
+    /// took, as a trailing `[took 12.3s]` line the model reads.
+    ///
+    /// A model that cannot see elapsed time cannot budget it: it starts a
+    /// fifteen-minute command three minutes before the run's deadline because
+    /// nothing in its context said the last one took fifteen minutes. The
+    /// duration is the same wall-clock figure `ToolCompleted` already
+    /// carries. Defaults to `false`, so a transcript stays byte-identical
+    /// unless the host opts in.
+    pub tool_result_durations: bool,
 }
 
 /// See [`RunPolicy::execution`].
@@ -519,8 +639,9 @@ impl Default for OutputRetryPolicy {
 /// gets executed as a real tool call, with the visible text silently
 /// stripped and replaced. [`TextDialectRecovery::Auto`] (the default) closes
 /// the common case of that hazard by skipping recovery for any model whose
-/// resolved profile reports native tool calling (on the unary path; the
-/// stream scrubber does not consult this policy, see openhuman#6733). Markup
+/// resolved profile reports native tool calling (on both paths, except that
+/// the stream still runs that model's own special-token calls, see
+/// openhuman#6733). Markup
 /// inside a language-tagged fenced code block is never parsed regardless of
 /// this policy (`tinytools-agent`'s protected ranges); a bare fence is not
 /// protected, since small models wrap a genuine call in one far more often
@@ -534,7 +655,8 @@ pub enum TextDialectRecovery {
     On,
     /// Attempt recovery only when the resolved model's profile does not
     /// report native tool calling (or the profile is unknown). This is the
-    /// default.
+    /// default. On the stream, a native model's chat-template special-token
+    /// calls are still recovered; its other markup is scrubbed, not run.
     #[default]
     Auto,
 }
@@ -548,6 +670,7 @@ impl Default for RunPolicy {
             retry: RetryPolicy::default(),
             fallback: None,
             default_response_format: None,
+            default_reasoning: None,
             capture: PayloadCapture::default(),
             // Caching defaults ON, but is gated by an attached `ResponseCache`,
             // so a harness with no cache never caches regardless of this flag.
@@ -564,16 +687,24 @@ impl Default for RunPolicy {
             // On by default: a truncated-empty completion is useless to every
             // caller, so one stochastic-failure retry is strictly better than a
             // blank final.
-            truncated_empty_retries: 1,
+            truncated_empty_retries: 2,
+            // A truncation that survives the boosted retry is a model that
+            // keeps deliberating; one plain "stop and act" re-prompt recovers
+            // the step instead of ending the run on a blank reply.
+            truncated_empty_nudges: 1,
             empty_response_retries: 0,
+            reject_truncated_tool_calls: true,
+            truncated_tool_call_retries: 2,
             text_dialect_recovery: TextDialectRecovery::default(),
             discovery: crate::tool::discover::ToolDiscoveryPolicy::default(),
             tool_schemas: None,
+            tool_rules: crate::tool::ToolRulePolicy::default(),
             output_retry: OutputRetryPolicy::default(),
             end_strategy: EndStrategy::default(),
             structured_strategy_override: None,
             queue_mode: QueueMode::default(),
             execution: LoopExecution::default(),
+            tool_result_durations: false,
         }
     }
 }

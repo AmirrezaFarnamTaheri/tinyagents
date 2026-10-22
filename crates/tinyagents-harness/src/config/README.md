@@ -47,8 +47,9 @@ question by existing.
 | File       | Role                                                                |
 | ---------- | ---------------------------------------------------------------------- |
 | `mod.rs`   | Module overview and re-exports.                                      |
+| `required_output.rs` | Pure primitives over `RequiredOutput`: `output_satisfies_contract`, `find_required_block`, `synthesize_block`, `repair_instruction`. |
 | `types.rs` | All types: `SessionConfig`, `TurnConfig`, `ToolConfig`, `MemoryLimits`, `ToolDispatcher`, `RequiredOutput`, and their serde defaults. |
-| `test.rs`  | Unit tests: defaulting, fallback rules, inert-contract behaviour, serde round-tripping. |
+| `mod_tests.rs`  | Unit tests: defaulting, fallback rules, inert-contract behaviour, serde round-tripping. |
 
 ## Operational constraints
 

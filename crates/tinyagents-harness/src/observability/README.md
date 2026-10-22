@@ -25,6 +25,13 @@ surface and operational constraints.
   - `StoreEventJournal<A: AppendStore>` — store-backed implementation; the
     stream key is the run id, so a `harness::store::AppendStore` (e.g. a
     JSONL file or Sqlite-backed store) durably persists observations per run.
+    Stored entries omit what the stream already says (`run_id`, `root_run_id`
+    unless it differs, and the `{run_id}-evt-{offset}` event id); readers
+    rebuild the `AgentObservation` wire type unchanged. `seal_run(run_id)`
+    closes a finished run's journal (the host calls it when a run ends;
+    `reap_orphaned_runs_and_seal` does it for orphans) without changing any
+    read; with `DriverAppendStore::journal` the stream is
+    `harness.journal/<run id>`, sealed on finish and kept 30 days.
 - `HarnessStatusStore` (trait) — a compact "what is running now?" surface
   (phase, counters, last-updated) distinct from the full journal.
   - `InMemoryStatusStore` — in-process implementation.
@@ -33,7 +40,7 @@ surface and operational constraints.
   - `RedactingSink` — masks secrets in event payloads before forwarding.
   - `JournalSink` — persists observations into a `HarnessEventJournal`.
   - `JsonlSink` — appends records to a JSONL stream via
-    `harness::store::JsonlAppendStore`.
+    a `harness::store::AppendStore` such as `DriverAppendStore`.
   - `SinkHealth` — queue-drop and backend-append-failure totals returned by
     `JournalSink::health` and `JsonlSink::health`.
 - `AgentObservation`-derived metrics:
@@ -98,8 +105,8 @@ silently excluded from the rollup rather than reported with a bogus duration.
 | `types.rs` | Every public type: `AgentObservation`, journal/status-store traits and in-memory impls, sink structs, latency types. |
 | `profile.rs` | Scoped process CPU/RSS sampling for stress tests and host-specific workloads. |
 | `mod.rs` | Behavioral code: latency rollups, journal/store/sink impls. |
-| `langfuse/` | `LangfuseClient` and payload helpers (`clean_nulls`, `iso_ms`) shared with `graph::observability::langfuse`, split into `mod.rs` (impl + helpers), `types.rs` (`LangfuseAuth`/`LangfuseClient`/`LangfuseTraceConfig`), and `test.rs`. |
-| `test.rs` | Unit tests (journal round-trips, redaction, latency rollups, sink fan-out). |
+| `langfuse/` | `LangfuseClient` and payload helpers (`clean_nulls`, `iso_ms`) shared with `graph::observability::langfuse`, split into `mod.rs` (impl + helpers), `types.rs` (`LangfuseAuth`/`LangfuseClient`/`LangfuseTraceConfig`), and `mod_tests.rs`. |
+| `mod_tests.rs` | Unit tests (journal round-trips, redaction, latency rollups, sink fan-out). |
 
 ## Operational constraints
 

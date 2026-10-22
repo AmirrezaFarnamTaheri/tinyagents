@@ -147,7 +147,7 @@ pub trait ResponseCache: Send + Sync {
 ///
 /// Intended for unit tests and short-lived local runs. Contains no durable
 /// storage: all entries are lost when the value is dropped. For a cache that
-/// survives a restart see `SqliteResponseCache` (feature `sqlite`).
+/// survives a restart see [`super::DriverResponseCache`].
 ///
 /// Entries are bounded on **two** axes so a long-lived cache attached to a busy
 /// harness cannot grow without limit:

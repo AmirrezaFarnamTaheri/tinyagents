@@ -107,6 +107,8 @@ pub struct AgentRun {
     /// Recovery messages for denied, unknown, or invalid calls intentionally do
     /// not appear here: they produced a transcript response but never acted.
     pub executed_tools: Vec<String>,
+    /// Content-free outcome summaries for completed calls.
+    pub tool_outcomes: Vec<crate::host::ToolOutcomeRecord>,
     /// Number of loop iterations (model/tool super-steps) executed.
     pub steps: usize,
     /// Set when the run stopped because steering latched a **pause** rather
@@ -146,6 +148,28 @@ pub struct AgentRun {
     /// [`AgentEvent::ToolCompleted`][crate::events::AgentEvent::ToolCompleted];
     /// neither copy is ever rendered into [`Self::messages`].
     pub tool_metadata: Vec<ToolResultMetadata>,
+    /// The transcript the next model call would have seen: [`Self::messages`]
+    /// with this run's context compaction applied (leading system messages, the
+    /// compaction checkpoint, then the messages kept verbatim). `None` when no
+    /// compaction ran.
+    ///
+    /// [`Self::messages`] stays the full record of the run. A host that
+    /// carries history into its next turn should carry *this* one when set:
+    /// the next turn then starts from the checkpoint instead of re-reading
+    /// (and re-summarizing) everything the compaction already folded. Set by
+    /// [`ContextCompressionMiddleware`]'s `after_agent` hook.
+    pub compacted_history: Option<Vec<tinyinference_llm::message::Message>>,
+    /// How the run ended, structured (see [`crate::terminal`]). Set by the
+    /// agent loop on every exit path it controls — completion, a
+    /// `StopWithPartial` cap, a pause, a deferral — and by the driver on
+    /// failure, so a host reading a partial run (for example from
+    /// [`PartialRunOutcome`][crate::agent_loop::PartialRunOutcome]) needs no
+    /// string parsing. `None` only while the run is still in flight, or when a
+    /// wrapping middleware replaced the loop.
+    pub terminal: Option<crate::terminal::TerminalOutcome>,
+    /// Typed classified-failure cause when a repeat/no-progress guard halted
+    /// this run. Kept separate from the human-readable terminal message.
+    pub failure_cause: Option<crate::no_progress::ClassifiedStopCause>,
 }
 
 /// Host-only metadata one tool call returned, as recorded on
@@ -222,6 +246,42 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
         Ok(())
     }
 
+    /// Transform the final request only after model-control admission commits.
+    ///
+    /// This observer boundary runs after jump/pause/cancel checkpoints and model
+    /// resolution, immediately before the model pipeline. It is for ephemeral
+    /// request content; admission policy belongs in `before_model_control`.
+    async fn before_model_dispatch(
+        &self,
+        _ctx: &mut RunContext<Ctx>,
+        _state: &State,
+        _request: &mut ModelRequest,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Re-apply staged ephemeral content after request-rewriting middleware
+    /// has finished, while keeping it outside the admission estimate.
+    async fn after_model_rewrite(
+        &self,
+        _ctx: &mut RunContext<Ctx>,
+        _state: &State,
+        _request: &mut ModelRequest,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Runs after the model-wrap onion returns. `base_called` distinguishes a
+    /// real base invocation from a wrap middleware short-circuit.
+    async fn after_model_dispatch(
+        &self,
+        _ctx: &mut RunContext<Ctx>,
+        _state: &State,
+        _base_called: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Runs for each streamed [`ModelDelta`] before it is forwarded or
     /// accumulated, allowing inspection or transformation of the chunk.
     async fn on_model_delta(
@@ -255,8 +315,16 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
         Ok(())
     }
 
-    /// Runs for each streamed [`ToolDelta`] of progress emitted while a tool
-    /// runs.
+    /// Observes each [`ToolDelta`] of progress a tool reported through
+    /// `ToolRunContext::report_progress`.
+    ///
+    /// **Replayed, observe-only.** The hook needs `&mut RunContext`, which the
+    /// executing tool holds, so the loop calls it for a call's deltas, in
+    /// order, *after* the call settles and before `after_tool` and the terminal
+    /// event. The matching `AgentEvent::ToolProgressDetail` was already emitted live,
+    /// so mutating `delta` changes nothing downstream. The replay queue is
+    /// bounded (newest 64 deltas, `content` capped at 4 KiB) and is not filled
+    /// at all for runs without middleware. An `Err` is logged, not propagated.
     async fn on_tool_delta(
         &self,
         _ctx: &mut RunContext<Ctx>,
@@ -276,6 +344,56 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
         _result: &mut ToolResult,
     ) -> Result<()> {
         Ok(())
+    }
+
+    /// Shared-reference admission check for a **nested** tool call: a tool
+    /// calling another tool through
+    /// [`ToolExecutionContext::call_tool`][crate::tool::ToolExecutionContext::call_tool].
+    ///
+    /// `before_tool` takes `&mut RunContext`, which a running tool cannot lend,
+    /// so it never runs for nested calls. A middleware whose `before_tool` is an
+    /// *enforcement* (an allowlist, a deny mask, an approval gate, a plan-mode
+    /// guard, a host hook) must therefore also implement this method, over the
+    /// same decision, or `call_tool` becomes a way around it. The default
+    /// admits the call, which is right for hooks that only observe or rewrite.
+    ///
+    /// Runs for every registered middleware, in registration order, after
+    /// argument validation and before host authorization; the first `Err`
+    /// refuses the call. A nested call can never be deferred, so a gate that
+    /// would defer or interrupt must fail instead. `call.arguments` are the
+    /// prepared (validated) arguments; `call.id` is the nested id
+    /// (`<parent>/<n>`).
+    ///
+    /// A refusal is returned to the calling tool and is **not** fanned out to
+    /// [`Middleware::on_error`]: that hook needs `&mut RunContext`, which a
+    /// running tool cannot lend, and a refused nested call is a tool-level
+    /// result, not a run failure.
+    async fn check_nested_tool(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        _state: &State,
+        _call: &ToolCall,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Observes the result of a nested tool call, after it ran.
+    ///
+    /// `after_tool` never runs for nested calls (it takes `&mut RunContext`),
+    /// so a middleware that accounts for tool results — a research budget, a
+    /// repeated-failure counter, a result auditor — implements this to see
+    /// them. It cannot rewrite the result. Called for every registered
+    /// middleware, in registration order, once per nested call that produced a
+    /// result (a tool-reported error included; a refused or raised call has no
+    /// result). Interior mutability is the way to keep state: the context is
+    /// shared.
+    async fn observe_nested_result(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        _state: &State,
+        _call: &ToolCall,
+        _result: &ToolResult,
+    ) {
     }
 
     /// Runs when any hook in the stack errors, giving every middleware a chance
@@ -476,7 +594,7 @@ pub trait ToolBaseCall<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
     /// Invokes the wrapped tool with the (possibly middleware-mutated) `call`.
     fn call<'a>(
         &'a self,
-        ctx: &'a mut RunContext<Ctx>,
+        ctx: &'a RunContext<Ctx>,
         state: &'a State,
         call: ToolCall,
     ) -> BoxToolFuture<'a>;
@@ -679,12 +797,37 @@ pub trait ToolMiddleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync
     /// `MiddlewareStarted`/`MiddlewareCompleted` events.
     fn name(&self) -> &str;
 
+    /// Whether this wrap tolerates **overlapping** invocations: the calls of
+    /// one multi-call tool batch each run the whole wrap onion at the same
+    /// time, on a shared `&RunContext`.
+    ///
+    /// Defaults to `true`, because `wrap_tool` only receives `&RunContext` and
+    /// so can do no more than read it, emit events, request control, and use
+    /// interior-mutable handles it owns. Return `false` when the wrap holds
+    /// state that must see one call at a time (a non-reentrant lock held
+    /// across `next.run`, a strictly ordered audit log, a single-slot
+    /// resource): if *any* registered wrap returns `false`, the harness runs
+    /// every multi-call batch serially, in call order, exactly as before the
+    /// wrap onion became concurrent.
+    ///
+    /// In concurrent mode every `ToolStarted` event is emitted at admission,
+    /// before any wrap runs, so never infer the "current call" from event
+    /// order; use the `call` argument and the `call_id` on the wrap's
+    /// `MiddlewareStarted`/`MiddlewareCompleted` events.
+    fn concurrent_safe(&self) -> bool {
+        true
+    }
+
     /// Wraps the inner tool pipeline. Call `next.run(ctx, state, call)` to
     /// proceed (zero or more times), or return a [`MiddlewareToolOutcome`]
     /// without calling it to short-circuit.
+    ///
+    /// `ctx` is shared (`&RunContext`) because the calls of a batch may run
+    /// this method concurrently; see [`Self::concurrent_safe`]. Events
+    /// (`ctx.emit`) and control requests (`ctx.request_control`) take `&self`.
     async fn wrap_tool(
         &self,
-        ctx: &mut RunContext<Ctx>,
+        ctx: &RunContext<Ctx>,
         state: &State,
         call: ToolCall,
         next: ToolHandler<'_, State, Ctx>,
@@ -875,11 +1018,6 @@ pub struct ContextCompressionMiddleware {
     pub(crate) max_records: usize,
     /// Recovery behaviour when [`Summarizer::summarize`] returns `Err`.
     pub(crate) on_failure: CompressionFailurePolicy,
-    /// The most recently produced compaction summary text, threaded into the
-    /// next compaction's [`crate::summarization::SummaryRequest::previous_summary`]
-    /// so an iterative [`Summarizer`] refines rather than restarts. `None`
-    /// until the first compaction on this middleware instance.
-    pub(crate) last_summary: Mutex<Option<String>>,
     /// Token budget above which a single "turn" of messages handed to the
     /// summarizer is itself split into two halves and merged (see
     /// [`crate::summarization::summarize_with_split`]). `None` disables
@@ -894,6 +1032,173 @@ pub struct ContextCompressionMiddleware {
     /// overflow-triggered) that can decline it or substitute a summary. See
     /// [`crate::summarization::CompactionDecision`].
     pub(crate) before_compaction: Option<BeforeCompactionHook>,
+    /// Per-run compaction state: the fold each in-flight run has made and the
+    /// live transcript its last `before_model` saw. Keyed by the context's
+    /// process-unique [`RunContext::instance_id`] (a `RunId` is a caller label
+    /// two concurrent runs may share), so invocations sharing this middleware
+    /// never read each other's fold, and dropped in `after_agent`. See [`RunCompaction`].
+    pub(crate) runs: Mutex<std::collections::HashMap<u64, RunCompaction>>,
+    /// Role the summary is written with. See
+    /// [`crate::summarization::SummaryPlacement`].
+    pub(crate) placement: crate::summarization::SummaryPlacement,
+    /// Ineffective compactions in a row that engage the anti-thrash guard.
+    pub(crate) thrash_strikes: u32,
+    /// Model calls the guard suppresses summarization for once engaged.
+    pub(crate) thrash_cooldown_calls: u32,
+    /// When set, the verbatim tail is this many recent tokens instead of
+    /// the policy's `keep_last` messages (see
+    /// [`crate::summarization::SummarizationPolicy::plan_recent_tokens`]).
+    pub(crate) keep_recent_tokens: Option<u64>,
+    /// Compaction attempts one model call may make when the provider reports
+    /// an overflow. See [`DEFAULT_MAX_OVERFLOW_ATTEMPTS`].
+    pub(crate) max_overflow_attempts: u32,
+    /// Which successful-response signals count as an overflow. See
+    /// [`crate::summarization::ResponseOverflowDetection`].
+    pub(crate) response_overflow: crate::summarization::ResponseOverflowDetection,
+    /// Byte cap for the truncate-oversized-tool-results route; `None` (the
+    /// default) never truncates. See
+    /// [`ContextCompressionMiddleware::with_tool_result_truncation`].
+    pub(crate) tool_result_truncation: Option<usize>,
+    /// Whether a cut inside a turn gives the turn's prefix its own summary
+    /// request. See
+    /// [`ContextCompressionMiddleware::with_split_turn_prefix`].
+    pub(crate) split_turn_prefix: bool,
+    /// Derives the `<read-files>` / `<modified-files>` lists appended to each
+    /// compaction summary; `None` appends nothing. See
+    /// [`crate::summarization::FileOpExtractor`].
+    pub(crate) file_ops: Option<std::sync::Arc<dyn crate::summarization::FileOpExtractor>>,
+}
+
+/// Default number of compaction attempts one model call may make after the
+/// provider reports a context overflow. Each attempt must shrink the request,
+/// so the budget bounds cost, not correctness.
+pub const DEFAULT_MAX_OVERFLOW_ATTEMPTS: u32 = 3;
+
+/// Default number of ineffective compactions in a row (the next real prompt
+/// still at or above the trigger) that engage the anti-thrash guard.
+pub const DEFAULT_THRASH_STRIKES: u32 = 2;
+
+/// Default number of model calls the anti-thrash guard suppresses
+/// summarization for once engaged; deterministic trim runs instead.
+pub const DEFAULT_THRASH_COOLDOWN_CALLS: u32 = 10;
+
+/// Most runs [`ContextCompressionMiddleware`] tracks at once. A run whose
+/// `after_agent` never fires (an aborted invocation) would otherwise stay in
+/// the map forever on a long-lived shared harness; past this many, the least
+/// recently used run is evicted, which only costs it a re-compaction.
+pub(crate) const MAX_TRACKED_COMPACTION_RUNS: usize = 256;
+
+/// One run's compaction state inside [`ContextCompressionMiddleware`].
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RunCompaction {
+    /// The compaction this run already performed, re-applied to every later
+    /// request. See [`CompactionFold`].
+    pub(crate) fold: Option<CompactionFold>,
+    /// Chained fingerprints of the live (pre-fold) non-system transcript this
+    /// run's last `before_model` saw, so the overflow path can extend the fold
+    /// in live-transcript coordinates.
+    pub(crate) live_chain: Vec<u64>,
+    /// The most recent summary this run produced, threaded into its next
+    /// compaction's [`crate::summarization::SummaryRequest::previous_summary`]
+    /// so an iterative [`Summarizer`] refines rather than restarts, when no
+    /// fold carries it (a host that spliced the summary into its transcript).
+    pub(crate) last_summary: Option<String>,
+    /// A summary found in the host transcript that a subsequent fold replaces.
+    pub(crate) host_applied_summary: Option<tinyinference_llm::message::Message>,
+    /// Once the host has persisted a compressed transcript, subsequent
+    /// boundaries are in that shortened transcript's coordinates.
+    pub(crate) boundary_unaligned: bool,
+    /// Set once a truncate route has run for this run: every later request has
+    /// its oversized tool results cut again (a pure, idempotent rewrite), so
+    /// the prompt prefix stays byte-stable and the measured size stays valid.
+    pub(crate) truncating: bool,
+    /// Monotonic touch stamp for least-recently-used eviction.
+    pub(crate) touched: u64,
+    /// Usage-based trigger and anti-thrash state. See [`CompactionPressure`].
+    pub(crate) pressure: CompactionPressure,
+}
+
+/// One run's measurement state for [`ContextCompressionMiddleware`]'s trigger
+/// and anti-thrash guard.
+///
+/// The trigger prefers what the provider actually measured: the previous
+/// call's reported prompt tokens, plus an estimate of only the messages
+/// appended since (and of any growth in the tool declarations). The pure
+/// chars-based estimate is the fallback when no usage was reported.
+///
+/// The guard judges a compaction by the next *real* prompt size: still at or
+/// above the trigger is a strike, and enough strikes in a row suppress
+/// summarization for a cooldown during which the request is trimmed
+/// deterministically instead of paying for summaries that do not help.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CompactionPressure {
+    /// Message count and tool-schema token estimate of the last request this
+    /// middleware let through, waiting for that call's usage.
+    pub(crate) pending: Option<(usize, u64, u64)>,
+    /// Provider-reported prompt tokens of the last answered call, with the
+    /// message count and schema tokens of the request that produced it.
+    pub(crate) measured: Option<MeasuredPrompt>,
+    /// Set by a compaction; the next reported usage decides whether it helped.
+    pub(crate) awaiting_verdict: bool,
+    /// Ineffective compactions in a row.
+    pub(crate) strikes: u32,
+    /// Model calls left in the current suppression window.
+    pub(crate) suppressed_for: u32,
+}
+
+/// A provider-measured prompt size and the request shape it was measured on.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MeasuredPrompt {
+    /// Provider-reported input tokens of the call.
+    pub(crate) prompt_tokens: u64,
+    /// Messages the request carried (as this middleware left it).
+    pub(crate) messages: usize,
+    /// Estimated tokens of the tool declarations it carried.
+    pub(crate) schema_tokens: u64,
+    /// Chained fingerprint of those messages, so a later request is only
+    /// treated as extending this one when its prefix is identical.
+    pub(crate) fingerprint: u64,
+}
+
+/// A compaction this middleware already performed, remembered so it is
+/// re-applied rather than recomputed.
+///
+/// The agent loop rebuilds every request from its own working transcript, and
+/// `before_model` only rewrites that outgoing copy: the loop never sees the
+/// summary. Without this record every call after the first compaction found
+/// the full history over the threshold again, so it compacted on every turn
+/// and handed the summarizer the whole, ever-growing history each time
+/// (101 summarizer calls in one 300-call SWE task, ~85% of its cost, with the
+/// agent seeing only the summary and a handful of recent messages).
+#[derive(Clone, Debug)]
+pub(crate) struct CompactionFold {
+    /// How many leading non-system messages of the live transcript the
+    /// summary stands in for.
+    pub(crate) folded: usize,
+    /// Chained fingerprint of those `folded` messages. A transcript whose
+    /// prefix no longer matches (rewritten or replaced history) drops the
+    /// fold instead of splicing a summary over the wrong messages.
+    pub(crate) fingerprint: u64,
+    /// The summary message spliced in place of the folded messages.
+    pub(crate) summary: tinyinference_llm::message::Message,
+    /// The user message the compaction kept verbatim out of the folded range
+    /// (see [`crate::summarization::SummarizationPolicy::pin_turn_user_message`]).
+    /// Re-applying the fold splices it in right after the summary.
+    pub(crate) pinned: Option<PinnedTurnMessage>,
+    /// Summary previously spliced by the host and incorporated into this one.
+    /// Remove it when rebuilding requests from the host's unchanged transcript.
+    pub(crate) replaces: Option<tinyinference_llm::message::Message>,
+}
+
+/// A user message a compaction pinned: kept verbatim although it lies inside
+/// the folded range.
+#[derive(Clone, Debug)]
+pub(crate) struct PinnedTurnMessage {
+    /// Its position in the live (pre-fold) non-system transcript. Always below
+    /// [`CompactionFold::folded`].
+    pub(crate) live_index: usize,
+    /// The message as it is sent: verbatim, or size-capped with a marker.
+    pub(crate) message: tinyinference_llm::message::Message,
 }
 
 // ── MicrocompactMiddleware ────────────────────────────────────────────────────
@@ -995,6 +1300,13 @@ pub struct PromptCacheGuardMiddleware {
     pub(crate) events: Mutex<VecDeque<CacheLayoutEvent>>,
     /// Eviction cap for `events`.
     pub(crate) max_events: usize,
+    /// Per-conversation prompt-cache miss accounting, fed from each
+    /// response's usage. See [`crate::cache::PromptCacheTracker`].
+    pub(crate) cache_misses: Mutex<crate::cache::PromptCacheTracker>,
+    /// Latest rewritten-prefix epoch for each durable conversation thread.
+    /// Fresh run contexts start at epoch zero, so this preserves the cache key
+    /// after a compacted transcript is carried into a later run.
+    pub(crate) thread_epochs: Mutex<std::collections::HashMap<crate::ids::ThreadId, u64>>,
 }
 
 // ── UsageAccountingMiddleware ─────────────────────────────────────────────────

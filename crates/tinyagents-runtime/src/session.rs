@@ -1,8 +1,10 @@
 use std::{future::Future, sync::Arc};
 
 use tinyagents_harness::CancellationToken;
+use tinyagents_harness::terminal::{TerminalOutcome, TerminalReason};
 use tinyagents_session::transcript::{
-    SessionRef, TranscriptHistory, TranscriptMessage, TranscriptPartial, TranscriptTurn, TurnUsage,
+    SessionRef, SessionTurnGuard, TranscriptHistory, TranscriptMessage, TranscriptPartial,
+    TranscriptTurn, TurnUsage, lock_session_turn, session_stem,
 };
 use tinyinference_llm::message::Message;
 
@@ -12,6 +14,10 @@ use crate::{
     SessionTurnOutcome, SessionTurnRequest, ToolSnapshot, TranscriptCodec, TranscriptCommitReceipt,
     TranscriptDelta, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
+
+/// How long a cancelled turn waits for its driver to return the rounds it
+/// completed before the driver is dropped. Short, so Stop still feels instant.
+const CANCELLED_DRIVER_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Host-neutral mutable state for one conversation session.
 pub struct Session<C: Clone + Send + Sync + 'static = ()> {
@@ -52,7 +58,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             codec,
             hooks,
             history: prefix.messages().to_vec(),
-            prefix,
+            prefix: prefix.frozen(),
             default_tools,
             persisted: Vec::new(),
             target,
@@ -237,14 +243,14 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .as_ref()
             .is_some_and(|session| session.generation > 0)
             || transcript.meta.parent_session_id.is_some();
-        let mut boundary_resolved = true;
+        let mut recovered_boundary = None;
         if recorded_boundary.is_none() && cached_boundary.is_none() && compacted_head {
             // Without the sealed root there is no safe boundary in a head
             // containing a System summary. If a replacement prefix was
             // supplied, fail rather than replaying unverifiable old System
             // instructions beside it.
             stored_len = 0;
-            boundary_resolved = false;
+            let mut boundary_resolved = false;
             let bound_session = session_binding.as_ref().or(target.session.as_ref());
             if let Some(head) = bound_session
                 .map(|session| target.locator.head_generation(session))
@@ -259,18 +265,31 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     match read.read_session() {
                         Ok(Some(root_transcript)) => match codec.decode_history(&root_transcript) {
                             Ok(root_messages) => {
-                                let root_prefix = root_messages
-                                    .iter()
-                                    .take_while(|message| matches!(message, Message::System(_)))
-                                    .collect::<Vec<_>>();
+                                let root_len = root_transcript
+                                    .meta
+                                    .prefix_message_count
+                                    .unwrap_or_else(|| {
+                                        root_messages
+                                            .iter()
+                                            .take_while(|message| {
+                                                matches!(message, Message::System(_))
+                                            })
+                                            .count()
+                                    })
+                                    .min(root_messages.len());
+                                let root_prefix = &root_messages[..root_len];
                                 if decoded.len() >= root_prefix.len()
                                     && root_prefix
                                         .iter()
                                         .zip(decoded.iter())
-                                        .all(|(root, head)| *root == head)
+                                        .all(|(root, head)| root == head)
                                 {
                                     stored_len = root_prefix.len();
                                     boundary_resolved = true;
+                                    recovered_boundary = root_transcript
+                                        .meta
+                                        .prefix_message_count
+                                        .map(|_| stored_len);
                                 } else {
                                     tracing::warn!(
                                         session = %root.session_id(),
@@ -313,7 +332,10 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 ));
             }
         }
-        let stored_len = if recorded_boundary.is_some() || cached_boundary.is_some() {
+        let authoritative_boundary = recorded_boundary.is_some()
+            || cached_boundary.is_some()
+            || recovered_boundary.is_some();
+        let stored_len = if authoritative_boundary {
             // An explicit frozen prefix may include non-System few-shot rows.
             // Only the legacy inferred boundary is limited to leading System
             // messages; a recorded count is bounded by the transcript itself.
@@ -321,12 +343,25 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         } else {
             stored_len.min(leading_len)
         };
-        self.persisted_prefix_len = boundary_resolved.then_some(stored_len);
+        // A legacy transcript has no recorded boundary for
+        // non-System few-shot messages. Leading System rows alone must not
+        // turn that unknown extent into an authoritative cached boundary.
+        self.persisted_prefix_len = authoritative_boundary.then_some(stored_len);
         if self.prefix.messages().is_empty() && stored_len != 0 {
             self.prefix = PrefixSnapshot::new(decoded[..stored_len].to_vec());
         }
         decoded.drain(..stored_len);
-        let history = self.with_prefix(decoded);
+        let history = if authoritative_boundary {
+            // Equal messages after a known boundary are real conversation.
+            let mut history = self.prefix.messages().to_vec();
+            history.extend(decoded);
+            history
+        } else {
+            // Legacy few-shot rows can remain after the leading System rows
+            // were stripped. Reconcile their overlap until a successful turn
+            // persists the full configured prefix count.
+            self.with_prefix(decoded)
+        };
         self.history = history.clone();
         // Every turn already on disk counts as committed: the prefix those
         // turns were sent with is part of the conversation, in this process
@@ -377,7 +412,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             }
         }
         let target = self.target.as_ref().expect("target checked above");
-        self.transcript = Some(match target.session.as_ref() {
+        let handle = match target.session.as_ref() {
             Some(session) => target
                 .locator
                 .open_session(session, target.meta.clone())
@@ -386,7 +421,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .locator
                 .open_stem(&target.stem, target.meta.clone())
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
-        });
+        };
         // For a session-bound target, `target.session`/`target.stem` always
         // name the same file (construction and `rebind_session` keep them in
         // lockstep) — the bind above is always that file, regardless of
@@ -411,10 +446,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             // `created`, provider/model, token/cost totals and (unless the
             // head changed) session identifiers — none of which describe
             // the file actually being appended to.
-            let destination = self
-                .transcript
-                .as_ref()
-                .expect("bound above")
+            let destination = handle
                 .read_session()
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
             match destination {
@@ -449,10 +481,26 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 }
             }
         }
+        // Publish the handle only after its destination baseline has been
+        // loaded successfully. Otherwise a failed read could leave this
+        // session bound with rows from the scanned transcript and cause later
+        // writes to fail baseline validation (or compare against the wrong file).
+        self.transcript = Some(handle);
         Ok(SessionResume {
             loaded: true,
             history,
         })
+    }
+
+    /// Runs one user turn: wraps `input` in a [`SessionTurnRequest`] and drives
+    /// [`Session::turn`], the single entry hosts call instead of owning a turn
+    /// loop. Host policy rides in `options` and the session's hooks.
+    pub async fn run_turn(
+        &mut self,
+        input: Message,
+        options: TurnOptions<C>,
+    ) -> Result<SessionTurnOutcome, RuntimeError> {
+        self.turn(SessionTurnRequest::new(input), options).await
     }
 
     /// Executes and commits one state transition.
@@ -495,6 +543,11 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         )
         .await?;
         self.apply_resume_preparation(resume_preparation)?;
+        // Resume preparation may install a lazy target or change the selected
+        // session, so choose the shared locks only after applying it. The lock
+        // still covers the complete resume read and subsequent write.
+        let _turn_lock =
+            cancelable(&cancellation, async { Ok(self.lock_turn(options).await) }).await?;
         let resumed = if options.resume == ResumeMode::Never {
             false
         } else {
@@ -512,10 +565,14 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .before_turn(request, options, self.state_view(resumed)),
         )
         .await?;
+        let previous_history = self.history.clone();
         let (tools, prepared_prefix) = self.apply_preparation(preparation)?;
-        if let Some(prefix) = prepared_prefix {
-            self.apply_prefix(prefix)?;
-        }
+        // Preparation stays local until persistence succeeds. Errors, cancellation,
+        // and dropping this future cannot publish an uncommitted prefix.
+        let (prefix, prepared_history) = match prepared_prefix {
+            Some(prefix) => self.prepare_prefix(prefix)?,
+            None => (self.prefix.clone(), self.history.clone()),
+        };
         let exact_tools = tools.is_exact();
         let tools = if exact_tools {
             tools
@@ -526,7 +583,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         // sent, unless the host marked the turn's set as one-off.
         let record_tools = (!exact_tools).then(|| tools.clone());
 
-        let mut input = self.history.clone();
+        let mut input = prepared_history;
         if input.last() != Some(&request.input) {
             input.push(request.input.clone());
         }
@@ -534,6 +591,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         let request_id = options.request_id.clone();
         let thread_id = options.thread_id.clone();
         let stream = options.stream;
+        let controls = std::mem::take(&mut options.controls);
         let cancellation = options.cancellation.clone();
         // `RunContext` is consumed exactly once. The host context captured in
         // `codec_options` is the one after preparation and before handoff.
@@ -545,52 +603,80 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             ),
         )
         .with_cancellation(cancellation.clone());
-        let run_context = if self
-            .prefix
+        let run_context = if prefix
             .messages()
             .iter()
             .all(|message| matches!(message, Message::System(_)))
         {
-            run_context.with_frozen_system_prefix_len(self.prefix.messages().len())
+            run_context.with_frozen_system_prefix_len(prefix.messages().len())
         } else {
             // A mixed-role prefix is still restored by its recorded count,
             // but the harness's System-tier cache layout cannot represent its
             // non-System rows. Keep conservative request construction there.
             run_context
         };
-        let driver_result = tokio::select! {
-            _ = cancellation.cancelled() => return Err(RuntimeError::Cancelled),
-            result = self.driver.execute(DriverRequest { history: input, tools, run_context, stream }) => result,
+        // The driver is polled first so a cancellation-aware driver can hand
+        // back the rounds it completed. One that does not answer within
+        // `CANCELLED_DRIVER_GRACE` is dropped and nothing is persisted. The
+        // block ends the driver future's borrow of `self` before persistence.
+        let driver_result = {
+            let driver = self.driver.execute(DriverRequest {
+                history: input,
+                tools,
+                run_context,
+                stream,
+                controls,
+            });
+            tokio::pin!(driver);
+            tokio::select! {
+                biased;
+                result = &mut driver => result,
+                _ = cancellation.cancelled() => {
+                    match tokio::time::timeout(CANCELLED_DRIVER_GRACE, &mut driver).await {
+                        Ok(result) => result,
+                        Err(_) => return Err(RuntimeError::Cancelled),
+                    }
+                }
+            }
         };
-        let outcome = match driver_result {
+        let mut outcome = match driver_result {
             Ok(outcome) => outcome,
             Err(failure) => {
+                // A stopped turn keeps its accepted partial like a failed one,
+                // so its prompt and completed rounds stay in the model's
+                // history; it still ends as `Cancelled`.
+                let cancelled = cancellation.is_cancelled();
                 if let Some(partial) = failure.partial {
-                    if cancellation.is_cancelled() {
-                        return Err(RuntimeError::Cancelled);
-                    }
-                    let partial_history = self.with_prefix(partial.history);
-                    let raw = self.encode(&self.history, &partial_history, &codec_options)?;
+                    let partial_history = Self::with_prefix_snapshot(&prefix, partial.history);
+                    let raw = self.encode(&previous_history, &partial_history, &codec_options)?;
                     let turn_usage = self.turn_usage(&codec_options)?;
                     let receipt = self.persist(
                         &raw,
-                        request_id.as_deref(),
-                        thread_id.as_deref(),
+                        (request_id.as_deref(), thread_id.as_deref()),
                         partial.partial.as_ref(),
                         turn_usage.as_ref(),
                         record_tools.as_ref(),
+                        &prefix,
                     )?;
                     self.remember_sent_tools(record_tools.as_ref());
+                    self.prefix = prefix;
                     self.history = partial_history;
                     self.persisted = raw;
                     if receipt.is_some() {
                         self.committed_turns += 1;
                     }
                 }
+                if cancelled {
+                    return Err(RuntimeError::Cancelled);
+                }
+                terminal_guard.set_outcome(failure.outcome);
                 return Err(failure.error);
             }
         };
-        let candidate = self.with_prefix(outcome.history);
+        // Kept for `finalize_commit`: only a *committed* turn reports the
+        // driver's success classification; a later failure uses its own.
+        terminal_guard.driver_success_outcome = outcome.outcome.take();
+        let candidate = Self::with_prefix_snapshot(&prefix, outcome.history);
         let committed = SessionTurnOutcome {
             history: candidate.clone(),
             output: outcome.output,
@@ -604,20 +690,24 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         if cancellation.is_cancelled() {
             return Err(RuntimeError::Cancelled);
         }
-        let raw = self.encode(&self.history, &candidate, &codec_options)?;
+        let raw = self.encode(&previous_history, &candidate, &codec_options)?;
         let turn_usage = self.turn_usage(&codec_options)?;
         let transcript = self.persist(
             &raw,
-            request_id.as_deref(),
-            thread_id.as_deref(),
+            (request_id.as_deref(), thread_id.as_deref()),
             None,
             turn_usage.as_ref(),
             record_tools.as_ref(),
+            &prefix,
         )?;
         self.remember_sent_tools(record_tools.as_ref());
+        self.prefix = prefix;
         self.history = committed.history.clone();
         self.persisted = raw;
         self.committed_turns += 1;
+        // Post-commit hooks may deliver another background message into this
+        // session. Do not hold the non-reentrant turn lock while they run.
+        drop(_turn_lock);
         // The receipt is constructed only after append and state replacement.
         // Its hook and the completed terminal are owned by one task: errors or
         // cancellation cannot relabel the successful durable transition, and
@@ -633,6 +723,49 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         // the owned finalization task.
         let _ = finalization.await;
         Ok(committed)
+    }
+
+    /// Takes the session's turn lock when the target is session-bound and its
+    /// locator names a destination; otherwise there is nothing to share it
+    /// with and the turn runs unlocked.
+    async fn lock_turn(&self, options: &TurnOptions<C>) -> Vec<SessionTurnGuard> {
+        let Some(target) = self.target.as_ref() else {
+            return Vec::new();
+        };
+        let Some(target_session) = target.session.as_ref() else {
+            let Some(session) = (options.resume == ResumeMode::Session)
+                .then_some(options.session.as_ref())
+                .flatten()
+            else {
+                return Vec::new();
+            };
+            return lock_session_turn(target.locator.as_ref(), session)
+                .await
+                .into_iter()
+                .collect();
+        };
+
+        // An explicit session can be absent. In that case resume leaves the
+        // target bound to `target_session`, which is where persist will write.
+        // Hold both locks across the read/run/write span. Sort first so two
+        // turns that name each other's session cannot deadlock while acquiring
+        // their fallback and selected locks in opposite order.
+        let mut sessions = vec![target_session];
+        if options.resume == ResumeMode::Session
+            && let Some(selected) = options.session.as_ref()
+            && selected != target_session
+        {
+            sessions.push(selected);
+        }
+        sessions.sort_by_key(|session| session_stem(&session.first_generation()));
+        sessions.dedup_by_key(|session| session_stem(&session.first_generation()));
+        let mut guards = Vec::with_capacity(sessions.len());
+        for session in sessions {
+            if let Some(guard) = lock_session_turn(target.locator.as_ref(), session).await {
+                guards.push(guard);
+            }
+        }
+        guards
     }
 
     fn apply_preparation(
@@ -704,23 +837,29 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         Ok(())
     }
 
-    fn apply_prefix(&mut self, prefix: PrefixSnapshot) -> Result<(), RuntimeError> {
+    fn prepare_prefix(
+        &self,
+        prefix: PrefixSnapshot,
+    ) -> Result<(PrefixSnapshot, Vec<Message>), RuntimeError> {
+        let refresh = prefix.allows_refresh();
+        let prefix = prefix.frozen();
         if prefix == self.prefix {
-            return Ok(());
+            return Ok((prefix, self.history.clone()));
         }
-        if self.committed_turns != 0 {
+        if self.committed_turns != 0 && !refresh {
             return Err(RuntimeError::InvalidSessionState(
                 "cannot change a session prefix after a committed turn".into(),
             ));
         }
-        let history = std::mem::take(&mut self.history);
-        let history = history
+        let conversation = self
+            .history
             .strip_prefix(self.prefix.messages())
-            .unwrap_or(&history)
-            .to_vec();
-        self.prefix = prefix;
-        self.history = self.with_prefix(history);
-        Ok(())
+            .unwrap_or(&self.history);
+        // These rows are conversation data after stripping the known prefix,
+        // even when they equal a suffix of the replacement prefix.
+        let mut history = prefix.messages().to_vec();
+        history.extend_from_slice(conversation);
+        Ok((prefix, history))
     }
 
     fn state_view(&self, resumed: bool) -> SessionStateView<'_> {
@@ -759,12 +898,18 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
     fn persist(
         &mut self,
         raw: &[TranscriptMessage],
-        request_id: Option<&str>,
-        thread_id: Option<&str>,
+        identifiers: (Option<&str>, Option<&str>),
         partial: Option<&TranscriptPartial>,
         turn_usage: Option<&TurnUsage>,
         tools: Option<&ToolSnapshot>,
+        prefix: &PrefixSnapshot,
     ) -> Result<Option<TranscriptCommitReceipt>, RuntimeError> {
+        // A committed prefix refresh is a replacement even when its rows
+        // happen to begin with every old raw row. Never reclassify conversation
+        // rows as prefix in the old generation, including persisted partials.
+        let prefix_changed = self.committed_turns != 0 && prefix != &self.prefix;
+        let prefix_len = prefix.messages().len();
+        let (request_id, thread_id) = identifiers;
         let Some(target) = self.target.as_mut() else {
             return Ok(None);
         };
@@ -783,7 +928,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     target.rebind_session(head);
                 }
             }
-            self.transcript = Some(match target.session.as_ref() {
+            let handle = match target.session.as_ref() {
                 Some(session) => target
                     .locator
                     .open_session(session, target.meta.clone())
@@ -792,13 +937,31 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     .locator
                     .open_stem(&target.stem, target.meta.clone())
                     .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
-            });
+            };
+            // Binding can happen without resume (for example ResumeMode::Never).
+            // Keep the durable comparison baseline current without changing
+            // the visible in-memory history or invoking resume hooks.
+            let persisted = handle
+                .messages()
+                .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+            self.transcript = Some(handle);
+            self.persisted = persisted;
         }
 
         let previous_len = self.persisted.len();
         let next_len = raw.len();
         let common_len = previous_len.min(next_len);
-        let extends = next_len >= previous_len && raw[..common_len] == self.persisted[..common_len];
+        // Compare in normalized form: a legacy-string row from the host and the
+        // typed row the transcript lifted from it are the same row.
+        let extends = !prefix_changed
+            && next_len >= previous_len
+            && raw[..common_len]
+                .iter()
+                .zip(&self.persisted[..common_len])
+                .all(|(next, previous)| {
+                    next.same_row_as(previous)
+                        && next.clone().normalized() == previous.clone().normalized()
+                });
 
         // A turn that no longer extends what is persisted is a compaction. For
         // a session-bound target that seals the current generation and opens
@@ -821,7 +984,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         if !extends && let Some(session) = target.session.clone() {
             let (successor, handle) = target
                 .locator
-                .begin_generation(&session, target.meta.clone())
+                .begin_generation_from_baseline(&session, target.meta.clone(), &self.persisted)
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
             // The successor starts empty, so the retained set is written
             // through the ordinary turn path below and keeps its usage,
@@ -838,7 +1001,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             None => self.transcript.as_deref().expect("bound above"),
         };
         meta.turn_count += 1;
-        meta.prefix_message_count = Some(self.prefix.messages().len());
+        meta.prefix_message_count = Some(prefix_len);
         meta.updated = chrono::Utc::now().to_rfc3339();
         // Record every ordinary turn's declarations. Comparing against this
         // session's cached snapshot is unsafe when another live Session has
@@ -878,7 +1041,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             self.transcript = Some(handle);
         }
         target.meta = meta;
-        self.persisted_prefix_len = Some(self.prefix.messages().len());
+        self.persisted_prefix_len = Some(prefix_len);
         let delta = if extends {
             TranscriptDelta::Append {
                 previous_len,
@@ -890,7 +1053,12 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 next_len,
             }
         };
-        Ok(Some(TranscriptCommitReceipt { path, delta }))
+        let rows = if extends {
+            raw[previous_len..next_len].to_vec()
+        } else {
+            raw.to_vec()
+        };
+        Ok(Some(TranscriptCommitReceipt { path, delta, rows }))
     }
 
     /// Records the declarations a successfully completed ordinary turn sent.
@@ -912,7 +1080,11 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
     }
 
     fn with_prefix(&self, history: Vec<Message>) -> Vec<Message> {
-        let prefix = self.prefix.messages();
+        Self::with_prefix_snapshot(&self.prefix, history)
+    }
+
+    fn with_prefix_snapshot(snapshot: &PrefixSnapshot, history: Vec<Message>) -> Vec<Message> {
+        let prefix = snapshot.messages();
         let overlap = (0..=prefix.len().min(history.len()))
             .rev()
             .find(|&len| prefix[prefix.len() - len..] == history[..len])
@@ -928,6 +1100,14 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
 struct TerminalGuard<C: Clone + Send + Sync + 'static> {
     hooks: Arc<dyn SessionHooks<C>>,
     terminal: Option<SessionTerminal>,
+    /// The driver's own typed classification of a failure, when it supplied one.
+    outcome: Option<TerminalOutcome>,
+    /// The driver's typed classification of a run it returned successfully;
+    /// used only once the turn commits.
+    driver_success_outcome: Option<TerminalOutcome>,
+    /// `true` until a real terminal is set: the drop-time default means the
+    /// caller abandoned the turn, which is a cancellation.
+    abandoned: bool,
     committed: bool,
 }
 
@@ -936,16 +1116,42 @@ impl<C: Clone + Send + Sync + 'static> TerminalGuard<C> {
         Self {
             hooks,
             terminal: Some(SessionTerminal::Failed("session turn dropped".into())),
+            outcome: None,
+            driver_success_outcome: None,
+            abandoned: true,
             committed: false,
         }
     }
 
     fn set(&mut self, terminal: SessionTerminal) {
         self.terminal = Some(terminal);
+        self.abandoned = false;
+    }
+
+    fn set_outcome(&mut self, outcome: Option<TerminalOutcome>) {
+        self.outcome = outcome;
+    }
+
+    /// Takes the pending terminal with its typed outcome: the driver's if it
+    /// gave one, a cancellation if the turn was abandoned, else derived.
+    fn take_pending(&mut self) -> Option<(SessionTerminal, TerminalOutcome)> {
+        let terminal = self.terminal.take()?;
+        let outcome = self.outcome.take().unwrap_or_else(|| {
+            if self.abandoned {
+                TerminalOutcome::new(TerminalReason::Cancelled, "session turn dropped")
+            } else {
+                terminal.outcome()
+            }
+        });
+        Some((terminal, outcome))
     }
 
     fn finalize_commit(&mut self, receipt: CommitReceipt<C>) -> tokio::task::JoinHandle<()> {
         let terminal = SessionTerminal::Completed(receipt.outcome.clone());
+        let outcome = self
+            .driver_success_outcome
+            .take()
+            .unwrap_or_else(|| terminal.outcome());
         // Removing the guard's terminal transfers exactly-once ownership to
         // the finalizer. `finish` and `Drop` then become no-ops for this turn.
         self.terminal = None;
@@ -953,6 +1159,7 @@ impl<C: Clone + Send + Sync + 'static> TerminalGuard<C> {
         let hooks = self.hooks.clone();
         tokio::spawn(async move {
             let _ = hooks.after_commit(receipt).await;
+            let _ = hooks.on_terminal_outcome(outcome).await;
             let _ = hooks.on_terminal(terminal).await;
         })
     }
@@ -962,21 +1169,35 @@ impl<C: Clone + Send + Sync + 'static> TerminalGuard<C> {
     }
 
     async fn finish(mut self) -> Result<(), RuntimeError> {
-        let Some(terminal) = self.terminal.take() else {
+        let Some((terminal, outcome)) = self.take_pending() else {
             return Ok(());
         };
-        self.hooks.on_terminal(terminal).await
+        // The terminal is already removed from the guard, so `Drop` can no
+        // longer deliver it. Run the hooks on their own task: if the caller's
+        // future is dropped while a hook is pending, the remaining hooks still
+        // run exactly once.
+        let hooks = self.hooks.clone();
+        let task = tokio::spawn(async move {
+            let _ = hooks.on_terminal_outcome(outcome).await;
+            hooks.on_terminal(terminal).await
+        });
+        match task.await {
+            Ok(result) => result,
+            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(_) => Ok(()),
+        }
     }
 }
 
 impl<C: Clone + Send + Sync + 'static> Drop for TerminalGuard<C> {
     fn drop(&mut self) {
-        let Some(terminal) = self.terminal.take() else {
+        let Some((terminal, outcome)) = self.take_pending() else {
             return;
         };
         let hooks = self.hooks.clone();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
+                let _ = hooks.on_terminal_outcome(outcome).await;
                 let _ = hooks.on_terminal(terminal).await;
             });
         }
@@ -995,3 +1216,7 @@ async fn cancelable<T>(
         result = future => result,
     }
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod session_tests;

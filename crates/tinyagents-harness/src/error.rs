@@ -81,6 +81,16 @@ pub enum TinyAgentsError {
     #[error("model error: {0}")]
     Model(String),
 
+    /// A summarizer failed after receiving metered model responses. The usage
+    /// is retained so a deterministic fallback can still report their cost.
+    #[error("summarizer error: {error}")]
+    SummarizationUsage {
+        /// The underlying summarization failure.
+        error: Box<TinyAgentsError>,
+        /// Usage accumulated before the failure.
+        usage: tinyinference_llm::usage::Usage,
+    },
+
     /// Visible model output became repetitive process narration during a
     /// stream. The stream is dropped immediately; retrying the same request
     /// would reproduce the stall, so this failure is terminal.
@@ -102,6 +112,10 @@ pub enum TinyAgentsError {
     /// (`clippy::result_large_err`).
     #[error("model error: {0}")]
     Provider(Box<tinyinference_llm::model::ProviderError>),
+
+    /// The host's physical-dispatch policy refused a model call.
+    #[error("physical dispatch refused: {0}")]
+    PhysicalDispatchAdmission(#[source] crate::cost::DispatchRefusal),
 
     /// The request did not fit in the model's context window.
     ///
@@ -223,6 +237,14 @@ pub enum TinyAgentsError {
     #[error("limit exceeded: {0}")]
     LimitExceeded(String),
 
+    /// A refillable token-bucket rate limit denied a model call.
+    #[error("rate limited: {0}")]
+    RateLimited(String),
+
+    /// The stream idle-timeout breaker stopped retries on one model.
+    #[error("stream idle timeout limit: {0}")]
+    StreamIdleTimeout(String),
+
     /// The provider returned an empty completion — no text, no tool calls, and
     /// no structured output — while
     /// [`crate::runtime::RunPolicy`]'s `error_on_empty_response` guard
@@ -336,9 +358,22 @@ pub enum TinyAgentsError {
     Storage(String),
 }
 
+impl TinyAgentsError {
+    /// Whether this is a terminal configured or provider budget limit.
+    pub fn is_terminal_limit(&self) -> bool {
+        matches!(
+            self,
+            Self::LimitExceeded(_) | Self::PhysicalDispatchAdmission(_)
+        )
+    }
+}
+
 impl From<tinyinference_llm::Error> for TinyAgentsError {
     fn from(error: tinyinference_llm::Error) -> Self {
         match error {
+            tinyinference_llm::Error::BudgetExceeded(error) => {
+                Self::LimitExceeded(error.to_string())
+            }
             tinyinference_llm::Error::Model(message) => Self::Model(message),
             tinyinference_llm::Error::Provider(error) => Self::from_provider_error(*error),
             tinyinference_llm::Error::Validation(message) => Self::Validation(message),
@@ -356,6 +391,7 @@ impl From<tinyinference_embeddings::Error> for TinyAgentsError {
             tinyinference_embeddings::Error::Serialization(error) => Self::Serialization(error),
             tinyinference_embeddings::Error::Embedding(message) => Self::Embedding(message),
             tinyinference_embeddings::Error::Cancelled => Self::Cancelled,
+            tinyinference_embeddings::Error::Rerank(error) => Self::Embedding(error.to_string()),
         }
     }
 }
@@ -437,13 +473,6 @@ impl TinyAgentsError {
     }
 }
 
-/// Converts a raw `rusqlite` failure into [`TinyAgentsError::Storage`] so the
-/// session store and run ledger can use `?` on driver calls directly. Call
-/// sites that have useful context to add should still map explicitly rather
-/// than relying on this bare conversion.
-#[cfg(feature = "sqlite")]
-impl From<rusqlite::Error> for TinyAgentsError {
-    fn from(err: rusqlite::Error) -> Self {
-        Self::Storage(err.to_string())
-    }
-}
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod tests;

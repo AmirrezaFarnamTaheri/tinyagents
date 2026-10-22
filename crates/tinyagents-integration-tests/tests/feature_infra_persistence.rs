@@ -1,30 +1,23 @@
 //! Feature/integration tests for the harness store infrastructure.
 //!
 //! Covers the durable substrate that outlives a single run: key-value stores
-//! (in-memory, file-backed with path-traversal guards), append-only journals
-//! (offset semantics, retention/eviction, JSONL durability), the store
-//! registry.
+//! (in-memory and driver-backed), append-only journals (offset semantics,
+//! retention/eviction, driver durability), the store registry.
 //!
-//! Deterministic and offline. File-backed cases use a unique temp directory.
+//! Deterministic and offline. Durable cases use a SQLite database in a unique
+//! temp directory.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde_json::json;
 use tinyagents_harness::store::{
-    AppendStore, FileStore, InMemoryAppendStore, InMemoryStore, JsonlAppendStore, Store,
+    AppendStore, DriverAppendStore, DriverStore, InMemoryAppendStore, InMemoryStore, Store,
     StoreRegistry,
 };
 
-/// A process-unique temp directory for file-backed cases.
-fn temp_dir(tag: &str) -> PathBuf {
-    let mut dir = std::env::temp_dir();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    dir.push(format!("tinyagents_feature_infra_{tag}_{nanos}"));
-    dir
-}
+mod common;
+use common::storage;
 
 // ── Store: key-value semantics ──────────────────────────────────────────────
 
@@ -55,17 +48,17 @@ async fn in_memory_store_round_trips_namespaced_values() {
 }
 
 #[tokio::test]
-async fn file_store_persists_and_survives_reopen() {
-    let dir = temp_dir("filestore");
+async fn driver_store_persists_and_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
     {
-        let store = FileStore::new(&dir);
+        let store = DriverStore::new(storage::docs(&storage::sqlite(dir.path(), "kv.sqlite")));
         store
             .put("threads", "t1", json!({"msg": "hi"}))
             .await
             .unwrap();
     }
-    // A fresh handle over the same root sees the durable value.
-    let reopened = FileStore::new(&dir);
+    // A fresh handle over the same database sees the durable value.
+    let reopened = DriverStore::new(storage::docs(&storage::sqlite(dir.path(), "kv.sqlite")));
     assert_eq!(
         reopened.get("threads", "t1").await.unwrap(),
         Some(json!({"msg": "hi"}))
@@ -74,20 +67,21 @@ async fn file_store_persists_and_survives_reopen() {
         reopened.list("threads").await.unwrap(),
         vec!["t1".to_string()]
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
-async fn file_store_rejects_path_traversal_names() {
-    let dir = temp_dir("traversal");
-    let store = FileStore::new(&dir);
-    // `..` and slashes must be rejected to keep writes inside the root.
-    assert!(store.get("..", "k").await.is_err());
-    assert!(store.put("ns", "../escape", json!(1)).await.is_err());
-    assert!(store.get("ns", "a/b").await.is_err());
-    // Empty names are rejected too.
-    assert!(store.put("", "k", json!(1)).await.is_err());
-    let _ = std::fs::remove_dir_all(&dir);
+async fn driver_store_accepts_any_namespace_and_key_without_path_semantics() {
+    let store = DriverStore::new(storage::docs(&storage::memory()));
+    // Names that a filesystem store had to reject are ordinary data here, and
+    // two different (namespace, key) pairs never collide.
+    store.put("..", "k", json!(1)).await.unwrap();
+    store.put("ns", "../escape", json!(2)).await.unwrap();
+    store.put("a/b", "c", json!(3)).await.unwrap();
+    store.put("a", "b/c", json!(4)).await.unwrap();
+    assert_eq!(store.get("..", "k").await.unwrap(), Some(json!(1)));
+    assert_eq!(store.get("ns", "../escape").await.unwrap(), Some(json!(2)));
+    assert_eq!(store.get("a/b", "c").await.unwrap(), Some(json!(3)));
+    assert_eq!(store.get("a", "b/c").await.unwrap(), Some(json!(4)));
 }
 
 // ── AppendStore: journal semantics ──────────────────────────────────────────
@@ -131,20 +125,20 @@ async fn append_store_retention_evicts_oldest_but_keeps_offsets_monotonic() {
 }
 
 #[tokio::test]
-async fn jsonl_append_store_is_durable_across_handles() {
-    let dir = temp_dir("jsonl");
-    let store = JsonlAppendStore::new(&dir);
+async fn driver_append_store_is_durable_across_handles() {
+    let dir = tempfile::tempdir().unwrap();
+    let streams = || Arc::clone(storage::sqlite(dir.path(), "journal.sqlite").streams());
+    let store = DriverAppendStore::new(streams());
     assert_eq!(store.append("run1", json!({"i": 0})).await.unwrap(), 0);
     assert_eq!(store.append("run1", json!({"i": 1})).await.unwrap(), 1);
 
-    // A fresh handle learns the length from disk and reads entries back.
-    let reopened = JsonlAppendStore::new(&dir);
+    // A fresh handle learns the length from the database and reads entries back.
+    let reopened = DriverAppendStore::new(streams());
     assert_eq!(reopened.len("run1").await.unwrap(), 2);
     let entries = reopened.read_from("run1", 1).await.unwrap();
     assert_eq!(entries, vec![(1, json!({"i": 1}))]);
     // The next append continues the offset sequence.
     assert_eq!(reopened.append("run1", json!({"i": 2})).await.unwrap(), 2);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── StoreRegistry ───────────────────────────────────────────────────────────

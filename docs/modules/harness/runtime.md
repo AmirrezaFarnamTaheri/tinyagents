@@ -101,9 +101,9 @@ Detailed lifecycle:
 12. If tool calls exist, validate name, schema, and limits.
 13. Run `before_tool` middleware per call.
 14. Execute tools — concurrently only when *all* of: the turn has two or more
-    calls, zero tool-wrap (`ToolMiddleware`) middleware is registered (wrap
-    middleware holds `&mut RunContext` across each call, so it forces the
-    serial path), and every call's tool reports `is_concurrency_safe() ==
+    calls, every registered tool-wrap (`ToolMiddleware`) reports
+    `concurrent_safe() == true` (wraps take `&RunContext` and run inside each
+    concurrent call; `false` forces the serial path), and every call's tool reports `is_concurrency_safe() ==
     true` (the trait default is `false`, so concurrency is opt-in per tool);
     see `should_execute_tools_concurrently` in
     `crates/tinyagents-harness/src/agent_loop/tools.rs`. Lifecycle middleware
@@ -114,15 +114,12 @@ Detailed lifecycle:
     `RunLimits::max_tool_concurrency` (`futures::stream::iter(..)
     .buffered(n)`; `None`, the default, is unbounded). Results always fold
     back in original call order.
-15. `on_tool_delta` middleware exists on the `Middleware` trait and
-    `MiddlewareChain::run_on_tool_delta` is implemented, but the agent loop
-    does not call it yet — no tool progress stream is wired up today.
-16. Run `after_tool` middleware per result.
-17. Append tool messages.
-18. Repeat until no tool calls remain.
-19. Validate structured output if configured.
-20. Registered host middleware may persist short-term memory.
-21. Emit final event and return `AgentRun`.
+15. Run `after_tool` middleware per result.
+16. Append tool messages.
+17. Repeat until no tool calls remain.
+18. Validate structured output if configured.
+19. Registered host middleware may persist short-term memory.
+20. Emit final event and return `AgentRun`.
 
 Hard limits:
 
@@ -140,6 +137,26 @@ A per-call ceiling (`RunLimits::max_model_call_ms`) firing raises
 against the fallback chain (the model wedged, not the run), while `Timeout`
 is terminal (the run itself is out of wall-clock budget).
 
+Streaming model calls also have an inactivity timeout
+(`RunLimits::stream_idle_timeout_ms`, default 120 s, `None`/`Some(0)`
+disables). It applies only **after the first output event** and is a deadline
+that each further output event pushes to `now + idle`; the stream-opened marker
+and usage updates never extend it. Before the first output event there is no
+separate bound by default (`stream_first_event_timeout_ms: None`), because
+hidden-reasoning models and local CPU prefill are legitimately silent for many
+minutes: that wait is limited only by `max_model_call_ms` and the run deadline.
+Set `Some(ms)` to opt in to a first-output bound. A stream that goes silent
+fails with a retryable `CallTimeout`, so the normal retry/fallback path
+applies. After `RunLimits::max_consecutive_stream_idle_timeouts` (default 5,
+`None`/`Some(0)` disables) idle timeouts in a row on one model (since its last
+output event) the circuit breaker stops retrying that model with
+`TinyAgentsError::StreamIdleTimeout`; the fallback chain is still consulted with a
+fresh count per model, and the run fails with that error only when the chain is
+exhausted. Because any output event resets the count, the breaker is aimed at
+streams that stall before producing output (pair it with
+`stream_first_event_timeout_ms`). Non-streaming calls are bounded by
+`max_model_call_ms` only.
+
 Step 12's text-dialect recovery (parsing `<tool_call>`-style markup out of
 an assistant's visible text through the `tinytools-agent` grammars, both on
 the streamed deltas and on the terminal response) always runs under a forced
@@ -150,9 +167,10 @@ protocol. Under a native dialect it is gated by
 `RunPolicy::text_dialect_recovery` (`TextDialectRecovery::Off | On | Auto`,
 default `Auto`): it only runs when the resolved model's profile does not
 report native tool calling, and it always skips markup that appears only
-inside a fenced code block. A model that quotes the syntax while explaining
-it (or answers under a model that *does* support native tool calling) is
-never executed as a real call.
+inside a fenced code block. Streaming exception (openhuman#6733): `Auto`
+still recovers a native model's chat-template special tokens (DeepSeek DSML,
+`<|tool_call>`) and scrubs its other markup unrun; `Off` recovers nothing.
+Under `Auto`, a native model's quoted plain markup is never run as a call.
 
 Every safe checkpoint above — before a model call is dispatched, after the
 model response, and after tool execution — also drains any pending
@@ -215,7 +233,9 @@ run is in flight, and the loop drains them only at safe boundaries:
 `RunPolicy::queue_mode` picks how many items a boundary takes:
 `QueueMode::All` (default) applies every pending item; `OneAtATime` applies
 the oldest and leaves the rest for the next boundary. Each application emits
-`AgentEvent::QueuedMessageApplied { lane, count }`. A "natural finish" is
+`AgentEvent::QueuedMessageApplied { lane, count, first_index, messages }` (`messages` follows the
+capture policy per message: `tool` messages under `PayloadCapture::tool_io`,
+all others under `PayloadCapture::model_io`). A "natural finish" is
 the model producing a final answer (including a structured-output finish
 under `EndStrategy::Early`/`Graceful`); a middleware `StopWithFinal` /
 `JumpTo(End)`, a limit stop, a pause, or a deferral is terminal and leaves
@@ -435,10 +455,10 @@ pub enum StoreValue {
 Initial store backends:
 
 - `InMemoryStore`: deterministic tests and examples.
-- `JsonlStore`: append-only local development, replayable event logs, and cheap
+- `DriverAppendStore`: append-only event streams on any driver backend, replayable event logs, and cheap
   debugging.
-- `FileStore`: local artifacts such as tool outputs, provider payload snapshots,
-  and prompt fixtures.
+- `DriverStore`: durable keyed values (artifacts such as tool outputs, provider payload snapshots,
+  and prompt fixtures).
 - `MongoStore`: durable application/runtime records for server deployments.
 
 Later store backends:
@@ -464,9 +484,9 @@ Backend selection should be per store namespace:
 
 ```rust
 let stores = StoreRegistry::new()
-    .register("events", JsonlStore::new("./data/events.jsonl"))
+    .register("events", DriverAppendStore::new(streams))
     .register("threads", MongoStore::new(mongo, "threads"))
-    .register("artifacts", FileStore::new("./data/artifacts"));
+    .register("artifacts", DriverStore::new(docs));
 ```
 
 Store events should flow through `harness::events` or the registry event bus:

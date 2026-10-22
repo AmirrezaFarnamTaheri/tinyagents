@@ -31,7 +31,9 @@ mod types;
 
 #[cfg(test)]
 pub(crate) use agent::HostInvocationAuthority;
-pub use agent::{AgentInvocation, AgentStream, AgentTurnRequest, HostedError, HostedErrorKind};
+pub use agent::{
+    AgentInvocation, AgentStream, AgentTurnRequest, HostedError, HostedErrorKind, TimeoutBound,
+};
 pub(crate) use agent::{ErasedHostAuthority, emit_host_progress, host_invocation_binding};
 pub use types::*;
 
@@ -45,6 +47,17 @@ use crate::model_registry::ModelRegistry;
 use crate::tool::{ToolDispatch, ToolRegistry, ToolTimeoutSettings};
 use tinyinference_llm::model::ChatModel;
 use tinytools::Tool;
+
+/// Installs a host-selected recursion ceiling without widening the active
+/// [`RunPolicy`] limit.
+pub fn install_depth<State: Send + Sync, Ctx: Send + Sync>(
+    harness: &mut AgentHarness<State, Ctx>,
+    max_depth: usize,
+) {
+    let mut policy = harness.policy().clone();
+    policy.limits.max_depth = policy.limits.max_depth.min(max_depth);
+    harness.with_policy(policy);
+}
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Creates an empty harness with default policy and no models, tools, or
@@ -411,4 +424,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> Default for AgentHarness<State, Ctx> 
 }
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;
+
+#[cfg(test)]
+#[path = "mod_authorization_context_tests.rs"]
+mod authorization_context_tests;

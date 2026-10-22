@@ -176,6 +176,16 @@ pub enum ScreenOutcome { Pass, Redacted(String), Block { reason: String } }
 in OpenHuman) stays entirely host-side; the runtime only sees the resolved
 answer and never learns there was a human in the loop.
 
+The current harness also offers `authorize_tool_with_context`, a
+source-compatible default that calls `authorize_tool`. When a tool prepares
+host facts, the harness supplies an invocation-bound envelope with
+`tool_name`, the original `request_arguments`, validated
+`effective_arguments`, and opaque `tool_facts`. The harness constructs this
+envelope after validation; model arguments cannot replace it. Indirect calls
+are bound to one concrete target before authorization and reuse that target for
+execution. Hosts should validate the envelope's tool name and arguments before
+trusting its facts.
+
 ### 3.5 `BudgetGate`
 
 ```rust
@@ -252,7 +262,9 @@ pub trait ModelResolver<State: Send + Sync>: Send + Sync {
 ```
 
 `ModelResolveRequest` carries `agent_id`, `role`, `is_team_lead` and
-`model_pin`. The last was added by issue #89: `AgentDefinition.model` is
+`model_pin`, and optional `model_hint`. Exact `ModelSpec` values populate
+`model_pin`; Hint values populate `model_hint`, keeping routing aliases out
+of the concrete pin channel. The pin was added by issue #89: `AgentDefinition.model` is
 documented as the model an agent pins, and there was previously no field for it
 on the request, leaving `role` as the only string a wiring author could reach
 for. A host resolver reasonably reads `role` as a role vocabulary, so a model id

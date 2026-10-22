@@ -18,6 +18,15 @@
 //! lands every graph step, node, model generation, and tool call under one
 //! Langfuse trace — full end-to-end telemetry including tool health.
 //!
+//! # Langfuse v4
+//!
+//! Langfuse v4 ingests traces only over OTLP. [`GraphLangfuseExporter::send_observations_otlp`]
+//! converts the batch with the harness `trace_export::ingestion_otlp`
+//! projection, which copies trace-level attributes onto every span and keeps
+//! the deterministic observation ids as span ids, so the unified-trace
+//! nesting above holds on v4 too. The batch methods remain for inspection and
+//! for Langfuse deployments still on the legacy path.
+//!
 //! The exporter is pull-based and best-effort by construction: build the batch
 //! from a completed (or in-progress) observation slice read back from a
 //! [`GraphEventJournal`](crate::GraphEventJournal), then send it. It does
@@ -33,6 +42,7 @@ use crate::observability::{GraphHealthSummary, GraphObservation};
 use crate::stream::GraphEvent;
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::ids::NodeId;
+use tinyagents_harness::observability::trace_export::ingestion_otlp::ingestion_batch_otlp_requests;
 use tinyagents_harness::observability::{LangfuseClient, LangfuseTraceConfig, clean_nulls, iso_ms};
 
 /// A FIFO queue of pending span starts, each `(observation index, ts_ms)`.
@@ -45,6 +55,9 @@ type StartQueue = VecDeque<(usize, u64)>;
 /// `None` (or an empty map) contributes nothing. Host keys are merged **over**
 /// the exporter's built-in coordinate keys, so a host can also override them.
 pub type SpanMetadataFn = dyn Fn(&GraphObservation) -> Option<Map<String, Value>> + Send + Sync;
+
+mod batch;
+pub use batch::build_graph_langfuse_batch;
 
 /// Async Langfuse exporter for durable graph observations.
 ///
@@ -118,44 +131,47 @@ impl GraphLangfuseExporter {
         trace: LangfuseTraceConfig,
         observations: &[GraphObservation],
     ) -> Result<Value> {
-        if observations.is_empty() {
-            return Err(TinyAgentsError::Validation(
-                "at least one observation is required".to_string(),
-            ));
-        }
-        let trace_id = resolve_trace_id(&trace, observations);
-        let first = &observations[0];
-        let trace_ts = iso_ms(first.ts_ms);
-        let health = GraphHealthSummary::from_observations(observations);
-
-        let mut batch = Vec::with_capacity(observations.len() + 2);
-        batch.push(trace_create(&trace_id, &trace_ts, &trace, first, &health));
-
-        // A structural span for the graph run itself, sitting directly under the
-        // trace. Every step, subgraph, and point event nests under it, and — key
-        // for a unified trace — its id follows the same `{trace}:run:{run_id}`
-        // scheme the harness exporter parents its run spans to. A sub-agent that
-        // a graph node spawns carries `parent_run_id == graph run id`, so its
-        // harness-exported run span nests directly under this graph-run span
-        // rather than floating at the trace root.
-        let run_parent = run_span_id(&trace_id, first.root_run_id.as_str());
-        batch.push(graph_run_span(&trace_id, &run_parent, observations, first));
-
-        let mut consumed = vec![false; observations.len()];
-        push_span_events(
-            &trace_id,
-            &run_parent,
-            observations,
-            &mut consumed,
-            &mut batch,
-            self.span_metadata_fn.as_deref(),
-        );
-        push_point_events(&trace_id, &run_parent, observations, &consumed, &mut batch);
-
-        Ok(json!({ "batch": batch }))
+        build_graph_langfuse_batch(trace, observations, self.span_metadata_fn.as_deref())
     }
 
-    /// Sends `observations` as one Langfuse ingestion batch.
+    /// Builds the Langfuse v4 OTLP/HTTP JSON requests for `observations`
+    /// without sending them: the trace of [`Self::build_ingestion_batch`],
+    /// with trace name, session, tags, metadata (including node health) and
+    /// release copied onto every span, under resource `service.name =
+    /// service` and scope `<service>.graph`.
+    pub fn build_otlp_requests(
+        &self,
+        trace: LangfuseTraceConfig,
+        observations: &[GraphObservation],
+        service: &str,
+    ) -> Result<Vec<Value>> {
+        let payload = self.build_ingestion_batch(trace, observations)?;
+        ingestion_batch_otlp_requests(&payload, service, &format!("{service}.graph"))
+    }
+
+    /// Sends `observations` to Langfuse v4 over OTLP
+    /// ([`Self::build_otlp_requests`] through
+    /// [`LangfuseClient::send_otlp`]), stopping at the first failed request.
+    /// Prefer this over [`Self::send_observations`]: Langfuse v4 no longer
+    /// accepts traces on the legacy batch path.
+    pub async fn send_observations_otlp(
+        &self,
+        trace: LangfuseTraceConfig,
+        observations: &[GraphObservation],
+        service: &str,
+    ) -> Result<Vec<Value>> {
+        let requests = self.build_otlp_requests(trace, observations, service)?;
+        let mut responses = Vec::with_capacity(requests.len());
+        for request in requests {
+            responses.push(self.client.send_otlp(request).await?);
+        }
+        Ok(responses)
+    }
+
+    /// Sends `observations` as one legacy Langfuse ingestion batch.
+    ///
+    /// Langfuse Cloud removes this path for traces on 2026-11-16; use
+    /// [`Self::send_observations_otlp`].
     pub async fn send_observations(
         &self,
         trace: LangfuseTraceConfig,
@@ -640,4 +656,5 @@ fn pop<K: std::hash::Hash + Eq>(
 }
 
 #[cfg(test)]
+#[path = "langfuse/langfuse_tests.rs"]
 mod test;

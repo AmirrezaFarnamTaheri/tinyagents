@@ -1,5 +1,16 @@
 # Harness Module Specification
 
+Hosts that expose a conversation-level reasoning choice can keep it in a
+caller-owned `ThreadReasoningStore`, keyed by `ThreadId`. At the beginning of a
+turn, call `reasoning_for_turn` once and place the returned config in that
+turn's `RunPolicy::default_reasoning`. This snapshots the preference for the
+turn; later changes apply to the next turn, and request-level reasoning still
+wins. The host remains responsible for deciding which invocations consume the
+snapshot, such as applying it only to root turns. The store is instance-scoped:
+cloned handles share it, while separate stores do not. The interactive
+`AGENT_TURN_MAX_OUTPUT_TOKENS` constant is available to hosts that explicitly
+want output-room budgeting; it does not change `RunPolicy` defaults.
+
 The harness is the orchestration layer around LLM calls. It owns model
 registration, tool registration, prompt assembly, middleware, event streaming,
 tracing, retries, limits, summarization, caching, usage accounting,
@@ -167,7 +178,7 @@ crates/tinyagents-harness/src/
   retry.rs
   run_queue/
     mod.rs
-    test.rs
+    mod_tests.rs
     types.rs
   runtime.rs
   steering.rs
@@ -240,9 +251,13 @@ Feature details:
 - [Prompt feature](prompt.md)
 - [Tool feature](tool.md)
 - [Tool execution context and rich returns (B1/B2)](tool-context.md)
+- [Nested tool calls (C9)](nested-tool-calls.md)
 - [Tool exposure, discovery, and schema budgets](tool-discovery.md)
+- [Tool rules: allow / deny / hide / approval patterns](tool-rules.md)
 - [Tool dialects](tool-dialect.md)
 - [Middleware feature](middleware.md)
+- [Repeat-progress guard](repeat-progress.md)
+- [Terminal outcome and turn/message lifecycle events](terminal-outcome.md)
 - [Sub-agent and orchestrator steering](subagent-steering.md)
 - [Structured output feature](structured-output.md)
 - [Limits, retry, fallback, and rate limiting](limits-retry.md)
@@ -419,3 +434,14 @@ and durable state when configured.
 Continues in [`runtime.md`](runtime.md) (tool registry, agent loop,
 middleware, host-owned state, and stores) and [`observability-overview.md`](observability-overview.md)
 (structured output, events/streaming, errors, testkit, milestones).
+
+Ephemeral corrections use `EphemeralInstructionQueue`: producers bind each
+instruction to a context instance, and its middleware consumes the queue once
+on the next model-request copy. Terminal hooks clear pending corrections;
+admission reclaims dropped contexts. Corrections never enter durable history.
+See [the queue lifecycle](../../../crates/tinyagents-harness/src/middleware/library/ephemeral_instructions/README.md).
+
+## After-model stop policies
+
+The [stop-hook contract](stop-hooks.md) provides ordered policies over generic
+completed-call metrics, with per-context accounting and pause delivery.

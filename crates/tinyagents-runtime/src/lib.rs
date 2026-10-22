@@ -6,21 +6,35 @@
 //! crate deliberately has no host configuration or product dependencies.
 
 mod builder;
+mod capability_projection;
+pub use tinyagents_hooks::command as command_hooks;
 mod driver;
 mod error;
 mod hooks;
+mod managed_tools;
+mod permanent_tool;
 mod prefix;
 mod session;
+mod tool_registration;
 mod tools;
+pub mod transcript;
+pub mod turn_driver;
 mod types;
 
 pub use builder::SessionBuilder;
+pub use capability_projection::{project_descriptors, register_admitted_projected};
 pub use driver::{DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, SessionDriver};
 pub use error::RuntimeError;
-pub use hooks::{NoopSessionHooks, SessionHooks};
+pub use hooks::{FnSessionHooks, NoopSessionHooks, SessionHookFuture, SessionHooks};
+pub use managed_tools::{ManagedToolNames, refresh_prefix, reject_synthesized_collisions};
+pub use permanent_tool::PermanentTool;
 pub use prefix::PrefixSnapshot;
 pub use session::Session;
 pub use tinyagents_session::transcript::TranscriptPartial;
+pub use tool_registration::{
+    RegistrationPlan, ToolAdmission, ToolRegistration, ToolSurfaceDiff, plan_registration,
+    register_admitted, tool_surface_diff,
+};
 pub use tools::ToolSnapshot;
 pub use types::{
     CommitReceipt, ResumeMode, ResumePreparation, SessionResume, SessionStateView, SessionTerminal,
@@ -55,7 +69,15 @@ pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
         previous: &[tinyinference_llm::message::Message],
         next: &[tinyinference_llm::message::Message],
         options: &TranscriptTurnOptions<C>,
-    ) -> Result<Vec<tinyagents_session::transcript::TranscriptMessage>, RuntimeError>;
+    ) -> Result<Vec<tinyagents_session::transcript::TranscriptMessage>, RuntimeError> {
+        Ok(crate::transcript::reconcile_native_transcript(
+            prior,
+            previous,
+            next,
+            options.request_id.as_deref(),
+        )
+        .rows)
+    }
 
     /// Returns host-derived provider usage for this transition, if available.
     ///
@@ -75,4 +97,10 @@ pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
 }
 
 #[cfg(test)]
+#[path = "codec_tests.rs"]
+mod codec_tests;
+#[cfg(test)]
+#[path = "lib_tests.rs"]
 mod test;
+#[cfg(test)]
+mod test_store;

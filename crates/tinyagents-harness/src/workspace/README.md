@@ -30,7 +30,11 @@ default and a real git-worktree-backed implementation.
   - [`GitWorktreeIsolation`] — a real `WorkspaceIsolation` implementation:
     each run gets its own `git worktree` checkout under
     `<repo>/.claude/worktrees/<run_id>`. Builder methods:
-    `with_base_ref`, `with_sandbox`, `with_trusted_root`.
+    `with_base_ref`, `with_sandbox`, `with_trusted_root`,
+    `with_policy_id_prefix`, and `with_lifecycle_hook`.
+  - [`GitWorktreeLifecycleHook`] — host callbacks after preparation and
+    cleanup, allowing host-specific audit events without duplicating git
+    lifecycle behavior.
   - [`GitWorktreeBaseRef`] — which ref a new worktree branches from (`Head` or
     `Fresh`, i.e. the repo's default branch).
   - [`GitWorktreeStatus`] — a snapshot (`path`, `branch`, `is_dirty`,
@@ -53,8 +57,8 @@ default and a real git-worktree-backed implementation.
 | `types.rs` | The `WorkspaceIsolation` trait. |
 | `policy.rs` | `enforce_workspace_path`, the fail-closed path gate (paired with the descriptor's lexical `allows` check, which lives in `tinytools`). |
 | `git.rs` | `GitWorktreeIsolation` and the standalone git-worktree management functions. |
-| `git/test.rs` | Tests for the git-worktree isolation provider (spawns real `git` subprocesses against a temp repo). |
-| `test.rs` | Tests for the descriptor-allows and `SharedRootWorkspace`/event-emission hooks. |
+| `git/git_tests.rs` | Tests for the git-worktree isolation provider (spawns real `git` subprocesses against a temp repo). |
+| `mod_tests.rs` | Tests for the descriptor-allows and `SharedRootWorkspace`/event-emission hooks. |
 
 ## Operational constraints
 

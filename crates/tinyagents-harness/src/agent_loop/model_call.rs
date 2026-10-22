@@ -19,9 +19,35 @@ pub(super) const PER_CALL_BOUND_LABEL: &str = "per-model-call ceiling";
 use super::*;
 use crate::cache::{CacheSkipReason, apply_prompt_cache_breakpoints, scoped_cache_key};
 use crate::no_progress::StreamTextStallDetector;
+use crate::retry::{FailoverDecision, FailoverReason, FailoverState, decide};
 use tinyinference_llm::cache::CachePolicy;
 
+/// Converts a configured stream window to a [`Duration`]. `None` and a zero
+/// window both mean "no bound": a zero-length window would fail every stream
+/// before it could deliver anything.
+fn positive_window(ms: Option<u64>) -> Option<Duration> {
+    ms.filter(|ms| *ms > 0).map(Duration::from_millis)
+}
+
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    /// Previews which model `request` would reach through the local
+    /// [`crate::model_registry::ModelRegistry`] and returns its capability
+    /// profile, without dispatching anything.
+    ///
+    /// A pure registry lookup (no network call), so it is cheap enough to run
+    /// before every `before_model` pass and before every tool-change patch.
+    /// `None` when nothing resolves or the model advertises no profile. A
+    /// Hosted runs use their resolver for the profile shown to middleware;
+    /// this local preview is only their initial fallback.
+    pub(super) fn preview_model_profile(
+        &self,
+        request: &ModelRequest,
+    ) -> Option<tinyinference_llm::model::ModelProfile> {
+        self.models
+            .resolve_request(request, None, None)
+            .and_then(|binding| binding.model.profile().cloned())
+    }
+
     /// Resolves the model binding through the host's routing authority when
     /// this run is a hosted invocation; returns `None` for a plain SDK run so
     /// the caller falls through to local [`crate::model_registry::ModelRegistry`]
@@ -55,14 +81,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         if let Some(pin) = request.model.clone().or(host_run.model_pin.clone()) {
             resolve = resolve.with_model_pin(pin);
+        } else if let Some(hint) = host_run.model_hint.clone() {
+            resolve = resolve.with_model_hint(hint);
         }
         if let Some(capabilities) = request.required_capabilities.clone() {
             resolve = resolve.with_required_capabilities(capabilities);
         }
         let resolution = host_run.host.models.resolve(&resolve);
         let (budget, bound) = self.model_call_budget(ctx);
+        // Set only when the wrapper's own deadline fires, so a `Timeout` the
+        // resolver itself returned is never mistaken for the per-call ceiling.
+        let wrapper_expired = std::sync::atomic::AtomicBool::new(false);
         let model = ctx
             .bounded(budget, resolution, || {
+                wrapper_expired.store(true, std::sync::atomic::Ordering::SeqCst);
                 format!(
                     "host model resolution for run `{}` exceeded its {bound}",
                     ctx.run_id()
@@ -70,7 +102,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             })
             .await
             .map_err(|error| match error {
-                TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
+                // `RunContext::bounded` always reports `Timeout`; when the
+                // per-model-call ceiling was the tighter bound, surface it as
+                // `CallTimeout` so the run is not mistaken for out of time.
+                TinyAgentsError::Timeout(message)
+                    if wrapper_expired.load(std::sync::atomic::Ordering::SeqCst)
+                        && bound == PER_CALL_BOUND_LABEL =>
+                {
+                    TinyAgentsError::CallTimeout(message)
+                }
+                TinyAgentsError::Cancelled
+                | TinyAgentsError::Timeout(_)
+                | TinyAgentsError::CallTimeout(_) => error,
                 _ => {
                     tracing::warn!(agent_id = %host_run.agent_id, "[host] model resolution failed");
                     TinyAgentsError::Model("host model resolution failed".to_string())
@@ -277,6 +320,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             request
         };
 
+        // The provider is reached only past the cache lookup and the wrap
+        // onion, so a cache hit or a short-circuiting middleware never claims
+        // `provider_started`.
+        ctx.mark_provider_started();
         let response = self
             .invoke_model_resolving(state, ctx, effective_request, call_id, binding, shape)
             .await?;
@@ -341,7 +388,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             && response.continue_turn.is_none()
             && response.message.tool_calls.is_empty()
             && response.text().trim().is_empty()
-            && response.finish_reason.as_deref() != Some("length")
+            && !crate::finish_reason::is_length_stop(response.finish_reason.as_deref())
             && response.finish_reason.as_deref() != Some("tool_calls")
     }
 
@@ -562,6 +609,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut model = binding.model;
         let mut resolved = binding.resolved;
         let run_id = ctx.run_id().clone();
+        // The request each attempt sends. `request.model` is the wire-level
+        // override providers such as the Claude CLI adapters honour, so it must
+        // always name the binding actually being called: every fallback
+        // rebinding below retargets it, or a fallback would re-ask the model
+        // that just failed while events report the fallback's name.
+        let mut attempt_request = request.clone();
         // Tracks every model name already attempted in this fallback chain so
         // a chain containing a repeated name (e.g. `[primary, backup,
         // primary]`) cannot alternate between the same two models forever;
@@ -569,9 +622,43 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
         visited.insert(current_name.clone());
 
+        // Cross-call skip hint: a model that already failed with a permanent
+        // credential error earlier in this run is not asked again while a
+        // fallback can answer instead. With no eligible fallback it is tried
+        // anyway — failing again is better than refusing to try.
+        if ctx.limits.is_model_skipped(&current_name)
+            && crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_none()
+            && let Some((name, next_model)) =
+                self.select_fallback(ctx, request, &current_name, &mut visited, None)
+        {
+            tracing::debug!(
+                call_id = %call_id.as_str(),
+                skipped = %current_name,
+                to = %name,
+                "[failover] skipping a model written off earlier in this run"
+            );
+            ctx.emit(AgentEvent::FallbackSkipped {
+                model: current_name.clone(),
+            });
+            // The substitute counts as tried, like every fallback taken in the
+            // loop below, so a repeated chain entry cannot select it twice.
+            visited.insert(name.clone());
+            resolved = ResolvedModel {
+                name: name.clone(),
+                requested: Some(name.clone()),
+                source: ModelResolutionSource::Hint,
+            };
+            retarget_request_model(&mut attempt_request, &name);
+            current_name = name;
+            model = next_model;
+        }
+
         loop {
             // Retry loop for the current model.
             let mut attempt = 0usize;
+            // Track the source of a limit error explicitly. The idle breaker
+            // may send its own limit error through fallback, while all other
+            // limit errors remain terminal regardless of the timeout count.
             // Counts the deltas the *current* streaming attempt has already
             // handed to consumers. A stream that dies after 200 tokens has
             // already delivered them; the retry replays from scratch, so a UI
@@ -603,9 +690,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         state,
                         ctx,
                         &model,
-                        request,
+                        &attempt_request,
                         call_id,
                         &mut deltas_emitted,
+                        &current_name,
                         shape,
                     );
                     Self::with_call_budget(remaining, run_id.as_str(), "model call", bound, fut)
@@ -620,10 +708,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // cancel-safe, and the pre-call `is_cancelled()` check above
                     // still short-circuits before the request is ever issued.
                     let fut = async {
-                        model
-                            .invoke(state, request.clone())
-                            .await
-                            .map_err(TinyAgentsError::from)
+                        let (result, refusal) = crate::cost::with_dispatch_outcome_scope(
+                            model.invoke(state, attempt_request.clone()),
+                        )
+                        .await;
+                        match refusal {
+                            Some(refusal) => {
+                                Err(TinyAgentsError::PhysicalDispatchAdmission(refusal))
+                            }
+                            None => result.map_err(TinyAgentsError::from),
+                        }
                     };
                     let budgeted = Self::with_call_budget(
                         remaining,
@@ -644,6 +738,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 match attempt_result {
                     Ok(response) => break Ok(response),
                     Err(error) => {
+                        // Provider and run-budget refusals are terminal: a
+                        // retry or another model cannot make the exhausted
+                        // budget available again.
+                        if error.is_terminal_limit() {
+                            break Err(error);
+                        }
+                        // The breaker outranks retry, not fallback: a model
+                        // that keeps going silent is not retried again, but
+                        // the chain below may still reach a healthy model.
+                        // Only when the chain is exhausted does the run fail
+                        // with the breaker's error.
+                        if matches!(error, TinyAgentsError::CallTimeout(_))
+                            && let Some(tripped) =
+                                self.stream_idle_breaker_error(ctx, &current_name)
+                        {
+                            break Err(tripped);
+                        }
                         // `RunLimits::max_retries_per_call` is a hard ceiling
                         // that a looser `RetryPolicy::max_attempts` cannot
                         // exceed; whichever is stricter wins.
@@ -668,7 +779,25 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         // uses), applying the harness ceiling by capping a
                         // cloned policy first so the two sites cannot drift.
                         let capped = self.policy.retry.clone().with_max_attempts(max_attempts);
-                        if !retry_overridden && capped.should_retry_error(attempt, &error) {
+                        // Reason-aware failover: *why* the call failed decides
+                        // whether a same-model retry can possibly help (see
+                        // `crate::retry::decide` for the table). A rejected
+                        // credential or a missing model is never re-sent.
+                        let reason = FailoverReason::classify(&error);
+                        let mut failover_state = FailoverState::for_error(&capped, attempt, &error);
+                        if retry_overridden {
+                            failover_state.attempts_remaining = false;
+                        }
+                        let decision = decide(reason, failover_state);
+                        tracing::debug!(
+                            call_id = %call_id.as_str(),
+                            model = %current_name,
+                            attempt,
+                            reason = reason.as_str(),
+                            ?decision,
+                            "[failover] model attempt failed"
+                        );
+                        if decision == FailoverDecision::RetrySame {
                             // Compute the backoff from the *pre-increment*
                             // attempt number: `attempt == 0` is the first
                             // retry and must sleep `initial_backoff_ms`
@@ -726,7 +855,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // back into the fallback chain: the run itself is out of
                     // wall-clock budget, so trying another model would just
                     // spin until the *next* deadline check fails identically.
-                    if matches!(error, TinyAgentsError::Timeout(_)) {
+                    if matches!(error, TinyAgentsError::Timeout(_)) || error.is_terminal_limit() {
                         return Err(error);
                     }
                     // A hosted resolver owns routing authority. Its first
@@ -735,44 +864,55 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     if crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_some() {
                         return Err(error);
                     }
-                    // Retries exhausted (or non-retryable): walk the fallback
-                    // chain for the next model, skipping any name already
-                    // visited in this chain (so a chain with a repeated name
-                    // cannot alternate between the same models forever) and any
-                    // candidate that fails the request's capability/lifecycle
-                    // gate. Initial resolution gates the primary selection
-                    // through `model_eligible`; without the same gate here a
-                    // primary failure could silently fall back to a model that
-                    // can't call tools, lacks vision, or has a smaller context
-                    // window (issue #4641). `allow_retired` is `false` to match
-                    // `ModelRegistry::resolve_request`.
-                    let required = request.required_capabilities.as_ref();
-                    let mut cursor = current_name.clone();
-                    let selected = loop {
-                        let next = self
-                            .policy
-                            .fallback
-                            .as_ref()
-                            .and_then(|fallback| fallback.next_after(&cursor))
-                            .map(str::to_owned)
-                            .filter(|name| !visited.contains(name));
-                        let Some((name, next_model)) =
-                            next.and_then(|name| self.models.get(&name).map(|m| (name, m)))
-                        else {
-                            break None;
-                        };
-                        if !model_eligible(next_model.as_ref(), required, false) {
-                            // Ineligible candidate: record it as visited, make
-                            // the skip observable, and keep walking the chain.
-                            visited.insert(name.clone());
-                            ctx.emit(AgentEvent::FallbackSkipped {
-                                model: name.clone(),
-                            });
-                            cursor = name;
-                            continue;
-                        }
-                        break Some((name, next_model));
-                    };
+                    // Retries are over for this model. Ask the failover table
+                    // whether another model could help. A context overflow is
+                    // the one case that needs a *specific* kind of candidate:
+                    // one whose declared window is strictly larger than this
+                    // model's; with none, it surfaces here so compaction (not a
+                    // lookalike sibling) handles it.
+                    let reason = FailoverReason::classify(&error);
+                    if reason.skips_model_for_run() {
+                        tracing::warn!(
+                            call_id = %call_id.as_str(),
+                            model = %current_name,
+                            reason = reason.as_str(),
+                            "[failover] model written off for the rest of this run"
+                        );
+                        ctx.limits.skip_model_for_run(&current_name);
+                    }
+                    // Unknown current window => no evidence any sibling is
+                    // larger, so nothing qualifies.
+                    let larger_than = (reason == FailoverReason::ContextOverflow).then(|| {
+                        model
+                            .profile()
+                            .and_then(|profile| profile.max_input_tokens)
+                            .unwrap_or(u64::MAX)
+                    });
+                    let selected = self.select_fallback(
+                        ctx,
+                        request,
+                        &current_name,
+                        &mut visited,
+                        larger_than,
+                    );
+                    let decision = decide(
+                        reason,
+                        FailoverState {
+                            retryable: false,
+                            attempts_remaining: false,
+                            larger_window_available: selected.is_some(),
+                        },
+                    );
+                    tracing::debug!(
+                        call_id = %call_id.as_str(),
+                        model = %current_name,
+                        reason = reason.as_str(),
+                        ?decision,
+                        "[failover] model gave up; deciding between fallback and surfacing"
+                    );
+                    if decision == FailoverDecision::Surface {
+                        return Err(error);
+                    }
                     match selected {
                         Some((name, next_model)) => {
                             visited.insert(name.clone());
@@ -781,14 +921,90 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                 requested: Some(name.clone()),
                                 source: ModelResolutionSource::Hint,
                             };
+                            retarget_request_model(&mut attempt_request, &name);
                             current_name = name;
                             model = next_model;
+                            if streaming && deltas_emitted > 0 {
+                                // A fallback starts a fresh response under the
+                                // same call id. RetryScheduled is the existing
+                                // consumer-visible discard marker for partial
+                                // streaming attempts.
+                                ctx.emit(AgentEvent::RetryScheduled {
+                                    call_id: call_id.clone(),
+                                    attempt: attempt + 1,
+                                });
+                            }
                             continue;
                         }
                         None => return Err(error),
                     }
                 }
             }
+        }
+    }
+
+    /// Picks the next fallback model after `cursor`, or `None` when the chain
+    /// is exhausted.
+    ///
+    /// Skips any name already in `visited` (so a chain with a repeated name
+    /// cannot alternate between the same models forever), any model the run has
+    /// written off ([`crate::limits::LimitTracker::is_model_skipped`]) and any
+    /// candidate that fails the request's capability/lifecycle gate. Initial
+    /// resolution gates the primary selection through `model_eligible`; without
+    /// the same gate here a primary failure could silently fall back to a model
+    /// that can't call tools, lacks vision, or has a smaller context window
+    /// (issue #4641). `allow_retired` is `false` to match
+    /// `ModelRegistry::resolve_request`. Every skipped candidate is recorded as
+    /// visited and surfaced as [`AgentEvent::FallbackSkipped`]. With
+    /// `larger_than = Some(n)` a candidate must also declare a
+    /// `max_input_tokens` strictly greater than `n` (context-overflow failover).
+    fn select_fallback(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        request: &ModelRequest,
+        cursor: &str,
+        visited: &mut std::collections::HashSet<String>,
+        larger_than: Option<u64>,
+    ) -> Option<(String, Arc<dyn ChatModel<State>>)> {
+        let required = request.required_capabilities.as_ref();
+        // A steered model outside the chain falls back through the whole
+        // chain (the original primary's), not from a position it lacks.
+        let mut from_chain_head = self.fallback_starts_at_chain_head(ctx, cursor);
+        let mut cursor = cursor.to_owned();
+        loop {
+            let next = self
+                .policy
+                .fallback
+                .as_ref()
+                .and_then(|fallback| {
+                    if std::mem::take(&mut from_chain_head) {
+                        fallback.models.first().map(String::as_str)
+                    } else {
+                        fallback.next_after(&cursor)
+                    }
+                })
+                .map(str::to_owned)
+                .filter(|name| !visited.contains(name));
+            let (name, next_model) =
+                next.and_then(|name| self.models.get(&name).map(|m| (name, m)))?;
+            let written_off = ctx.limits.is_model_skipped(&name);
+            // `larger_than` (context-overflow failover): the candidate must
+            // *declare* a window strictly above the given one.
+            let too_small = larger_than.is_some_and(|floor| {
+                next_model
+                    .profile()
+                    .and_then(|profile| profile.max_input_tokens)
+                    .is_none_or(|window| window <= floor)
+            });
+            if written_off || too_small || !model_eligible(next_model.as_ref(), required, false) {
+                visited.insert(name.clone());
+                ctx.emit(AgentEvent::FallbackSkipped {
+                    model: name.clone(),
+                });
+                cursor = name;
+                continue;
+            }
+            return Some((name, next_model));
         }
     }
 
@@ -856,6 +1072,41 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             (None, Some(cap)) => (Some(cap), PER_CALL_BOUND_LABEL),
             (run, _) => (run, RUN_BOUND_LABEL),
         }
+    }
+
+    /// Returns the breaker error when the idle timeouts since the last output
+    /// event on the current model have reached
+    /// [`RunLimits::max_consecutive_stream_idle_timeouts`][crate::limits::RunLimits::max_consecutive_stream_idle_timeouts].
+    ///
+    /// [`TinyAgentsError::StreamIdleTimeout`] marks a tripped per-model breaker,
+    /// so the caller
+    /// stops retrying this model; the fallback chain is still consulted.
+    fn stream_idle_breaker_error(
+        &self,
+        ctx: &RunContext<Ctx>,
+        model: &str,
+    ) -> Option<TinyAgentsError> {
+        // A zero threshold would trip on the first timeout; treat it as off.
+        let max = self
+            .policy
+            .limits
+            .max_consecutive_stream_idle_timeouts
+            .filter(|max| *max > 0)?;
+        let consecutive = ctx.limits.consecutive_stream_idle_timeouts_for(model);
+        if consecutive < max {
+            return None;
+        }
+        tracing::warn!(
+            run_id = %ctx.run_id(),
+            consecutive_idle_timeouts = consecutive,
+            max,
+            "[stream] idle-timeout breaker tripped; no further retries on this model"
+        );
+        Some(TinyAgentsError::StreamIdleTimeout(format!(
+            "model stream idle-timeout breaker tripped for run `{}`: {consecutive} consecutive \
+             idle timeouts on one model (limit {max}); the provider appears stalled",
+            ctx.run_id()
+        )))
     }
 
     /// Awaits a single call future (model or tool), optionally bounded by
@@ -936,15 +1187,90 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         request: &ModelRequest,
         call_id: &CallId,
         deltas_emitted: &mut usize,
+        model_name: &str,
+        shape: &super::dialect::CallShape,
+    ) -> Result<ModelResponse> {
+        let (result, refusal) =
+            crate::cost::with_dispatch_outcome_scope(self.invoke_model_streaming_once_scoped(
+                state,
+                ctx,
+                model,
+                request,
+                call_id,
+                deltas_emitted,
+                model_name,
+                shape,
+            ))
+            .await;
+        match refusal {
+            Some(refusal) => Err(TinyAgentsError::PhysicalDispatchAdmission(refusal)),
+            None => result,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn invoke_model_streaming_once_scoped(
+        &self,
+        state: &State,
+        ctx: &mut RunContext<Ctx>,
+        model: &Arc<dyn ChatModel<State>>,
+        request: &ModelRequest,
+        call_id: &CallId,
+        deltas_emitted: &mut usize,
+        model_name: &str,
         shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
         let recovery = &shape.recovery;
-        let mut stream = model.stream(state, request.clone()).await?;
+        // Start the first-event window before opening the provider stream so
+        // a provider that hangs while establishing the stream is bounded too.
+        // The same deadline is then used for the first item below, preserving
+        // the configured window across both phases.
+        let cancellation = ctx.cancellation.clone();
+        let first_event_timeout = positive_window(self.policy.limits.stream_first_event_timeout_ms);
+        let first_event_deadline =
+            first_event_timeout.map(|window| tokio::time::Instant::now() + window);
+        let open_stream = async {
+            model
+                .stream(state, request.clone())
+                .await
+                .map_err(TinyAgentsError::from)
+        };
+        let stream_result = async {
+            match first_event_deadline {
+                Some(deadline) => tokio::time::timeout_at(deadline, open_stream)
+                    .await
+                    .map_err(|_| ()),
+                None => Ok(open_stream.await),
+            }
+        };
+        let mut stream = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
+            result = stream_result => match result {
+                Ok(result) => result?,
+                Err(()) => {
+                    let window_ms = first_event_timeout.map_or(0, |window| window.as_millis() as u64);
+                    ctx.limits.record_stream_idle_timeout_for(model_name);
+                    return Err(TinyAgentsError::CallTimeout(format!(
+                        "model stream for run `{}` went idle waiting for the first output event: no event within {window_ms} ms",
+                        ctx.run_id(),
+                    )));
+                }
+            },
+        };
         let mut accumulator = StreamAccumulator::new();
         // Tool-call markup a model narrates as text is held back from live
         // consumers and turned into calls on the terminal response instead.
         // Runs for every provider: native models narrate calls often enough.
-        let mut text_scrubber = recovery.scrubber(call_id);
+        // `special_tokens_only` was decided from the run's primary model. A
+        // fallback that does not report native tool calling gets full
+        // recovery under `Auto`, like any such model (#6733).
+        let mut text_scrubber = recovery.scrubber(call_id).map(|scrubber| {
+            scrubber.special_tokens_only(
+                recovery.special_tokens_only
+                    && model.profile().is_some_and(|profile| profile.tool_calling),
+            )
+        });
         // A terminal `Completed` response usually has richer provider metadata
         // than deltas (message id, usage, tool calls, and route information),
         // but its text is still the raw provider payload.  Keep the text and
@@ -969,26 +1295,91 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .map(|profile| profile.ignore_streamed_leading_whitespace)
             .unwrap_or(false);
 
-        // Clone the cheap token so the cancellation future does not borrow
-        // `ctx` for the duration of the stream loop (the body still needs
-        // `&mut ctx` for events and middleware).
-        let cancellation = ctx.cancellation.clone();
+        // Deadline-based stream watchdog. Before the first output event the
+        // only bound is the opt-in first-event window (none by default: hidden
+        // reasoning and local prefill are legitimately silent for minutes, and
+        // `max_model_call_ms` / the run deadline already bound the call). Once
+        // output arrives, every further output event pushes the deadline to
+        // `now + idle`. Stream-opened markers and usage updates never move it,
+        // so a provider that keeps trickling those cannot hold the call open.
+        let limits = &self.policy.limits;
+        let idle_timeout = positive_window(limits.stream_idle_timeout_ms);
+        let mut armed_window = first_event_timeout;
+        let mut deadline = first_event_deadline;
+        let mut saw_output = false;
+        // Set when an output event arrives; the deadline is advanced at the top
+        // of the next iteration so time spent in delta middleware does not eat
+        // the provider's idle budget.
+        let mut rearm = false;
 
         loop {
+            if rearm {
+                rearm = false;
+                armed_window = idle_timeout;
+                deadline = armed_window.map(|window| tokio::time::Instant::now() + window);
+            }
             // Race the next provider chunk against cooperative cancellation. If
             // cancellation wins we drop the partially consumed stream and unwind
             // with `Cancelled`; the `cancelled()` future is cancel-safe.
-            let mut item = tokio::select! {
+            //
+            // The wait for the next event is also bounded by the watchdog
+            // deadline, so a provider that goes silent fails fast with a
+            // retryable `CallTimeout` instead of holding the call until the
+            // per-call or run deadline.
+            let next_event = async {
+                match deadline {
+                    Some(deadline) => tokio::time::timeout_at(deadline, stream.next())
+                        .await
+                        .map_err(|_| ()),
+                    None => Ok(stream.next().await),
+                }
+            };
+            let next = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => {
                     return Err(TinyAgentsError::Cancelled);
                 }
-                next = stream.next() => match next {
-                    Some(item) => item,
-                    None => break,
-                },
+                next = next_event => next,
             };
-
+            let mut item = match next {
+                Ok(Some(item)) => item,
+                Ok(None) => break,
+                Err(()) => {
+                    let consecutive = ctx.limits.record_stream_idle_timeout_for(model_name);
+                    let phase = if saw_output {
+                        "between output events"
+                    } else {
+                        "waiting for the first output event"
+                    };
+                    let window_ms = armed_window.map_or(0, |window| window.as_millis() as u64);
+                    tracing::warn!(
+                        call_id = %call_id.as_str(),
+                        window_ms,
+                        consecutive_idle_timeouts = consecutive,
+                        phase,
+                        "[stream] model stream idle timeout"
+                    );
+                    return Err(TinyAgentsError::CallTimeout(format!(
+                        "model stream for run `{}` went idle {phase}: no event within {window_ms} ms",
+                        ctx.run_id(),
+                    )));
+                }
+            };
+            // Liveness is judged on what the provider sent, not on what is
+            // left once the scrubber and delta middleware have rewritten it:
+            // a model writing a long tool call as text has every delta
+            // consumed by the scrubber, yet it is plainly producing tokens.
+            // A delta with no payload (empty text, no reasoning, no call)
+            // proves nothing and never counts.
+            let raw_delta_is_output = match &item {
+                ModelStreamItem::MessageDelta(delta) => {
+                    !delta.text.is_empty()
+                        || !delta.reasoning.is_empty()
+                        || delta.tool_call.is_some()
+                }
+                ModelStreamItem::ToolCallDelta(_) => true,
+                _ => false,
+            };
             // Scrub tool-call markup from visible text before anything else
             // sees it; a delta the scrubber empties carries nothing to emit.
             if let (Some(scrubber), ModelStreamItem::MessageDelta(delta)) =
@@ -998,6 +1389,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 delta.text = scrubber.feed(&delta.text);
                 if delta.text.is_empty() && delta.reasoning.is_empty() && delta.tool_call.is_none()
                 {
+                    // Consumed by the scrubber, but still provider output.
+                    saw_output = true;
+                    rearm = true;
+                    ctx.limits.reset_stream_idle_timeouts_for(model_name);
                     continue;
                 }
             }
@@ -1094,6 +1489,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 self.middleware
                     .run_on_model_delta(ctx, state, &mut model_delta)
                     .await?;
+                saw_tool_delta |= model_delta.tool_call.is_some();
                 if model_delta.tool_call.is_some() {
                     stream_stall.reset();
                 } else if stream_stall.observe(&model_delta.content) {
@@ -1155,6 +1551,40 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 *deltas_emitted += 1;
             }
 
+            // Arm the watchdog on provider output: a non-empty raw delta,
+            // measured before scrubbing, leading-whitespace removal and delta
+            // middleware (see `raw_delta_is_output`), so a payload that a
+            // later stage consumed or rewrote still proves the provider is
+            // alive while text a middleware injected into an empty delta does
+            // not. Block-aware adapters do not necessarily emit the
+            // compatibility MessageDelta, so their non-empty payloads count
+            // as progress too.
+            let is_output = match &item {
+                ModelStreamItem::MessageDelta(_) | ModelStreamItem::ToolCallDelta(_) => {
+                    raw_delta_is_output
+                }
+                ModelStreamItem::BlockDelta { delta, .. } => match delta {
+                    tinyinference_llm::model::BlockDelta::Text(text)
+                    | tinyinference_llm::model::BlockDelta::Thinking(text)
+                    | tinyinference_llm::model::BlockDelta::ToolArgs(text) => !text.is_empty(),
+                },
+                ModelStreamItem::BlockEnd { block, .. } => match block {
+                    tinyinference_llm::message::ContentBlock::Text(text)
+                    | tinyinference_llm::message::ContentBlock::Thinking { text, .. }
+                    | tinyinference_llm::message::ContentBlock::RedactedThinking { data: text } => {
+                        !text.is_empty()
+                    }
+                    _ => true,
+                },
+                ModelStreamItem::Completed(_) => true,
+                _ => false,
+            };
+            if is_output {
+                saw_output = true;
+                rearm = true;
+                ctx.limits.reset_stream_idle_timeouts_for(model_name);
+            }
+
             // Reconcile even when nothing ordinary streamed: a response that
             // is *purely* text-dialect tool-call markup suppresses every
             // delta (so `saw_streamed_content` stays false) but still needs
@@ -1163,9 +1593,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // alongside the structured calls the scrubber recovered below,
             // and gets persisted into the transcript to be replayed back to
             // the model next turn.
+            // A withheld call (a turn with no callable tool) was scrubbed the
+            // same way, so its raw markup must not come back from the
+            // terminal text either.
             let scrubber_recovered_calls = text_scrubber
                 .as_ref()
-                .is_some_and(super::dialect::DeltaScrubber::has_calls);
+                .is_some_and(|scrubber| scrubber.has_calls() || scrubber.has_withheld());
             if let ModelStreamItem::Completed(response) = &mut item
                 && (saw_streamed_content || scrubber_recovered_calls)
             {
@@ -1457,14 +1890,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
         request: ModelRequest,
     ) -> BoxModelFuture<'a> {
         Box::pin(async move {
+            // A wrap middleware may return without calling this method;
+            // staged request observers must remain queued in that case.
+            ctx.mark_model_base_called();
             let mut request = request;
-            super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
             let binding = self.rebind(ctx, &request).await?;
+            // Claim the switch only after the wrap onion has elected to call
+            // this base. A wrap middleware may short-circuit with a command or
+            // replacement response without invoking the model at all.
+            self.harness.announce_applied_model_switch(ctx, &request);
+            crate::middleware::library::rehome_ephemeral_system_instructions(
+                &mut request,
+                binding.model.profile(),
+            );
+            super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
             // Dropped-block counts describe the response this call returns.
             // Clear them first (a cache hit makes no attempt), and again on
             // failure: a wrap middleware may answer in place of the failed
             // attempt, and that answer attempted no call.
             self.shape.recovery.dropped.reset();
+            ctx.call_streamed = self.shape.streaming;
             let result = self
                 .harness
                 .invoke_model_with_retry(state, ctx, &request, &self.call_id, binding, &self.shape)
@@ -1482,16 +1927,29 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
 /// Implements [`ToolBaseCall`] over a single resolved [`Tool`] so a
 /// [`crate::middleware::ToolMiddleware`] can wrap the real tool
 /// invocation.
-pub(super) struct ToolCallBase<State: Send + Sync, Ctx: Send + Sync> {
+pub(super) struct ToolCallBase<'h, State: Send + Sync, Ctx: Send + Sync> {
+    /// Services the nested calls the tool makes (C9).
+    pub(super) harness: &'h AgentHarness<State, Ctx>,
+    /// Nesting level of this call: `0` for a model-issued call, `n` for a call
+    /// nested `n` deep.
+    pub(super) level: usize,
     pub(super) dispatch: Arc<dyn crate::tool::ToolDispatch<State, Ctx>>,
     pub(super) options: tinytools::ToolCallOptions,
     pub(super) timeout_settings: Option<crate::tool::ToolTimeoutSettings>,
+    /// Nested-call ids, refusal budget and summaries for this logical call,
+    /// kept across every attempt a wrap middleware makes (retries).
+    pub(super) nested_state: super::nested::NestedState,
+    /// Whether this call already runs under the run-wide nested serialization
+    /// gate, so its own nested calls must not take it again.
+    pub(super) gate_held: super::nested::GateHold,
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCallBase<State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx>
+    for ToolCallBase<'_, State, Ctx>
+{
     fn call<'a>(
         &'a self,
-        ctx: &'a mut RunContext<Ctx>,
+        ctx: &'a RunContext<Ctx>,
         state: &'a State,
         call: ToolCall,
     ) -> BoxToolFuture<'a> {
@@ -1500,6 +1958,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCall
                 settings.resolve(self.dispatch.tool().timeout_policy(&call.arguments))
             });
             let timeout_result = super::tools::timeout_result(&call, timeout);
+            let nested = super::nested::NestedCalls::new(
+                self.harness,
+                ctx,
+                state,
+                CallId::new(call.id.clone()),
+                self.level,
+                &self.nested_state,
+                self.gate_held,
+            );
             let future = super::tools::execute_tool_recovering_model_retry(self.dispatch.execute(
                 state,
                 CallId::new(call.id),
@@ -1507,13 +1974,36 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCall
                 self.options,
                 ctx,
             ));
-            match timeout.and_then(|resolved| resolved.deadline) {
-                Some(deadline) => match tokio::time::timeout(deadline, future).await {
-                    Ok(result) => result,
-                    Err(_) => Ok(timeout_result),
-                },
-                None => future.await,
-            }
+            let bounded = async {
+                match timeout.and_then(|resolved| resolved.deadline) {
+                    Some(deadline) => match tokio::time::timeout(deadline, future).await {
+                        Ok(result) => result,
+                        Err(_) => Ok(timeout_result),
+                    },
+                    None => future.await,
+                }
+            };
+            let mut result = nested.drive(bounded).await?;
+            nested.attach_summary(&mut result);
+            Ok(result)
         })
     }
 }
+
+#[cfg(test)]
+#[path = "model_call_failover_tests.rs"]
+mod failover_test;
+
+/// Retargets an attempt's wire-level `request.model` at a fallback binding,
+/// but only when the request already carried an explicit model. Registry names
+/// are runtime aliases, not guaranteed provider model ids, so a request that
+/// sent none (the provider's own configured model) keeps sending none.
+fn retarget_request_model(request: &mut ModelRequest, name: &str) {
+    if request.model.is_some() {
+        request.model = Some(name.to_string());
+    }
+}
+
+#[cfg(test)]
+#[path = "model_call_reasoning_policy_tests.rs"]
+mod reasoning_policy_tests;

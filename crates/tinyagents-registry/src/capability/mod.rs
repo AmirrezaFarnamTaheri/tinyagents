@@ -803,7 +803,7 @@ impl<State: Send + Sync> tinyagents_definition::DefinitionRegistry for Capabilit
         Box::pin(async move {
             Ok(self
                 .agent(id)
-                .map(|definition| definition.subagents.clone())
+                .map(tinyagents_definition::AgentDefinition::allowed_subagent_ids)
                 .unwrap_or_default())
         })
     }
@@ -822,4 +822,5 @@ impl<State: Send + Sync> std::fmt::Debug for CapabilityRegistry<State> {
 }
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;

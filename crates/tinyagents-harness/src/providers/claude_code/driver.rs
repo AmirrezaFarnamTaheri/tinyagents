@@ -37,6 +37,16 @@ fn parse_error_line_shape(line: &str) -> &'static str {
     }
 }
 
+/// True only when `message` is, in its entirety, the CLI's missing-session
+/// diagnostic for `session_id` (the id passed to `--resume`). A message that
+/// merely quotes the phrase, names another session, or carries extra text is
+/// not a confirmation that the saved session is gone.
+fn is_missing_session_error(message: &str, session_id: &str) -> bool {
+    let message = message.trim();
+    let message = message.strip_prefix("Error: ").unwrap_or(message);
+    message == format!("No conversation found with session ID: {session_id}")
+}
+
 fn parse_error_log_line(ev: &ClaudeCodeEvent) -> Option<String> {
     let ClaudeCodeEvent::ParseError { line, reason } = ev else {
         return None;
@@ -68,9 +78,73 @@ fn push_bounded(acc: &mut String, chunk: &str, max_bytes: usize) {
     }
 }
 
+/// Upper bound on the structured stdout error carried into a returned error.
+const STDOUT_ERROR_CAP: usize = 2_048;
+
+/// Redact every `sk-` style key in `text`, wherever it sits (after `=`, `:`,
+/// quotes, URL separators, ...). A match must start at a non-identifier
+/// boundary (so `task-force` is untouched) and run over the key alphabet.
+fn redact_sk_keys(text: &str) -> String {
+    let is_key_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut prev: Option<char> = None;
+    while let Some(pos) = rest.find("sk-") {
+        let before = rest[..pos].chars().next_back().or(prev);
+        let boundary = before.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        let tail = &rest[pos + 3..];
+        let key_len = tail.find(|c: char| !is_key_char(c)).unwrap_or(tail.len());
+        if boundary && key_len > 0 {
+            out.push_str(&rest[..pos]);
+            out.push_str("[redacted]");
+            prev = Some(']');
+            rest = &tail[key_len..];
+        } else {
+            out.push_str(&rest[..pos + 3]);
+            prev = Some('-');
+            rest = tail;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Remove credentials from a CLI-reported message and bound its length.
+/// Redacts the configured API key wherever it occurs (including inside larger
+/// tokens) and any `sk-` style key, then caps the result.
+fn sanitize_cli_message(raw: &str, api_key: Option<&str>) -> String {
+    let mut text = raw.to_string();
+    if let Some(key) = api_key.filter(|key| !key.is_empty()) {
+        text = text.replace(key, "[redacted]");
+    }
+    let redacted = redact_sk_keys(&text);
+    let mut out = String::new();
+    push_bounded(&mut out, &redacted, STDOUT_ERROR_CAP);
+    out
+}
+
+/// Error text for a nonzero CLI exit: the structured stdout error when the
+/// CLI printed one (sanitized and bounded), otherwise the bounded stderr.
+fn nonzero_exit_message(
+    code: Option<i32>,
+    stdout_error: Option<&str>,
+    stderr: &str,
+    api_key: Option<&str>,
+) -> String {
+    match stdout_error.map(|e| sanitize_cli_message(e, api_key)) {
+        Some(message) if !message.is_empty() => {
+            format!("[claude-code][driver] exit {code:?}: {message}")
+        }
+        _ => format!(
+            "[claude-code][driver] exit {code:?} stderr={}",
+            sanitize_cli_message(stderr.trim(), api_key)
+        ),
+    }
+}
+
 use super::bridge::{ChatMessage, ChatResponse, ProviderDelta};
 use super::event_mapper::EventMapper;
-use super::input_builder::build_stdin;
+use super::input_builder::{build_stdin_with_delivered, pending_fingerprints};
 use super::session_store::{SessionStore, generate_uuid_v4, is_uuid_v4};
 use super::stream_parser::{ClaudeCodeEvent, StreamJsonParser};
 
@@ -227,6 +301,9 @@ pub(crate) struct TurnContext<'a> {
     /// Caller-provided logical conversation id, used to look up or create a
     /// CC session UUID in `session_store`.
     pub thread_id: String,
+    /// Whether this request belongs to a durable conversation. One-shot
+    /// inference calls must not leave transcripts in the user's Claude tree.
+    pub persist_session: bool,
     /// Model name passed to `--model`.
     pub model: String,
     /// Combined system prompt (all `system` messages joined), written to a
@@ -351,7 +428,10 @@ fn append_system_prompt_args(
 /// `ProviderDelta`s through `ctx.stream` as they arrive and returns the
 /// aggregated `ChatResponse` when done.
 pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatResponse> {
-    let stored = ctx.session_store.get(&ctx.thread_id);
+    let stored = ctx
+        .persist_session
+        .then(|| ctx.session_store.get(&ctx.thread_id))
+        .flatten();
     let is_new = !stored.as_deref().map(is_uuid_v4).unwrap_or(false);
     let cc_session_id = if is_new {
         generate_uuid_v4()
@@ -429,15 +509,10 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
         // opt into `bypassPermissions` for the full toolset (see above).
         "--permission-mode".into(),
         permission_mode.to_string(),
-        if is_new {
-            "--session-id".into()
-        } else {
-            "--resume".into()
-        },
-        cc_session_id.clone(),
         "--model".into(),
         ctx.model.clone(),
     ];
+    append_session_args(&mut args, ctx.persist_session, is_new, &cc_session_id);
     args.extend(
         append_system_prompt_args(scratch.path(), ctx.append_system_prompt.as_deref())
             .map_err(|e| anyhow::anyhow!("write Claude Code system prompt file: {e}"))?,
@@ -457,7 +532,17 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
 
     // Validate input *before* spawning so we don't launch a process we
     // can't feed (CodeRabbit: validate before spawn).
-    let stdin_bytes = build_stdin(ctx.messages, is_new);
+    // Reserve this call's pending turns atomically (per store, re-read from
+    // disk) before spawning, so two calls on one resumed thread cannot both
+    // send the same turn. The claim is released if the turn fails.
+    let pending = pending_fingerprints(ctx.messages);
+    let (delivered, claim) = if is_new || !ctx.persist_session {
+        (std::collections::HashSet::new(), None)
+    } else {
+        let (already, claim) = ctx.session_store.claim_delivered(&ctx.thread_id, &pending);
+        (already, Some(claim))
+    };
+    let stdin_bytes = build_stdin_with_delivered(ctx.messages, is_new, &delivered);
     if stdin_bytes.is_empty() {
         anyhow::bail!("[claude-code][driver] no input messages to deliver");
     }
@@ -611,21 +696,46 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
     let stderr_text = stderr_task.await.unwrap_or_default();
 
     if !status.success() {
+        let missing = is_missing_session_error(&stderr_text, &cc_session_id)
+            || mapper
+                .error
+                .as_deref()
+                .is_some_and(|e| is_missing_session_error(e, &cc_session_id));
+        if !is_new && missing && clear_missing_session(&ctx, &cc_session_id) {
+            return Box::pin(run_turn(ctx)).await;
+        }
+        // The CLI reports most failures (bad auth, unknown model, invalid
+        // session) as a structured `result`/`error` event on stdout and often
+        // leaves stderr empty. Prefer that message; fall back to stderr only
+        // when stdout carried none.
         anyhow::bail!(
-            "[claude-code][driver] exit {:?} stderr={}",
-            status.code(),
-            stderr_text.trim()
+            "{}",
+            nonzero_exit_message(
+                status.code(),
+                mapper.error.as_deref(),
+                &stderr_text,
+                ctx.anthropic_api_key.as_deref(),
+            )
         );
     }
     if let Some(err) = mapper.error.clone() {
-        anyhow::bail!("[claude-code][driver] {}", err);
+        if !is_new
+            && is_missing_session_error(&err, &cc_session_id)
+            && clear_missing_session(&ctx, &cc_session_id)
+        {
+            return Box::pin(run_turn(ctx)).await;
+        }
+        anyhow::bail!(
+            "[claude-code][driver] {}",
+            sanitize_cli_message(&err, ctx.anthropic_api_key.as_deref())
+        );
     }
 
     // Do not make a session durable until Claude has accepted the launch and
     // completed the turn. A spawn, input, timeout, or CLI validation failure
     // must leave the thread eligible for a fresh `--session-id` retry rather
     // than poisoning it with a UUID Claude never created.
-    if is_new {
+    if ctx.persist_session && is_new {
         let accepted_id = mapper.session_id.as_deref().unwrap_or(&cc_session_id);
         if let Err(error) = ctx.session_store.set(&ctx.thread_id, accepted_id) {
             tracing::warn!(
@@ -636,7 +746,61 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
         }
     }
 
+    // The session now holds every pending user turn of this call. Remember
+    // them so another service or loop iteration resuming the same thread does
+    // not deliver them again (concurrent callers are covered by the claim above).
+    // One-shot (non-durable) calls never resume, so they record nothing.
+    if ctx.persist_session {
+        let accepted_id = mapper.session_id.as_deref().unwrap_or(&cc_session_id);
+        if let Err(error) = ctx.session_store.record_delivered(&ctx.thread_id, &pending) {
+            tracing::warn!(
+                "[claude-code][driver] failed to record delivered turns for thread {} session {}: {}",
+                ctx.thread_id,
+                accepted_id,
+                error
+            );
+        }
+    }
+    if let Some(claim) = claim {
+        claim.commit();
+    }
+
     Ok(mapper.into_response())
+}
+
+/// Drop the saved mapping that `--resume` just proved missing, but only if it
+/// still points at `failed_session_id`. Returns true when the caller may retry
+/// as a new session with the full history; false means this call did not remove
+/// the mapping (write failed, or a concurrent turn already replaced it)
+/// and the original failure must be surfaced.
+fn clear_missing_session(ctx: &TurnContext<'_>, failed_session_id: &str) -> bool {
+    tracing::warn!(
+        "[claude-code][driver] saved session is missing; clearing mapping and retrying with full history"
+    );
+    match ctx
+        .session_store
+        .remove_if(&ctx.thread_id, failed_session_id)
+    {
+        Ok(removed) => removed,
+        Err(error) => {
+            tracing::warn!(
+                "[claude-code][driver] failed to clear missing session mapping: {error}"
+            );
+            false
+        }
+    }
+}
+
+/// Select durable Claude session arguments only for requests that have an
+/// explicit conversation identity. Background one-shot inference calls use
+/// the CLI's persistence opt-out and cannot be discovered as source sessions.
+fn append_session_args(args: &mut Vec<String>, persist_session: bool, is_new: bool, id: &str) {
+    if !persist_session {
+        args.push("--no-session-persistence".into());
+    } else {
+        args.push(if is_new { "--session-id" } else { "--resume" }.into());
+        args.push(id.into());
+    }
 }
 
 #[cfg(test)]

@@ -116,8 +116,8 @@ budgets (see [tool-discovery.md](tool-discovery.md#schema-budgets)).
 ## Exposure and Discovery
 
 `ToolExposure::Direct` tools go on the initial wire request. `Deferred` tools are indexed
-into a per-run catalogue and reached through the intrinsic `tool_search` /
-`tool_call` bridge; searched matches are promoted into later typed requests.
+into a per-run catalogue and reached through the intrinsic `tool_search`
+bridge and called by their own name; searched matches are promoted into later typed requests.
 `Hidden` tools are host-only. See [tool-discovery.md](tool-discovery.md).
 
 ## Tool Call Formats
@@ -242,16 +242,19 @@ Provider-supplied tool calls must fail closed:
 - allowlist violations emit events and append repairable tool-result messages
   only when the agent loop policy allows recovery
 
-A hosted run's tool allow-list is fail-closed by default. The resolved
-`AgentDefinition.tools` list is collapsed to `Option<HashSet<String>>` at the
-host boundary: a declared, non-empty list is enforced by plain membership,
-and an empty or absent list means "the definition declared nothing" rather
-than "unrestricted" — under `HostCapabilities::fail_closed_tool_allowlist`
-(default `true`), that denies every registered tool. A host that relied on
-the old fail-open behavior (empty list = every tool) must opt back in
-explicitly via `HostCapabilities::with_legacy_unrestricted_tool_allowlist`.
-Explicit-model (non-hosted) runs have no allow-list concept and are
-unaffected.
+A hosted run's tool scope uses `ToolScope`. A named scope becomes an exact
+membership set; named-empty always denies every tool, including with the legacy
+unrestricted fallback. Extra and deferred names are admitted before exact
+definition exclusions. Deferred names stay out of the initial wire catalogue
+and enter discovery even when their global registration is Direct; Hidden
+registrations remain hidden.
+
+An explicit wildcard policy remains dynamic so context-dependent toolsets
+retain their permitted tools. The shared gate applies exact exclusions to both
+catalogue and dispatch. A bare wildcard uses the host fallback:
+`HostCapabilities::fail_closed_tool_allowlist` defaults to deny-all;
+`with_legacy_unrestricted_tool_allowlist` opts into unrestricted fallback.
+Explicit-model runs have no hosted scope and remain unaffected.
 
 ## Unknown-tool recovery
 
@@ -303,18 +306,30 @@ are handled separately:
 - **Schema-invalid** (well-formed JSON that violates the tool's input schema) is
   governed by `RunPolicy::invalid_args: InvalidArgsPolicy`. `ReturnToolError`
   (the default) injects a repairable tool-error message (carrying the
-  validation detail and the expected schema) and continues; `Fail` aborts the
+  validation detail and a compact TypeScript-style signature of the expected
+  arguments, not the full JSON Schema) and continues; `Fail` aborts the
   turn and is no longer the default.
   `NormalizeThenReturnToolError` first repairs common object-schema transport
   shapes (a JSON object encoded as a string, including markdown fences, or a
   non-object for an object schema with no required fields), then returns any
   remaining validation failure as a tool error. Schemas that accept top-level
-  primitives or arrays are left untouched.
+  primitives or arrays are left untouched. Per property, an object-typed value
+  sent as a string that is not strict JSON goes through the same
+  `recover_object` ladder, and a `null` for an optional property whose type
+  rejects null is dropped (`"tool": null` means "not given").
+- **Wrapped** calls: a call to a pseudo tool named `tool_call`, `call_tool`,
+  `function_call`, `tool_use`, `invoke` (and a few spellings) whose arguments
+  name a callable tool (`{"name": .., "arguments": ..}`, `{"function": {..}}`,
+  `{"<tool>": {..}}`, or `use_skill`'s `{"skill", "tool", "args"}`) is
+  retargeted to that tool before admission, so every rule, hook and gate sees
+  the real call. It emits `AgentEvent::InvalidToolArgs { recovery:
+  "unwrapped:<tool>" }`. A payload that names no callable tool keeps the
+  ordinary unknown-tool corrective.
 - **Unparseable** (malformed JSON the provider could not parse into arguments at
   all) is surfaced by the provider as a `ToolCall` with `invalid: Some(reason)`
   and the raw string preserved in `arguments`. Small local models (Ollama, LM
   Studio, llama.cpp, vLLM) emit this occasionally. Before giving up, admission
-  first tries `relaxed_json::recover_relaxed_object` on the raw string —
+  first tries `tinytools_agent::repair::json::recover_object` on the raw string —
   conservative, meaning-preserving repairs for the shapes those gateways
   actually produce (unquoted object keys, redundant wrapping braces, leaked
   chat-template quote tokens; see that module's doc comment). On success the

@@ -2,9 +2,10 @@
 //!
 //! A **todo list** is a per-thread ordered checklist of [`TodoItem`]s — the
 //! concrete steps a run is working through, distinct from the single
-//! per-thread [`ThreadGoal`](crate::goals::ThreadGoal). It is the shape Claude
-//! Code and Codex keep: the model rewrites the whole list as it works, each
-//! item is a line of text plus one of three states, and nothing else.
+//! per-thread [`ThreadGoal`](crate::goals::ThreadGoal). The model writes the
+//! whole list once, then ticks its steps off one at a time, in order (see
+//! `sequence`). Each item is a line of text plus its state, and a reason when
+//! it was cancelled.
 
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +19,8 @@ pub enum TodoStatus {
     InProgress,
     /// Finished.
     Completed,
+    /// Dropped without being done; the item's `reason` says why.
+    Cancelled,
 }
 
 impl TodoStatus {
@@ -27,7 +30,13 @@ impl TodoStatus {
             Self::Pending => "pending",
             Self::InProgress => "in_progress",
             Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
         }
+    }
+
+    /// Whether the step still has work left (`pending` or `in_progress`).
+    pub fn is_open(&self) -> bool {
+        matches!(self, Self::Pending | Self::InProgress)
     }
 }
 
@@ -40,6 +49,9 @@ pub struct TodoItem {
     /// Lifecycle state.
     #[serde(default = "default_status")]
     pub status: TodoStatus,
+    /// Why the step was cancelled. Absent in every other state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 fn default_status() -> TodoStatus {
@@ -49,10 +61,7 @@ fn default_status() -> TodoStatus {
 impl TodoItem {
     /// Creates a `Pending` item with `content`.
     pub fn new(content: impl Into<String>) -> Self {
-        Self {
-            content: content.into(),
-            status: TodoStatus::Pending,
-        }
+        Self::with_status(content, TodoStatus::Pending)
     }
 
     /// Creates an item with `content` in `status`.
@@ -60,6 +69,7 @@ impl TodoItem {
         Self {
             content: content.into(),
             status,
+            reason: None,
         }
     }
 }
@@ -97,6 +107,10 @@ pub struct TodosSnapshot {
     pub items: Vec<TodoItem>,
     /// GitHub-flavored markdown rendering of the items.
     pub markdown: String,
+    /// What the write did beyond what was asked (the step it started, a second
+    /// `in_progress` it set back to pending), for the model to read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// Parses a status label (plus the aliases models commonly write) into a
@@ -108,14 +122,16 @@ pub fn parse_status(raw: &str) -> Result<TodoStatus, String> {
             Ok(TodoStatus::InProgress)
         }
         "completed" | "complete" | "done" | "finished" => Ok(TodoStatus::Completed),
+        "cancelled" | "canceled" | "skipped" => Ok(TodoStatus::Cancelled),
         other => Err(format!(
-            "invalid status '{other}' (expected pending|in_progress|completed)"
+            "invalid status '{other}' (expected pending|in_progress|completed|cancelled)"
         )),
     }
 }
 
 /// Renders a list as GitHub-flavored markdown: one `- [marker] content` line
-/// per item (`[ ]` pending, `[~]` in progress, `[x]` completed).
+/// per item (`[ ]` pending, `[~]` in progress, `[x]` completed, `[-]`
+/// cancelled, with its reason).
 pub fn render_markdown(items: &[TodoItem]) -> String {
     if items.is_empty() {
         return "_No todos yet._".to_string();
@@ -126,11 +142,17 @@ pub fn render_markdown(items: &[TodoItem]) -> String {
             TodoStatus::Pending => "[ ]",
             TodoStatus::InProgress => "[~]",
             TodoStatus::Completed => "[x]",
+            TodoStatus::Cancelled => "[-]",
         };
         out.push_str("- ");
         out.push_str(marker);
         out.push(' ');
         out.push_str(&item.content);
+        if let Some(reason) = &item.reason {
+            out.push_str(" (cancelled: ");
+            out.push_str(reason);
+            out.push(')');
+        }
         out.push('\n');
     }
     out.trim_end().to_string()

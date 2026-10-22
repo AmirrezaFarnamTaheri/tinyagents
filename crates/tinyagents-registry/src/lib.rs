@@ -29,6 +29,7 @@ pub mod capability;
 pub mod catalog;
 pub mod component;
 pub mod diagnostics;
+pub mod pricing;
 pub mod router;
 
 pub use tinyagents_harness::error::{Result, TinyAgentsError};
@@ -41,4 +42,7 @@ pub use component::{ComponentId, ComponentKind, ComponentMetadata};
 pub use diagnostics::{AliasBinding, DiagnosticSeverity, RegistryDiagnostic, RegistrySnapshot};
 #[allow(deprecated)]
 pub use router::ModelRouter;
-pub use router::{WorkloadRoute, WorkloadRouter};
+pub use router::{
+    CloudFallbackRole, DefaultModelRoute, FallbackDiagnostics, FallbackReason, RouteSource,
+    WorkloadRoute, WorkloadRouter,
+};

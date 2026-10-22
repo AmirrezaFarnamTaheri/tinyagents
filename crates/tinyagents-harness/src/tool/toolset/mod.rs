@@ -53,6 +53,7 @@ mod renamed;
 mod types;
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 pub(crate) mod test;
 
 use std::any::Any;
@@ -352,6 +353,10 @@ impl Tool for OverrideTool {
             .await
     }
 
+    async fn prepare_authorization(&self, args: &Value) -> anyhow::Result<Option<Value>> {
+        self.inner.prepare_authorization(args).await
+    }
+
     fn injected_arguments(&self) -> Vec<ToolInjectedArgument> {
         self.inner.injected_arguments()
     }
@@ -379,6 +384,27 @@ impl Tool for OverrideTool {
     fn exposure(&self) -> ToolExposure {
         self.exposure_override
             .unwrap_or_else(|| self.inner.exposure())
+    }
+
+    // A renamed or prefixed tool is still the same tool to the host's tool
+    // rules: keep its family, tags and indirect target.
+    fn family(&self) -> Option<&str> {
+        self.inner.family()
+    }
+
+    fn tags(&self) -> Vec<String> {
+        self.inner.tags()
+    }
+
+    fn indirect_target(&self, args: &Value) -> Option<tinytools::IndirectCall> {
+        self.inner.indirect_target(args)
+    }
+
+    async fn indirect_target_async(
+        &self,
+        args: &Value,
+    ) -> anyhow::Result<Option<tinytools::IndirectCall>> {
+        self.inner.indirect_target_async(args).await
     }
 
     fn is_concurrency_safe(&self, args: &Value) -> bool {

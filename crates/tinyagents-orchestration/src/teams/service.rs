@@ -7,22 +7,87 @@
 //! storage.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
+use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::json;
 use tinyagents_graph::dag::{DagNode, has_cycle};
 use tinyagents_session::run_ledger::{
-    self, AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember,
-    AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask,
-    AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome, CompletionOutcome,
-    RunEvent, RunEventAppend, RunEventListRequest,
+    AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember,
+    AgentTeamMemberRunAdmission, AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus,
+    AgentTeamTask, AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome,
+    CompletionOutcome, RunEvent, RunEventAppend, RunEventListRequest, RunLedgerStore,
 };
+use tinystoragedrivers_core::Blocking;
 use uuid::Uuid;
 
 use super::runtime::drain_run_events;
 use super::{LEAD_SENDER, MemberShutdown, NewMember, TEAM_MESSAGE_EVENT, TeamError, TeamView};
+
+/// Host-provided execution for a claimed team member task.
+#[async_trait]
+pub trait TeamMemberExecutor: Send + Sync {
+    /// Run `task` as `member` and return the evidence to submit at completion.
+    async fn execute(&self, member: &AgentTeamMember, task: &AgentTeamTask) -> Result<Vec<String>>;
+}
+
+/// Typed claim failures from [`TeamService::start_member_with_started`].
+#[derive(Debug)]
+pub enum TeamMemberStartError {
+    /// The task was already claimed.
+    AlreadyClaimed { task_id: String },
+    /// One or more task dependencies are incomplete.
+    Blocked { task_id: String, unmet: Vec<String> },
+    /// The task does not exist in the requested team.
+    UnknownTask { task_id: String },
+    /// The member already owns another active task.
+    AlreadyActive {
+        /// Member whose active run prevented admission.
+        member_id: String,
+        /// Task currently assigned to that member, if recorded.
+        current_task_id: Option<String>,
+    },
+    /// Team/member validation or a ledger operation failed.
+    Other(anyhow::Error),
+}
+
+impl std::fmt::Display for TeamMemberStartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyClaimed { task_id } => write!(f, "task is already claimed: {task_id}"),
+            Self::Blocked { unmet, .. } => {
+                write!(f, "task dependencies are incomplete: {}", unmet.join(", "))
+            }
+            Self::UnknownTask { task_id } => write!(f, "unknown task: {task_id}"),
+            Self::AlreadyActive { member_id, .. } => {
+                write!(f, "team member is already active: {member_id}")
+            }
+            Self::Other(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for TeamMemberStartError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Other(error) => Some(error.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+/// Durable identity delivered after a team member claim becomes active.
+#[derive(Clone, Debug)]
+pub struct TeamMemberStarted {
+    /// Run id recorded on the active member row.
+    pub run_id: String,
+    /// Active member row, including its worker thread and run ids.
+    pub member: AgentTeamMember,
+    /// Task returned by the successful durable claim.
+    pub task: AgentTeamTask,
+}
 
 /// Durable team state required by [`TeamService`].
 ///
@@ -63,6 +128,61 @@ pub trait TeamLedger: Send + Sync {
         evidence: &[String],
         require_evidence: bool,
     ) -> Result<CompletionOutcome>;
+    /// Completes a task only while `member_id` still owns `claim_token`.
+    fn complete_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+        evidence: &[String],
+        require_evidence: bool,
+    ) -> Result<CompletionOutcome>;
+    /// Releases a claimed task back to the queue after a worker failure.
+    /// Implementations must only release the claim held by `member_id` with
+    /// `claim_token`, so cleanup from an old worker cannot release a successor.
+    fn release_task(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+    ) -> Result<bool>;
+    /// Legacy unconditional member-running setter. It does not reserve against
+    /// another active run; new task admission must use
+    /// [`TeamLedger::try_mark_member_running`].
+    fn mark_member_running(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<Option<AgentTeamMember>>;
+    /// Atomically reserves the member for a task. The default fails closed so
+    /// legacy ledgers cannot silently permit overlapping member runs.
+    fn try_mark_member_running(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<AgentTeamMemberRunAdmission> {
+        let _ = (team_id, member_id, task_id, worker_thread_id, run_id);
+        Err(anyhow!(
+            "atomic team member admission is unsupported by this ledger"
+        ))
+    }
+    /// Marks a running member idle after its worker finishes.
+    fn mark_member_idle(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<bool>;
     /// Stops a member and releases its claimed tasks, returning the stopped
     /// member and the released task ids.
     fn shutdown_member(
@@ -76,64 +196,80 @@ pub trait TeamLedger: Send + Sync {
     fn list_events(&self, request: &RunEventListRequest) -> Result<Vec<RunEvent>>;
 }
 
-/// [`TeamLedger`] backed by `tinyagents-session`'s run ledger at a caller
-/// supplied workspace root. It makes no workspace or host policy decision.
+/// [`TeamLedger`] over a bound `tinyagents-session` run-ledger handle.
 ///
-/// Delegates all operations to the session run-ledger functions, projecting
-/// the workspace path into each call. This is the default implementation when
-/// using TinyAgents' built-in session storage.
-#[derive(Debug, Clone)]
+/// The handle is whatever backend the host opened (SQLite, MongoDB, memory);
+/// this adapter opens no file, picks no workspace and has no fallback. Every
+/// call reaches the ledger's async operations through a [`Blocking`] bridge
+/// thread, so it works from inside or outside a tokio runtime. The claim,
+/// completion and shutdown operations are the ledger's atomic ones: a contested
+/// task goes to exactly one member.
+#[derive(Clone)]
 pub struct SessionTeamLedger {
-    workspace_dir: PathBuf,
+    ledger: Arc<dyn RunLedgerStore>,
+    bridge: Blocking,
+}
+
+impl std::fmt::Debug for SessionTeamLedger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionTeamLedger").finish_non_exhaustive()
+    }
 }
 
 impl SessionTeamLedger {
-    /// Creates a ledger wrapping the session layer at the specified workspace.
-    pub fn new(workspace_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            workspace_dir: workspace_dir.into(),
-        }
+    /// Adapt `ledger`, starting a bridge thread for the synchronous calls.
+    ///
+    /// # Errors
+    ///
+    /// The bridge thread cannot start.
+    pub fn new(ledger: Arc<dyn RunLedgerStore>) -> Result<Self> {
+        Ok(Self::with_bridge(ledger, Blocking::new()?))
     }
 
-    /// Returns the workspace directory used for all ledger operations.
-    pub fn workspace_dir(&self) -> &Path {
-        &self.workspace_dir
+    /// Adapt `ledger`, sharing an existing bridge.
+    pub fn with_bridge(ledger: Arc<dyn RunLedgerStore>, bridge: Blocking) -> Self {
+        Self { ledger, bridge }
+    }
+
+    fn run<T: Send + 'static>(
+        &self,
+        work: impl std::future::Future<
+            Output = std::result::Result<T, tinyagents_session::run_ledger::LedgerError>,
+        > + Send
+        + 'static,
+    ) -> Result<T> {
+        Ok(self.bridge.run(work)??)
     }
 }
 
 impl TeamLedger for SessionTeamLedger {
     fn upsert_team(&self, upsert: AgentTeamUpsert) -> Result<AgentTeam> {
-        Ok(run_ledger::upsert_agent_team(&self.workspace_dir, upsert)?)
+        let ledger = Arc::clone(&self.ledger);
+        self.run(async move { ledger.upsert_agent_team(upsert).await })
     }
     fn get_team(&self, id: &str) -> Result<Option<AgentTeam>> {
-        Ok(run_ledger::get_agent_team(&self.workspace_dir, id)?)
+        let (ledger, id) = (Arc::clone(&self.ledger), id.to_owned());
+        self.run(async move { ledger.get_agent_team(&id).await })
     }
     fn list_teams(&self, request: &AgentTeamListRequest) -> Result<AgentTeamListResponse> {
-        Ok(run_ledger::list_agent_teams(&self.workspace_dir, request)?)
+        let (ledger, request) = (Arc::clone(&self.ledger), request.clone());
+        self.run(async move { ledger.list_agent_teams(&request).await })
     }
     fn upsert_member(&self, upsert: AgentTeamMemberUpsert) -> Result<AgentTeamMember> {
-        Ok(run_ledger::upsert_agent_team_member(
-            &self.workspace_dir,
-            upsert,
-        )?)
+        let ledger = Arc::clone(&self.ledger);
+        self.run(async move { ledger.upsert_agent_team_member(upsert).await })
     }
     fn list_members(&self, team_id: &str) -> Result<Vec<AgentTeamMember>> {
-        Ok(run_ledger::list_agent_team_members(
-            &self.workspace_dir,
-            team_id,
-        )?)
+        let (ledger, team_id) = (Arc::clone(&self.ledger), team_id.to_owned());
+        self.run(async move { ledger.list_agent_team_members(&team_id).await })
     }
     fn list_tasks(&self, team_id: &str) -> Result<Vec<AgentTeamTask>> {
-        Ok(run_ledger::list_agent_team_tasks(
-            &self.workspace_dir,
-            team_id,
-        )?)
+        let (ledger, team_id) = (Arc::clone(&self.ledger), team_id.to_owned());
+        self.run(async move { ledger.list_agent_team_tasks(&team_id).await })
     }
     fn upsert_task(&self, upsert: AgentTeamTaskUpsert) -> Result<AgentTeamTask> {
-        Ok(run_ledger::upsert_agent_team_task(
-            &self.workspace_dir,
-            upsert,
-        )?)
+        let ledger = Arc::clone(&self.ledger);
+        self.run(async move { ledger.upsert_agent_team_task(upsert).await })
     }
     fn claim_task(
         &self,
@@ -142,13 +278,18 @@ impl TeamLedger for SessionTeamLedger {
         member_id: &str,
         claim_token: &str,
     ) -> Result<ClaimOutcome> {
-        Ok(run_ledger::claim_agent_team_task(
-            &self.workspace_dir,
-            team_id,
-            task_id,
-            member_id,
-            claim_token,
-        )?)
+        let ledger = Arc::clone(&self.ledger);
+        let (team, task, member, token) = (
+            team_id.to_owned(),
+            task_id.to_owned(),
+            member_id.to_owned(),
+            claim_token.to_owned(),
+        );
+        self.run(async move {
+            ledger
+                .claim_agent_team_task(&team, &task, &member, &token)
+                .await
+        })
     }
     fn complete_task(
         &self,
@@ -158,31 +299,152 @@ impl TeamLedger for SessionTeamLedger {
         evidence: &[String],
         require_evidence: bool,
     ) -> Result<CompletionOutcome> {
-        Ok(run_ledger::complete_agent_team_task(
-            &self.workspace_dir,
-            team_id,
-            task_id,
-            member_id,
-            evidence,
-            require_evidence,
-        )?)
+        let ledger = Arc::clone(&self.ledger);
+        let (team, task, member, evidence) = (
+            team_id.to_owned(),
+            task_id.to_owned(),
+            member_id.to_owned(),
+            evidence.to_vec(),
+        );
+        self.run(async move {
+            ledger
+                .complete_agent_team_task(&team, &task, &member, &evidence, require_evidence)
+                .await
+        })
+    }
+    fn complete_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+        evidence: &[String],
+        require_evidence: bool,
+    ) -> Result<CompletionOutcome> {
+        let (ledger, team, task, member, token, evidence) = (
+            Arc::clone(&self.ledger),
+            team_id.to_owned(),
+            task_id.to_owned(),
+            member_id.to_owned(),
+            claim_token.to_owned(),
+            evidence.to_vec(),
+        );
+        self.run(async move {
+            ledger
+                .complete_agent_team_task_if_claimed(
+                    &team,
+                    &task,
+                    &member,
+                    &token,
+                    &evidence,
+                    require_evidence,
+                )
+                .await
+        })
+    }
+    fn release_task(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+    ) -> Result<bool> {
+        let (ledger, team, task, member, token) = (
+            Arc::clone(&self.ledger),
+            team_id.to_owned(),
+            task_id.to_owned(),
+            member_id.to_owned(),
+            claim_token.to_owned(),
+        );
+        self.run(async move {
+            ledger
+                .release_agent_team_task_if_claimed(&team, &task, &member, &token)
+                .await
+        })
+    }
+    fn mark_member_running(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<Option<AgentTeamMember>> {
+        let (ledger, team, member, task, thread, run) = (
+            Arc::clone(&self.ledger),
+            team_id.to_owned(),
+            member_id.to_owned(),
+            task_id.to_owned(),
+            worker_thread_id.to_owned(),
+            run_id.to_owned(),
+        );
+        self.run(async move {
+            ledger
+                .mark_agent_team_member_running(&team, &member, &task, &thread, &run)
+                .await
+        })
+    }
+    fn try_mark_member_running(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<AgentTeamMemberRunAdmission> {
+        let (ledger, team, member, task, thread, run) = (
+            Arc::clone(&self.ledger),
+            team_id.to_owned(),
+            member_id.to_owned(),
+            task_id.to_owned(),
+            worker_thread_id.to_owned(),
+            run_id.to_owned(),
+        );
+        self.run(async move {
+            ledger
+                .try_start_agent_team_member(&team, &member, &task, &thread, &run)
+                .await
+        })
+    }
+    fn mark_member_idle(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<bool> {
+        let (ledger, team, member, task, thread, run) = (
+            Arc::clone(&self.ledger),
+            team_id.to_owned(),
+            member_id.to_owned(),
+            task_id.to_owned(),
+            worker_thread_id.to_owned(),
+            run_id.to_owned(),
+        );
+        self.run(async move {
+            Ok(ledger
+                .mark_agent_team_member_idle_if_current(&team, &member, &task, &thread, &run)
+                .await?
+                .is_some())
+        })
     }
     fn shutdown_member(
         &self,
         team_id: &str,
         member_id: &str,
     ) -> Result<Option<(AgentTeamMember, Vec<String>)>> {
-        Ok(run_ledger::shutdown_agent_team_member(
-            &self.workspace_dir,
-            team_id,
-            member_id,
-        )?)
+        let ledger = Arc::clone(&self.ledger);
+        let (team, member) = (team_id.to_owned(), member_id.to_owned());
+        self.run(async move { ledger.shutdown_agent_team_member(&team, &member).await })
     }
     fn append_event(&self, event: RunEventAppend) -> Result<RunEvent> {
-        Ok(run_ledger::append_run_event(&self.workspace_dir, event)?)
+        let ledger = Arc::clone(&self.ledger);
+        self.run(async move { ledger.append_run_event(event).await })
     }
     fn list_events(&self, request: &RunEventListRequest) -> Result<Vec<RunEvent>> {
-        Ok(run_ledger::list_recent_run_events(&self.workspace_dir, request)?.events)
+        let (ledger, request) = (Arc::clone(&self.ledger), request.clone());
+        self.run(async move { Ok(ledger.list_recent_run_events(&request).await?.events) })
     }
 }
 
@@ -199,6 +461,52 @@ impl TeamLedger for SessionTeamLedger {
 #[derive(Debug, Clone)]
 pub struct TeamService<L> {
     ledger: L,
+}
+
+struct MemberExecutionCleanup<'a, L: TeamLedger> {
+    service: &'a TeamService<L>,
+    team_id: &'a str,
+    task_id: &'a str,
+    member_id: &'a str,
+    claim_token: &'a str,
+    execution: Option<(String, String)>,
+    armed: bool,
+}
+
+impl<L: TeamLedger> MemberExecutionCleanup<'_, L> {
+    fn cleanup(&mut self) -> Result<()> {
+        self.service.release_and_idle(
+            self.team_id,
+            self.task_id,
+            self.member_id,
+            self.claim_token,
+            self.execution
+                .as_ref()
+                .map(|(thread, run)| (thread.as_str(), run.as_str())),
+        )?;
+        self.armed = false;
+        Ok(())
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl<L: TeamLedger> Drop for MemberExecutionCleanup<'_, L> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.service.release_and_idle(
+                self.team_id,
+                self.task_id,
+                self.member_id,
+                self.claim_token,
+                self.execution
+                    .as_ref()
+                    .map(|(thread, run)| (thread.as_str(), run.as_str())),
+            );
+        }
+    }
 }
 
 impl<L> TeamService<L> {
@@ -370,6 +678,190 @@ impl<L: TeamLedger> TeamService<L> {
             .complete_task(team_id, task_id, member_id, evidence, require_evidence)
     }
 
+    /// Claim and execute one team task, then durably complete it.
+    ///
+    /// Worker failures release the task and return the member to idle before
+    /// the original error is propagated. Completion gate failures are also
+    /// released so another attempt can claim the task.
+    pub async fn start_member<E: TeamMemberExecutor + ?Sized>(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        executor: &E,
+        require_evidence: bool,
+    ) -> Result<CompletionOutcome> {
+        self.start_member_with_started(
+            team_id,
+            task_id,
+            member_id,
+            executor,
+            require_evidence,
+            |_| {},
+        )
+        .await
+    }
+
+    /// Claims and activates a member task, then calls `on_started` before the
+    /// executor is polled. A host can return an immediate response from the
+    /// callback while this same future continues execution and retains the
+    /// normal owner-controlled evidence and cleanup path.
+    pub async fn start_member_with_started<E, Started>(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        executor: &E,
+        require_evidence: bool,
+        on_started: Started,
+    ) -> Result<CompletionOutcome>
+    where
+        E: TeamMemberExecutor + ?Sized,
+        Started: FnOnce(TeamMemberStarted),
+    {
+        self.ensure_member(team_id, member_id)?;
+        let claim_token = Uuid::new_v4().to_string();
+        let claimed = match self.claim_task(team_id, task_id, member_id, &claim_token)? {
+            ClaimOutcome::Claimed(task) => *task,
+            ClaimOutcome::AlreadyClaimed => {
+                return Err(anyhow!(TeamMemberStartError::AlreadyClaimed {
+                    task_id: task_id.to_string(),
+                }));
+            }
+            ClaimOutcome::Blocked { unmet } => {
+                return Err(anyhow!(TeamMemberStartError::Blocked {
+                    task_id: task_id.to_string(),
+                    unmet,
+                }));
+            }
+            ClaimOutcome::UnknownTask => {
+                return Err(anyhow!(TeamMemberStartError::UnknownTask {
+                    task_id: task_id.to_string(),
+                }));
+            }
+        };
+        let mut cleanup = MemberExecutionCleanup {
+            service: self,
+            team_id,
+            task_id,
+            member_id,
+            claim_token: &claim_token,
+            execution: None,
+            armed: true,
+        };
+        let worker_thread_id = format!("team-worker-{}", Uuid::new_v4().simple());
+        let run_id = format!("team-run-{}", Uuid::new_v4().simple());
+        let member = match self.ledger.try_mark_member_running(
+            team_id,
+            member_id,
+            task_id,
+            &worker_thread_id,
+            &run_id,
+        ) {
+            Ok(AgentTeamMemberRunAdmission::Started(member)) => member,
+            Ok(AgentTeamMemberRunAdmission::AlreadyActive(member)) => {
+                return Err(anyhow!(TeamMemberStartError::AlreadyActive {
+                    member_id: member_id.to_owned(),
+                    current_task_id: member.current_task_id,
+                }));
+            }
+            Ok(
+                AgentTeamMemberRunAdmission::NotAdmissible(_)
+                | AgentTeamMemberRunAdmission::Missing,
+            ) => {
+                return Err(anyhow!(TeamError::UnknownMember {
+                    member_id: member_id.to_owned(),
+                }));
+            }
+            Err(error) => {
+                return Err(error.context("admit team member run"));
+            }
+        };
+        cleanup.execution = Some((
+            member
+                .worker_thread_id
+                .clone()
+                .unwrap_or_else(|| worker_thread_id.clone()),
+            member.run_id.clone().unwrap_or_else(|| run_id.clone()),
+        ));
+
+        on_started(TeamMemberStarted {
+            run_id: member.run_id.clone().unwrap_or_else(|| run_id.clone()),
+            member: member.clone(),
+            task: claimed.clone(),
+        });
+
+        let execution = executor.execute(&member, &claimed).await;
+        let completion = match execution {
+            Ok(evidence) => self.ledger.complete_task_if_claimed(
+                team_id,
+                task_id,
+                member_id,
+                &claim_token,
+                &evidence,
+                require_evidence,
+            ),
+            Err(error) => {
+                return match cleanup.cleanup() {
+                    Ok(()) => Err(error.context("team member execution failed")),
+                    Err(cleanup_error) => Err(anyhow!(
+                        "team member execution failed: {error}; cleanup failed: {cleanup_error}"
+                    )),
+                };
+            }
+        };
+        match completion {
+            Ok(outcome @ CompletionOutcome::Completed(_)) => {
+                self.ledger.mark_member_idle(
+                    team_id,
+                    member_id,
+                    task_id,
+                    member
+                        .worker_thread_id
+                        .as_deref()
+                        .unwrap_or(&worker_thread_id),
+                    member.run_id.as_deref().unwrap_or(&run_id),
+                )?;
+                cleanup.disarm();
+                Ok(outcome)
+            }
+            Ok(outcome) => {
+                cleanup.cleanup()?;
+                Ok(outcome)
+            }
+            Err(error) => match cleanup.cleanup() {
+                Ok(()) => Err(error.context("complete team task")),
+                Err(cleanup_error) => Err(anyhow!(
+                    "complete team task failed: {error}; cleanup failed: {cleanup_error}"
+                )),
+            },
+        }
+    }
+
+    fn release_and_idle(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+        execution: Option<(&str, &str)>,
+    ) -> Result<()> {
+        let release = self
+            .ledger
+            .release_task(team_id, task_id, member_id, claim_token);
+        let idle = execution.map_or(Ok(false), |(thread, run)| {
+            self.ledger
+                .mark_member_idle(team_id, member_id, task_id, thread, run)
+        });
+        match (release, idle) {
+            (Ok(_), Ok(_)) => Ok(()),
+            (Err(error), Ok(_)) | (Ok(_), Err(error)) => Err(error),
+            (Err(release), Err(idle)) => Err(anyhow!(
+                "failed to release team task: {release}; failed to idle team member: {idle}"
+            )),
+        }
+    }
+
     pub fn shutdown_member(&self, team_id: &str, member_id: &str) -> Result<MemberShutdown> {
         self.ledger
             .shutdown_member(team_id, member_id)?
@@ -437,6 +929,10 @@ impl<L: TeamLedger> TeamService<L> {
     }
 }
 
+#[cfg(test)]
+#[path = "service_tests.rs"]
+mod tests;
+
 fn validate_dependencies(
     new_task_id: &str,
     depends_on: &[String],
@@ -501,57 +997,5 @@ pub fn claimable_task<'a>(
 }
 
 #[cfg(test)]
-mod dependency_tests {
-    use chrono::Utc;
-    use tinyagents_session::run_ledger::AgentTeamTaskStatus;
-
-    use super::*;
-
-    fn task(id: &str, depends_on: &[&str]) -> AgentTeamTask {
-        let now = Utc::now();
-        AgentTeamTask {
-            id: id.to_string(),
-            team_id: "team".to_string(),
-            title: id.to_string(),
-            objective: None,
-            status: AgentTeamTaskStatus::Todo,
-            owner_member_id: None,
-            claimed_by_member_id: None,
-            claim_token: None,
-            depends_on: depends_on
-                .iter()
-                .map(|dependency| (*dependency).to_string())
-                .collect(),
-            gate_status: "pending".to_string(),
-            gate_reason: None,
-            evidence: Vec::new(),
-            source_run_id: None,
-            order_index: 0,
-            created_at: now,
-            updated_at: now,
-        }
-    }
-
-    #[test]
-    fn rejects_self_dependency() {
-        let error =
-            validate_dependencies("task-self", &["task-self".to_string()], &[]).unwrap_err();
-        assert_eq!(
-            error.downcast::<TeamError>().unwrap(),
-            TeamError::SelfDependency {
-                task_id: "task-self".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn rejects_dependency_cycle() {
-        let existing = vec![task("task-a", &["task-new"])];
-        let error =
-            validate_dependencies("task-new", &["task-a".to_string()], &existing).unwrap_err();
-        assert_eq!(
-            error.downcast::<TeamError>().unwrap(),
-            TeamError::CyclicDependency
-        );
-    }
-}
+#[path = "service_dependency_tests.rs"]
+mod dependency_tests;

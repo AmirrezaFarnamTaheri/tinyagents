@@ -29,15 +29,26 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
   middleware, structured output, streaming, usage/cost accounting, retries,
   caching, and a Claude Code CLI model adapter with stream-json,
   session, authentication, and MCP endpoint support. Features: `sqlite`,
-  `tools`, `multimodal`, `tracing`.
+  `storage-drivers`, `builtin-tools` (`tools` is a deprecated alias),
+  `multimodal`, `png-optimize` (opt-in PNG re-compression), `media`,
+  `claude-code` and `langfuse` (both default), `tracing` (forwards to `tinytools-agent/tracing` for its parsing diagnostics; the harness's own instrumentation is always compiled in).
 - **`tinyagents-graph`** — a LangGraph-style durable, typed state graph:
   `START`/`END`, nodes, conditional edges, `Send` fanout, reducers/channels,
   checkpoints, interrupts, subgraphs, and time travel. Features: `sqlite`,
   `tracing`.
+- **`tinyagents-tasks`** — graph-independent detached-task machinery: task
+  model, `TaskStore` (in-memory and JSONL), `DetachedTaskRegistry`, restart
+  reconciliation, the durable completion router (push a finished child to its
+  parent, redelivered after a restart), and the `spawn`/`await`/`cancel`/`steer`
+  orchestration tools.
+  Re-exported from `tinyagents_graph::orchestration` for compatibility.
 - **`tinyagents-registry`** — a named capability catalog (models, tools,
   agents, graphs, and routers), plus an offline model price/capability catalog.
 - **`tinyagents-session`** — a SQLite-backed store for session history,
-  messages, tool calls, cost, and run lineage.
+  messages, tool calls, cost, and run lineage, plus JSONL transcripts and the
+  `threads` chat thread/message store. Transcript spend separates charged and
+  estimated costs from unknown or legacy usage; see the
+  [cost provenance contract](crates/tinyagents-session/src/transcript/README.md#spend-and-cost-provenance-spendrs).
 - **`tinyagents-definition`** — the host-owned agent definition vocabulary:
   identity, description, declared model/tools/delegates, and a read-only
   catalogue seam. Authorization, prompt construction, and execution stay with
@@ -45,6 +56,11 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
 - **`tinyagents-runtime`** — host-neutral stateful turns over the harness and
   append-only transcript seam; hosts retain policy, prompt composition,
   authorization, and durable-dialect conversion.
+- **`tinyagents-live`** — live (realtime voice) agent sessions: declares a
+  harness's tools to a [`tinyliveagents`](https://github.com/tinyhumansai/tinyliveagents)
+  provider (Gemini Live, ElevenLabs Agents, Sarvam) and runs every tool call
+  the model makes through the harness's own admission and middleware
+  pipeline, so host policy applies to spoken requests too.
 - **`tinyagents-orchestration`** — host-neutral composition of durable
   multi-agent work (teams and workflows) over the graph, harness, and session
   layers; depends one-way on those crates and stays host-free.
@@ -151,8 +167,9 @@ run with `AgentMiddleware`.
 ## Subagent orchestration
 
 `tinyagents-orchestration` owns child-agent composition. `SubAgentTool` is a
-typed parent-context dispatcher: it starts a child in the background and
-returns a stable job id immediately. `SubAgentJobsTool` queries job
+typed parent-context dispatcher: its default `background` mode starts a child
+in the background and returns a stable job id immediately, while `inline` mode
+waits for and returns the child's final result in the same call. `SubAgentJobsTool` queries job
 status/results and `SubAgentMessageTool` sends messages to a live job;
 hosts register these control tools over the same explicitly shared
 `SubAgentJobRegistry`. `SubAgentSession` covers retained post-completion
@@ -247,3 +264,19 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 ## License
 
 TinyAgents is licensed under [GPL-3.0-only](LICENSE).
+
+Harness correction producers can use context-bound
+[`EphemeralInstructionQueue`](crates/tinyagents-harness/src/middleware/library/ephemeral_instructions/README.md)
+for one-shot model request instructions without persisting them in history.
+
+The harness provides [after-model stop hooks](docs/modules/harness/stop-hooks.md):
+hosts supply budget/goal policy and accounting; the library owns ordered
+observation, per-run state and pause delivery.
+`tinyagents-runtime::transcript` supplies [mechanical execution projections](crates/tinyagents-runtime/src/transcript/README.md)
+for native tool rounds, ordered media references and reasoning replay. Hosts
+retain their lossless durable codecs and legacy marker policy.
+`tinyagents-runtime::turn_driver` is the generic turn loop for a session:
+a `TurnDriver` assembles one harness per turn from a host `TurnPlan` and applies
+per-turn `TurnControls` (model-call cap and pause-at-cap, early-exit tools,
+deferred completion, delegated-child scope, run-queue steering). See its
+[README](crates/tinyagents-runtime/src/turn_driver/README.md).

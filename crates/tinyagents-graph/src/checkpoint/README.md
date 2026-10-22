@@ -35,11 +35,11 @@ crashes mid-execution.
 
 ### Backends
 
-- `FileCheckpointer` (`file.rs`) — durable, file-backed implementation; no
-  external dependencies.
-- `SqliteCheckpointer` (`sqlite.rs`, feature `sqlite`) — Sqlite-backed
-  implementation for concurrent/multi-process access.
-- An in-memory backend is also available for tests (see `mod.rs`/`test.rs`);
+- `DriverCheckpointer` (`drivers.rs`) — durable implementation over a
+  `tinystoragedrivers` `DocumentStore`, so the host's backend (SQLite, MongoDB,
+  memory) holds the checkpoints. The file and SQLite checkpointers were removed
+  in favour of it.
+- An in-memory backend is also available for tests (see `mod.rs`/`mod_tests.rs`);
   suitable only for a single process's lifetime.
 
 ### Types (`types.rs`)
@@ -73,9 +73,8 @@ crashes mid-execution.
 | --- | --- |
 | `types.rs` | `Checkpoint`, `CheckpointTuple`, `CheckpointConfig`, `CheckpointMetadata`, `CheckpointSource`, `DurabilityMode`, `PendingActivation`, `BarrierArrivals`, `PendingWrite`. |
 | `mod.rs` | The `Checkpointer` trait and the in-memory backend. |
-| `file.rs` | `FileCheckpointer`. |
-| `sqlite.rs` | `SqliteCheckpointer` (feature `sqlite`). |
-| `test.rs` | Unit tests (put/get round-trips, namespace scoping, history, pruning). |
+| `drivers.rs` | `DriverCheckpointer` over a driver `DocumentStore`. |
+| `mod_tests.rs` | Unit tests (put/get round-trips, namespace scoping, history, pruning). |
 
 ## Operational constraints
 
@@ -83,7 +82,7 @@ crashes mid-execution.
   implementation that ignores namespace when a caller asks for it will let a
   parent and a subgraph run collide on resume. Any new backend must honor the
   namespace-scoped `get`/`list` contract.
-- `FileCheckpointer` and `SqliteCheckpointer` are safe across process
+- `DriverCheckpointer` on a durable backend is safe across process
   restarts; the in-memory backend is not — never use it where resumability
   after a crash is required.
 - Checkpoint ids must be collision-free across process restarts (see
@@ -93,3 +92,21 @@ crashes mid-execution.
 - `DurabilityMode` trades persistence frequency for write volume — a mode that
   only checkpoints on interrupt/failure means a mid-run crash loses all
   progress since the last such boundary, not just the current node.
+
+## `DriverCheckpointer` (`storage-drivers` feature)
+
+`DriverCheckpointer` stores checkpoints, pending writes and execution leases in
+a [tinystoragedrivers](https://github.com/tinyhumansai/tinystoragedrivers)
+`DocumentStore`. Hosts use it to put graph durability on whichever backend they
+opened, such as SQLite or MongoDB. The handle is bound to a tenant scope, so
+tenants that share a thread id still never see each other's checkpoints.
+
+It is the one checkpointer: every user shares `graph.checkpoints`,
+`graph.threads` and `graph.writes` and tells itself apart by a namespace
+(`DriverCheckpointer::with_namespace`, default `graph`; `delegation` and `flows`
+for the delegation graph and workflows). Leases live in `tsd.leases`, claimed
+through `Leases`, whose epoch is the write fence. See
+`docs/modules/graph/storage-schema.md`.
+
+It passes the same `testkit::conformance` contracts as the bundled backends:
+checkpointer, writes, lineage and concurrency.

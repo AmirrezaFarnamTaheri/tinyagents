@@ -101,7 +101,7 @@ wire — and its `Deserialize` impl reconstructs each channel from `kind` +
 `config` via an internal `channel_from_config` dispatcher, with no external
 context. `ChannelState` derives `Serialize`/`DeserializeOwned` on top of that,
 so `Checkpoint<ChannelState>` satisfies every bundled `Checkpointer`'s durable
-bounds and round-trips through `FileCheckpointer`/`SqliteCheckpointer` like any
+bounds and round-trips through `DriverCheckpointer` like any
 other graph state.
 
 Built-in channels need no config beyond `kind` (`LastValue`, `Topic`, `Delta`,

@@ -13,10 +13,15 @@
 //! suites. Call them from a `#[test]` against any implementation:
 //!
 //! ```rust
+//! use std::sync::Arc;
+//! use tinyagents_session::run_ledger::DriverRunLedger;
 //! use tinyagents_session::testkit::conformance::run_ledger_conformance;
+//! use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 //!
-//! let dir = tempfile::tempdir().unwrap();
-//! run_ledger_conformance(dir.path());
+//! # tokio::runtime::Builder::new_multi_thread().enable_time().build().unwrap().block_on(async {
+//! let storage = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+//! run_ledger_conformance(Arc::new(DriverRunLedger::new(storage))).await;
+//! # });
 //! ```
 //!
 //! # In-memory transcript double
@@ -31,3 +36,25 @@ pub mod conformance;
 
 mod in_memory_transcript;
 pub use in_memory_transcript::InMemoryTranscriptHistory;
+
+/// Creates an empty driver-backed transcript locator over in-memory storage.
+///
+/// Use this when a test needs the same locator interface used by production
+/// session stores, but should not touch the filesystem.
+pub fn in_memory_transcript() -> std::sync::Arc<dyn crate::transcript::TranscriptLocator> {
+    use crate::port::{DriverSessionStores, SessionStoreProvider};
+    use std::sync::Arc;
+    use tinystoragedrivers_core::MemoryStorage;
+
+    DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()),
+        tinystoragedrivers_core::Scope::local(),
+    )
+    .expect("driver session stores over memory")
+    .for_agent("test")
+    .transcripts
+}
+
+#[cfg(test)]
+#[path = "in_memory_transcript_tests.rs"]
+mod tests;

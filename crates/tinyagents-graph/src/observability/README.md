@@ -49,6 +49,9 @@ so existing runs are unchanged.
   defaults its `traceId` to the run's `root_run_id`; because the graph-run span
   uses the same id scheme the harness exporter parents its agent run spans to,
   a graph run and the agent/tool runs its nodes spawn nest into one trace tree.
+  `send_observations_otlp` / `build_otlp_requests` export the same trace to
+  Langfuse v4 over OTLP (trace attributes on every span, deterministic span
+  ids); the batch methods remain for legacy-mode deployments.
 
 ## Persistence bridge
 
@@ -72,7 +75,7 @@ stronger than "usually persisted, never run-blocking."
 | `types.rs` | Every public type: `GraphObservation`, journal/status-store traits and in-memory impls, `JournalGraphSink`, latency/health rollups. |
 | `mod.rs` | Behavioral code: rollup computation, journal/store/sink impls. |
 | `langfuse/` | `GraphLangfuseExporter` and its span-construction logic. |
-| `test.rs` | Unit tests (journal round-trips, sink lineage, latency/health rollups). |
+| `mod_tests.rs` | Unit tests (journal round-trips, sink lineage, latency/health rollups). |
 
 ## Operational constraints
 

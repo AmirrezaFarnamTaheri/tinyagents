@@ -32,13 +32,25 @@
 //! `RunQueue<T>` itself stays generic: hosts may keep using it with any `T`
 //! for their own bookkeeping; only a `RunQueue<Message>` is loop-consumable.
 
+mod forwarder;
 mod types;
 
-use tokio::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+pub use forwarder::{
+    COLLECT_PREFIX, ForwardEvent, ForwardEventSink, ForwarderCleanup,
+    MessageSteeringForwarderGuard, QueuedMessage, STEER_PREFIX, SteeringForwarderGuard,
+    forward_collects, forward_message_collects, forward_message_steers, forward_steers,
+};
 
 pub use types::{QueueLane, QueueMode, QueueStatus, RunQueueHandle};
 
 /// Thread-safe FIFO queue split into steer, follow-up, and collect lanes.
+///
+/// The lock guards only in-memory vector operations and is never held across
+/// an `.await`, so every operation also has a synchronous form
+/// ([`Self::push_now`], [`Self::drain_now`]) usable from `Drop` or other
+/// non-async code without spawning a task.
 #[derive(Debug)]
 pub struct RunQueue<T> {
     inner: Mutex<RunQueueInner<T>>,
@@ -69,9 +81,22 @@ impl<T> RunQueue<T> {
         }
     }
 
+    /// Locks the lanes. A panic while the lock was held cannot leave a lane
+    /// half-updated (every operation is a single vector call), so a poisoned
+    /// lock is recovered rather than propagated.
+    fn lock(&self) -> MutexGuard<'_, RunQueueInner<T>> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Appends `item` to `lane`.
     pub async fn push(&self, lane: QueueLane, item: T) {
-        let mut inner = self.inner.lock().await;
+        self.push_now(lane, item);
+    }
+
+    /// Appends `item` to `lane` without awaiting: the synchronous form of
+    /// [`Self::push`], for `Drop` impls and other non-async callers.
+    pub fn push_now(&self, lane: QueueLane, item: T) {
+        let mut inner = self.lock();
         match lane {
             QueueLane::Steer => inner.steers.push(item),
             QueueLane::Followup => inner.followups.push(item),
@@ -79,14 +104,60 @@ impl<T> RunQueue<T> {
         }
     }
 
+    /// Puts `items` back at the **front** of `lane`, in their given order, as
+    /// one atomic step. Used to return items that were drained but never
+    /// delivered, so they stay ahead of anything queued after them.
+    pub async fn requeue_front(&self, lane: QueueLane, items: Vec<T>) {
+        if items.is_empty() {
+            return;
+        }
+        let mut inner = self.lock();
+        let target = match lane {
+            QueueLane::Steer => &mut inner.steers,
+            QueueLane::Followup => &mut inner.followups,
+            QueueLane::Collect => &mut inner.collects,
+        };
+        target.splice(0..0, items);
+    }
+
     /// Drains one lane in FIFO order.
     pub async fn drain(&self, lane: QueueLane) -> Vec<T> {
-        let mut inner = self.inner.lock().await;
+        self.drain_now(lane)
+    }
+
+    /// Drains one lane in FIFO order without awaiting: the synchronous form
+    /// of [`Self::drain`].
+    pub fn drain_now(&self, lane: QueueLane) -> Vec<T> {
+        let mut inner = self.lock();
         match lane {
             QueueLane::Steer => std::mem::take(&mut inner.steers),
             QueueLane::Followup => std::mem::take(&mut inner.followups),
             QueueLane::Collect => std::mem::take(&mut inner.collects),
         }
+    }
+
+    /// Drains matching items from one lane in FIFO order and leaves all other
+    /// items in place. This is useful for typed host adapters that can consume
+    /// only a subset of a heterogeneous queue without discarding unsupported
+    /// payloads.
+    pub fn drain_where_now(&self, lane: QueueLane, mut pred: impl FnMut(&T) -> bool) -> Vec<T> {
+        let mut inner = self.lock();
+        let items = match lane {
+            QueueLane::Steer => &mut inner.steers,
+            QueueLane::Followup => &mut inner.followups,
+            QueueLane::Collect => &mut inner.collects,
+        };
+        let mut drained = Vec::new();
+        let mut remaining = Vec::with_capacity(items.len());
+        for item in std::mem::take(items) {
+            if pred(&item) {
+                drained.push(item);
+            } else {
+                remaining.push(item);
+            }
+        }
+        *items = remaining;
+        drained
     }
 
     /// Takes items from `lane` in FIFO order according to `mode`: the oldest
@@ -96,7 +167,7 @@ impl<T> RunQueue<T> {
         match mode {
             QueueMode::All => self.drain(lane).await,
             QueueMode::OneAtATime => {
-                let mut inner = self.inner.lock().await;
+                let mut inner = self.lock();
                 let items = match lane {
                     QueueLane::Steer => &mut inner.steers,
                     QueueLane::Followup => &mut inner.followups,
@@ -113,7 +184,7 @@ impl<T> RunQueue<T> {
 
     /// Returns the current queue depth per lane.
     pub async fn status(&self) -> QueueStatus {
-        let inner = self.inner.lock().await;
+        let inner = self.lock();
         let steers = inner.steers.len();
         let followups = inner.followups.len();
         let collects = inner.collects.len();
@@ -127,7 +198,7 @@ impl<T> RunQueue<T> {
 
     /// Clears every lane and returns the number of dropped items.
     pub async fn clear(&self) -> usize {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock();
         let total = inner.steers.len() + inner.followups.len() + inner.collects.len();
         inner.steers.clear();
         inner.followups.clear();
@@ -146,7 +217,7 @@ impl<T> RunQueue<T> {
     where
         T: Clone,
     {
-        let inner = self.inner.lock().await;
+        let inner = self.lock();
         let mut items =
             Vec::with_capacity(inner.steers.len() + inner.followups.len() + inner.collects.len());
         items.extend(
@@ -180,7 +251,7 @@ impl<T> RunQueue<T> {
     /// Use to retract a specific queued item (e.g. one the host decided not
     /// to apply after all) without clearing the rest of the queue.
     pub async fn remove_where(&self, pred: impl Fn(&T) -> bool) -> usize {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock();
         let before = inner.steers.len() + inner.followups.len() + inner.collects.len();
         inner.steers.retain(|item| !pred(item));
         inner.followups.retain(|item| !pred(item));
@@ -197,4 +268,5 @@ impl<T> Default for RunQueue<T> {
 }
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;

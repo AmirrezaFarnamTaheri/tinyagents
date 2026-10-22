@@ -6,7 +6,10 @@ use super::*;
 use crate::teams::{NewMember, SessionTeamLedger, TeamService};
 
 fn team(dir: &TempDir) -> (SessionTeamLedger, String, String) {
-    let ledger = SessionTeamLedger::new(dir.path());
+    let ledger = SessionTeamLedger::new(std::sync::Arc::new(crate::test_support::ledger_in(
+        dir.path(),
+    )))
+    .unwrap();
     let service = TeamService::new(ledger.clone());
     let team = service
         .create_team(

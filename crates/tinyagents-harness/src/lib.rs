@@ -12,7 +12,7 @@
 //!
 //! # Cargo features
 //!
-//! - `sqlite` — durable, file-backed stores (`rusqlite`).
+//! - `sqlite` — retained as a no-op for compatibility; durable stores are the `Driver*` types over `tinystoragedrivers`.
 //! - `builtin-tools` — the bundled [`tools`] (currently the time tool). The
 //!   old name `tools` is kept as a deprecated alias.
 //! - `multimodal` — image/audio/binary content resolution ([`multimodal`]),
@@ -58,17 +58,23 @@
 //! crates directly, or the compiler will see two distinct copies of the same
 //! type.
 
+pub mod agent_error;
 pub mod agent_loop;
 pub mod artifacts;
-mod blocking;
 pub mod cache;
 pub mod cancel;
+mod canonical_json;
 pub mod capability;
+pub mod catalog;
+pub mod close;
 pub mod config;
 pub mod context;
 pub mod cost;
+pub mod dialect;
+pub mod driver_ids;
 pub mod error;
 pub mod events;
+mod finish_reason;
 pub mod handoff;
 pub mod host;
 pub mod ids;
@@ -81,23 +87,33 @@ pub mod model_registry;
 pub mod multimodal;
 pub mod no_progress;
 pub mod observability;
+pub mod oneshot;
 pub mod prompt;
 pub mod providers;
-pub(crate) mod relaxed_json;
 pub mod retriever;
 pub mod retry;
 pub mod run_queue;
 pub mod runtime;
 pub mod steering;
+pub mod storage;
 pub mod store;
 pub mod stream;
 pub mod structured;
 pub mod summarization;
+pub mod terminal;
 pub mod testkit;
+pub mod thread_reasoning;
+pub mod title;
 pub mod token_estimation;
 pub mod tool;
 #[cfg(feature = "builtin-tools")]
 pub mod tools;
+pub mod turn_deadline;
+pub mod turn_outcome;
+pub mod turn_policy;
+pub mod turn_run_error;
+pub mod turn_run_finalize;
+pub mod turn_stop;
 pub mod workspace;
 
 #[cfg(feature = "media")]
@@ -125,21 +141,37 @@ pub use error::{Result, TinyAgentsError};
 pub use ids::*;
 pub use model_registry::{ModelRegistry, ModelSelection, ResolvedModelBinding};
 pub use no_progress::{
-    ClassifiedFailure, ClassifiedFailureTracker, DEFAULT_IDENTICAL_HALT_THRESHOLD,
-    DEFAULT_REPEAT_CALL_THRESHOLD, DEFAULT_REPEAT_OUTPUT_THRESHOLD, NoProgress, NoProgressTracker,
+    ArgumentChurnDetector, CallGate, ClassifiedFailure, ClassifiedFailureTracker,
+    DEFAULT_IDENTICAL_HALT_THRESHOLD, DEFAULT_REPEAT_CALL_THRESHOLD,
+    DEFAULT_REPEAT_OUTPUT_THRESHOLD, NoProgress, NoProgressTracker, OutcomeFingerprinter,
+    PingPongDetector, PostCompactionGuard, RepeatEscalation, RepeatMonitor, RepeatProgressConfig,
     StreamTextStallDetector, SuccessfulRepeat, SuccessfulRepeatTracker, ToolAttempt,
+    VolatileSpanNormalizer,
+};
+pub use observability::replay::{
+    RunEventsPage, list_active_runs, read_run_events_page, read_run_status,
 };
 pub use observability::{
     AgentCallLatency, AgentLatencyMetrics, AgentObservation, FanOutSink, HarnessEventJournal,
     HarnessStatusStore, InMemoryEventJournal, InMemoryStatusStore, JournalSink, JsonlSink,
-    RedactingSink, StoreEventJournal,
+    ObservedChatModel, PhysicalDispatchGuard, PhysicalDispatchMetadata, PhysicalDispatchObserver,
+    PhysicalDispatchOutcome, PhysicalDispatchStatus, PhysicalDispatchTerminal,
+    PhysicalDispatchUsage, RedactingSink, StoreEventJournal,
 };
+pub use observability::{DriverStatusStore, mint_run_id, reap_orphaned_runs};
 #[cfg(feature = "langfuse")]
 pub use observability::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
 };
-pub use run_queue::{QueueLane, QueueMode, QueueStatus, RunQueue, RunQueueHandle};
-pub use steering::{
-    SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringOutcome, SteeringPolicy,
+pub use run_queue::{
+    ForwardEvent, ForwardEventSink, ForwarderCleanup, QueueLane, QueueMode, QueueStatus,
+    QueuedMessage, RunQueue, RunQueueHandle, SteeringForwarderGuard,
 };
+pub use steering::{
+    RecentRequestIds, RequestIdError, SteeringCommand, SteeringCommandKind, SteeringHandle,
+    SteeringOutcome, SteeringPolicy,
+};
+pub use storage::storage_schema;
+pub use terminal::{TerminalClass, TerminalOutcome, TerminalReason, TimeoutPhase};
 pub use tool::ToolRegistry;
+pub use turn_stop::{TurnFailureClass, TurnStop, TurnStopKind};

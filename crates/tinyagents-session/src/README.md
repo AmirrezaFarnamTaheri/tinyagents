@@ -1,8 +1,9 @@
 # `session` — durable session history, run ledger, and transcripts
 
-SQLite-backed history for agent sessions (requires the `sqlite` feature), a
-restart-survivable ledger for background agent/workflow execution, and a
-JSONL-backed transcript store for KV-cache-stable resume.
+Driver-backed history for agent sessions (`DriverRunLedger` over any
+`tinystoragedrivers` backend), a restart-survivable ledger for background
+agent/workflow execution, a store-port transcript seam for KV-cache-stable resume, and a driver-backed chat
+thread/message store for the product-facing chat log.
 
 ## Why this is a top-level module
 
@@ -18,10 +19,11 @@ would imply a dependency that exists in neither direction.
 | --- | --- | --- |
 | `harness::store` | "what is this run working with right now?" | during a run |
 | `graph::checkpoint` | "how do I resume this interrupted run?" | until resumed |
-| **`session` (SQLite)** | "what happened, what did it cost, how did runs nest?" | indefinitely |
-| **`session::transcript` (JSONL)** | "what exact messages did the model see?" | indefinitely, resumed verbatim |
+| **`session` (driver ledger)** | "what happened, what did it cost, how did runs nest?" | indefinitely |
+| **`session::transcript` (store port)** | "what exact messages did the model see?" | indefinitely, resumed verbatim |
+| **`session::threads` (driver)** | "which chats does the user have, and what is in them?" | indefinitely |
 
-The SQLite-backed history (`ops`, `run_ledger`) is queryable history that
+The driver-backed history (`run_ledger`) is queryable history that
 nothing resumes *from*: cross-session search, cost attribution, and
 orchestration recovery. `session::transcript` is the exception — it exists
 specifically so a restarted run can resume with the byte-identical message
@@ -30,13 +32,11 @@ stream a provider (and its prompt cache) already saw; see its own
 
 ## Layout
 
-Every entry point takes the workspace root and derives the path itself, so a
-host chooses only where its workspace lives:
+Everything lives wherever the host's storage backend puts it:
 
 ```text
-{workspace_dir}/session_db/sessions.db          ← SQLite: sessions, run ledger
-{workspace_dir}/session_raw/{stem}.jsonl        ← JSONL: transcripts (source of truth)
-{workspace_dir}/sessions/YYYY_MM_DD/{stem}.md   ← human-readable transcript view
+{host storage backend}                          ← sessions, run ledger, transcripts, chat threads (collections)
+{workspace_dir}/session_raw/{stem}.jsonl        ← classic transcripts: read once by legacy::import_transcripts_once; rewritten in place only by legacy::rewrite_legacy_transcripts
 ```
 
 ## Public surface
@@ -45,58 +45,57 @@ Re-exported from the crate root (see `src/lib.rs`); the full surface stays
 reachable under `session::`, `session::run_ledger::`, and
 `session::transcript::`.
 
-- **Recording** — `record_session_start`, `record_message`,
-  `record_message_with_reasoning`, `record_tool_call`, `record_session_end`.
-  Use `record_message_with_reasoning` when an assistant response has hidden
-  reasoning that must remain separate from its visible content;
-  `record_message` remains the compatibility wrapper for content-only callers.
-- **Querying** — `get_session`, `list_sessions`, `search_sessions`,
-  `list_messages`, `list_tool_calls`, `list_children`
-- **Recovery** — `mark_interrupted`
+- **Session history** — the `SessionHistoryStore` trait on `DriverRunLedger`:
+  `record_session_start`, `record_message`, `record_tool_call`,
+  `record_session_end`, `get_session`, `list_sessions`, `search_sessions`,
+  `list_messages`, `list_tool_calls`, `list_children`, `mark_interrupted`
 - **Retention** — `apply_retention`, `prune_sessions_before`,
   `prune_tool_calls_before`, `prune_run_events_before`,
-  `prune_run_telemetry_before`, `trim_session_messages`, `reindex_fts`
+  `prune_run_telemetry_before`, `trim_session_messages`, `history_reindex`
 - **Run ledger** — agent runs, workflow runs, teams, members, tasks, run events,
   and telemetry, with the claim/completion coordination primitives — see its
   own [README](./run_ledger/README.md)
-- **Transcripts** — full-rewrite and append-only writers, model-context and
-  display readers, thread lookups and usage summaries — see its own
-  [README](./transcript/README.md)
-- **Connections** — `with_connection` (autocommit) and `with_transaction`
-  (`BEGIN IMMEDIATE`)
+- **Transcripts** — the `TranscriptLocator`/`TranscriptHistory` store seam,
+  background appends, the per-session turn lock, thread spend and the display
+  view — see its own [README](./transcript/README.md)
+- **Chat threads** — `DriverConversationStore` and its wire types (re-exported at
+  the root) under `session::threads` — see its own [README](./threads/README.md)
+- **Store port** — `SessionStoreProvider`, `AgentStores`, `TurnStates`,
+  `InMemorySessionStores`, `DriverSessionStores`, and `RebindableSessionStores` over a `tinystoragedrivers` backend — see
+  [`docs/modules/session/store-port.md`](../../../docs/modules/session/store-port.md)
+- **Legacy import** — `legacy::import_workspace` and
+  `DriverRunLedger::import_legacy_database` (feature `legacy-import`)
 - **Testkit** — `testkit::conformance::run_ledger_conformance` and
   `transcript_history_conformance`: contract suites certifying that a run
   ledger workspace or a `TranscriptHistory` implementation behaves like the
-  bundled ones. Run against the SQLite run ledger (two independent
-  workspaces) and both `FileTranscriptHistory` and the in-memory
+  bundled ones. Run against the memory and SQLite run ledgers and both the driver-backed and the in-memory
   `testkit::InMemoryTranscriptHistory` double in
   `crates/tinyagents-integration-tests/tests/session_conformance.rs`.
 
-## Schema
+## Collections
 
-Six tables plus one FTS5 virtual table, created on demand and idempotently:
+`DriverRunLedger` declares its collections on first use, idempotently:
 
-| Table | Holds |
+| Collection | Holds |
 | --- | --- |
-| `sessions` | one row per session; lineage via `parent_session_id` |
-| `session_messages` | per-message visible content, optional assistant reasoning, model, tokens, cost |
-| `session_tool_calls` | tool name, input, bounded output, status, duration |
-| `sessions_fts` | FTS5 index over session name, message content, tool name |
-| `agent_runs` / `workflow_runs` | background execution state |
-| `run_events` / `run_telemetry` | per-run event stream and rollups |
-| `agent_teams` / `agent_team_members` / `agent_team_tasks` | team coordination |
+| `history.sessions` | one document per session; lineage via `parent_session_id`, times in `started_ms` / `ended_ms` |
+| `history.messages` | per-message content, optional reasoning, model, tokens, cost |
+| `history.tool_calls` | tool name, input, bounded output, status, duration |
+| `history.search` | search rows over session name, message content, tool name |
+| `tsd.counters` (`history`, `messages` / `tool_calls`) | dense message and tool-call id counters; a failed commit leaves a gap |
+| run-ledger collections | agent and workflow runs, run events and telemetry, teams, members, tasks |
 
-WAL journaling and `foreign_keys = ON`. FTS5 comes from `rusqlite`'s `bundled`
-build — there is no separate `fts5` cargo feature at 0.40, so do not add one.
+A classic `sessions.db`, `session_raw/` transcripts and turn-state JSON import
+through the `legacy` module (feature `legacy-import`), id-preserving and
+only-if-absent.
 
 ## Operational constraints
 
-These are the non-obvious rules; each is pinned by a test in `test.rs`.
+These are the non-obvious rules; each is pinned by a test in `run_ledger/drivers/history_tests.rs`.
 
 **Search input is plain text, not FTS5 syntax.** `SessionSearchParams::query` is
-translated to a quoted FTS5 expression before it reaches `MATCH`. Binding raw
-user input made ordinary strings (`C++`, `foo-bar`, `file.rs`) fail with a
-syntax or `no such column` error instead of searching.
+tokenised into plain terms before it reaches the backend search, so ordinary
+strings (`C++`, `foo-bar`, `file.rs`) search instead of failing on syntax.
 
 **Indexed content is truncated on a character boundary.** Slicing at a raw byte
 offset panics on multi-byte input, and because the message insert has already
@@ -105,46 +104,9 @@ committed, the row would survive with no FTS entry — silently unsearchable.
 **Tool output is bounded** to `MAX_TOOL_OUTPUT_BYTES`, truncated on a character
 boundary with a marker appended.
 
-**Telemetry counters are `Option` for partial updates.** The columns are
-`NOT NULL DEFAULT`, and SQLite does not apply a column default to an explicitly
-supplied `NULL`, so the insert path coalesces to the default while the update
-path coalesces to the stored value. `excluded.*` cannot serve the update side —
-it observes the already-coalesced row, so `None` would read as `0` and clobber a
-stored counter.
-
-**Run-event sequences are allocated by the INSERT itself.** Reading
-`MAX(sequence) + 1` and then inserting is a read-modify-write race; the loser
-fails the primary key and the event is lost.
-
-**Coordination operations need `with_transaction`, not `with_connection`.**
-`with_connection` is autocommit, which gives ordering but no isolation. Claim
-and completion read state and then act on it, so they take the write lock up
-front with `BEGIN IMMEDIATE` — racing claims serialize at `BEGIN` rather than
-failing at `COMMIT` after one has already decided it won.
-
-**That serialization depends on a busy timeout, which we now set ourselves.**
-SQLite's own default is zero — with no busy handler a `BEGIN IMMEDIATE` that
-meets a competing writer fails immediately with `SQLITE_BUSY` instead of
-waiting. It was never actually zero here: `rusqlite`'s `Connection::open`
-installs a 5s timeout unconditionally. `store::BUSY_TIMEOUT` sets the same value
-explicitly, so a correctness property the claim/gate/sequence logic relies on is
-not silently supplied by a transitive dependency's undocumented default.
-
-**An upsert reads its own write back inside the same transaction.** Inserting on
-an autocommit connection, closing it, then re-opening to `get_*` returns
-whatever a concurrent writer left behind rather than what this call wrote.
-
-**Schema changes go through the versioned migration list** in `migrations.rs`,
-not through more `CREATE TABLE IF NOT EXISTS` at the top of an operation. The
-list index *is* the version, so it may only be appended to; retire a migration
-by replacing its body with `"SELECT 1;"` rather than deleting it. Without a
-version marker no column could ever be added to a workspace database that
-already existed.
-
 **Nothing is deleted unless a host asks.** `retention.rs` owns the only delete
 paths (sessions, messages, tool calls, run events, telemetry) plus
-`reindex_fts`, which rebuilds the search index for rows whose FTS entry was lost
-before the row/index pairs became transactional. Retention is a policy decision,
+`history_reindex`, which rebuilds the search index from the stored rows. Retention is a policy decision,
 so none of it runs on a schedule of its own.
 
 **A claim is meaningful only while a task is `in_progress`.** An upsert that
@@ -162,11 +124,8 @@ gate fails — otherwise a retry after fixing an unrelated gate would fail
 | --- | --- |
 | `lib.rs` | crate docs and public surface |
 | `types.rs` | serde record types for sessions/messages/tool calls |
-| `store.rs` | connection/transaction helpers and pragma setup |
-| `migrations.rs` | versioned, append-only schema migration list |
-| `ops.rs` | session recording and querying |
-| `retention.rs` | pruning, trimming, and FTS index repair |
-| `context.rs` | `StorageContext`, the error-context shim |
+| `fts.rs` | search-snippet cap and snippet helper |
 | `run_ledger/` | background run + team coordination — see its own [README](./run_ledger/README.md) |
+| `threads/` | driver-backed chat thread/message store with a cross-thread search index — see its own [README](./threads/README.md) |
 | `transcript.rs` + `transcript/` | durable, provider-neutral transcripts for KV-cache-stable resume — see its own [README](./transcript/README.md) |
-| `test.rs` | module-local unit tests |
+| `*_tests.rs` | module-local unit tests |

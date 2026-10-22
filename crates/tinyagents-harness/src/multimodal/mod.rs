@@ -1,4 +1,10 @@
-//! Attachment resolution for `[IMAGE:…]` and `[FILE:…]` markers.
+//! Generic attachment intake, bounded archive inspection, and legacy
+//! resolution for `[IMAGE:…]` and `[FILE:…]` markers.
+//!
+//! [`resolve_attachment`] returns original decoded bytes and metadata before
+//! extraction. [`inspect_archive`] lists ZIP/TAR/TAR.GZ contents without disk
+//! extraction. Hosts authorize paths and select storage and provider media
+//! blocks; the APIs here introduce no new transcript variants.
 //!
 //! A user attaches a picture or a document. Somewhere between the text box and
 //! the provider, that attachment has to become bytes the model can read —
@@ -31,15 +37,17 @@
 //!
 //! ## What stays with the host
 //!
-//! Four things, each because it depends on the host's own runtime, storage, or
-//! threat model rather than on anything universal:
+//! Host decisions remain host-owned because they depend on its runtime,
+//! storage, or threat model:
 //!
 //! | Host owns | Why |
 //! | --- | --- |
-//! | The `reqwest::Client` | proxy configuration and timeouts are host policy; this module borrows one |
+//! | The `reqwest::Client` | retained in resolver signatures for compatibility; remote fetches use a DNS-pinned direct client with redirects disabled |
 //! | [`TextExtractor`] | which document parser (if any) a host carries, and how long it may run |
-//! | The attachment stash | where bytes live between ingress and dispatch, and their lifetime |
-//! | Message-level counting | only the host knows what its message type is |
+//! | The stash policy | which storage scope holds bytes between ingress and dispatch, how large it may grow, how long they live ([`BlobAttachmentStash`] is the mechanism) |
+//! | The source resolver and scope | only the host can authorize a path, fetch remote data, and bind a request to trusted access context |
+//! | The selected model profile | catalog facts and transport serialization support are independent inputs |
+//! | Historical placeholders and image readout | safe path hints and non-vision model choice are host policies |
 //!
 //! The stash deserves a note, because the split is not obvious. A host that
 //! persists conversations should **not** persist a multi-megabyte `data:` URI:
@@ -56,25 +64,36 @@
 //!
 //! Two rules, both learned the hard way:
 //!
-//! 1. **Count before resolving.** [`config::FileLimits::files_disabled`] and the
-//!    per-turn caps are checked against the raw markers, before any read
-//!    happens. A cap enforced after the fetch is not a cap.
-//! 2. **Check the sentinel before the clamp.** `max_files == 0` means *none*,
-//!    and [`config::FileLimits::effective`] clamps it to 1. Consulting only the
-//!    clamped value admits exactly one attachment from a source that asked for
-//!    zero.
+//! 1. **Count before resolving.** [`request::MediaRequestModel`] checks latest
+//!    turn caps and its bounded history budget against raw markers before any
+//!    source resolver is called. A cap enforced after the fetch is not a cap.
+//! 2. **Preserve the hard disable.** `max_files == 0` means *none* and stays
+//!    zero in [`config::FileLimits::effective`]. The request decorator checks
+//!    this before calling a host resolver.
 
+pub mod archive;
 pub mod config;
 pub mod data_uri;
 pub mod error;
 pub mod markers;
 pub mod mime;
 pub mod payload;
+pub mod png;
+pub mod request;
+pub use png::optimize_png_lossless;
+pub mod blob_stash;
 pub mod resolve;
+pub mod types;
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;
 
+pub use archive::{
+    ArchiveEntry, ArchiveEntryKind, ArchiveError, ArchiveFormat, ArchiveLimits, ArchiveListing,
+    ArchiveTruncation, inspect_archive,
+};
+pub use blob_stash::{BlobAttachmentStash, StashedAttachment};
 pub use config::{ALLOWED_IMAGE_MIME_TYPES, FileLimits, ImageLimits};
 pub use error::{MultimodalError, Result};
 pub use markers::{
@@ -84,4 +103,13 @@ pub use markers::{
     text_has_image_placeholders,
 };
 pub use payload::{FilePayload, compose_multimodal_message, sha256_prefix, truncate_chars};
-pub use resolve::{NoTextExtractor, TextExtractor, resolve_file, resolve_image};
+pub use request::{
+    MediaFallbackCache, MediaFallbackRenderer, MediaHistoryFallback, MediaImageReadout,
+    MediaRequestConfig, MediaRequestModel, MediaSourceKind, MediaSourceMetadata,
+    MediaSourceResolver, ResolvedMedia,
+};
+pub use resolve::{
+    NoTextExtractor, TextExtractor, resolve_attachment, resolve_file, resolve_image,
+};
+
+pub use types::{ResolvedAttachment, UnknownMimePolicy};

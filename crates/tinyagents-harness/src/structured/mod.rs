@@ -61,7 +61,7 @@ mod repair;
 mod types;
 mod validate;
 
-pub use repair::JsonRepair;
+pub use repair::{JsonRepair, parse_lenient, parse_lenient_last_object};
 pub use types::*;
 
 use async_trait::async_trait;
@@ -401,7 +401,7 @@ impl StructuredExtractor {
             let truncated = response
                 .finish_reason
                 .as_deref()
-                .is_some_and(|reason| reason == "length");
+                .is_some_and(|reason| crate::finish_reason::is_length_stop(Some(reason)));
             return Err(TinyAgentsError::StructuredOutput(if truncated {
                 format!(
                     "schema '{}': the model returned no content because it hit its output limit \
@@ -591,4 +591,5 @@ pub fn default_prompted_template() -> &'static str {
 }
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;

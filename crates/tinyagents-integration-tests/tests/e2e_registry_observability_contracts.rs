@@ -1,3 +1,5 @@
+mod common;
+use common::storage;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,7 +16,7 @@ use tinyagents_harness::observability::{
     AgentObservation, FanOutSink, HarnessEventJournal, HarnessStatusStore, InMemoryEventJournal,
     InMemoryStatusStore, JournalSink, JsonlSink, RedactingSink, StoreEventJournal,
 };
-use tinyagents_harness::store::{AppendStore, InMemoryAppendStore, JsonlAppendStore};
+use tinyagents_harness::store::{AppendStore, DriverAppendStore, InMemoryAppendStore};
 use tinyagents_harness::testkit::{FakeTool, Trajectory};
 use tinyagents_registry::{CapabilityRegistry, ComponentId, ComponentKind, ComponentMetadata};
 use tinyinference_llm::providers::MockModel;
@@ -155,11 +157,13 @@ fn component_metadata_and_event_kinds_are_stable_serializable_contracts() {
             output: None,
         },
         AgentEvent::ToolStarted {
+            parent_call_id: None,
             call_id: CallId::new("tool-1"),
             tool_name: "lookup".into(),
             input: None,
         },
         AgentEvent::ToolCompleted {
+            parent_call_id: None,
             call_id: CallId::new("tool-1"),
             tool_name: "lookup".into(),
             started_at_ms: None,
@@ -171,8 +175,14 @@ fn component_metadata_and_event_kinds_are_stable_serializable_contracts() {
             metadata: None,
         },
         AgentEvent::StateUpdate,
-        AgentEvent::MiddlewareStarted { name: "mw".into() },
-        AgentEvent::MiddlewareCompleted { name: "mw".into() },
+        AgentEvent::MiddlewareStarted {
+            name: "mw".into(),
+            call_id: None,
+        },
+        AgentEvent::MiddlewareCompleted {
+            name: "mw".into(),
+            call_id: None,
+        },
         AgentEvent::CacheHit {
             call_id: CallId::new("cache-1"),
             key: "secret-key".into(),
@@ -228,6 +238,12 @@ fn component_metadata_and_event_kinds_are_stable_serializable_contracts() {
             call_id: CallId::new("tool-1"),
             message: "halfway".into(),
         },
+        AgentEvent::ToolProgressDetail {
+            call_id: CallId::new("tool-1"),
+            message: "halfway".into(),
+            fraction: Some(0.5),
+            partial: None,
+        },
         AgentEvent::MiddlewareFailed {
             name: "mw".into(),
             error: "boom".into(),
@@ -235,10 +251,12 @@ fn component_metadata_and_event_kinds_are_stable_serializable_contracts() {
         AgentEvent::StreamClosed,
         AgentEvent::RunCompleted {
             run_id: RunId::new("run-1"),
+            outcome: None,
         },
         AgentEvent::RunFailed {
             run_id: RunId::new("run-2"),
             error: "bad".into(),
+            outcome: None,
         },
     ];
     let kinds: Vec<_> = events.iter().map(AgentEvent::kind).collect();
@@ -275,6 +293,7 @@ async fn event_sinks_journals_and_status_stores_preserve_run_lineage() {
     });
     let second = sink.emit(AgentEvent::RunCompleted {
         run_id: RunId::new("run-1"),
+        outcome: None,
     });
     assert_eq!(first.offset, 0);
     assert_eq!(second.offset, 1);
@@ -284,11 +303,13 @@ async fn event_sinks_journals_and_status_stores_preserve_run_lineage() {
     let journal = EventJournal::new();
     assert!(journal.is_empty());
     journal.append(AgentEvent::ToolStarted {
+        parent_call_id: None,
         call_id: CallId::new("tool-1"),
         tool_name: "lookup".into(),
         input: None,
     });
     journal.append(AgentEvent::ToolCompleted {
+        parent_call_id: None,
         call_id: CallId::new("tool-1"),
         tool_name: "lookup".into(),
         started_at_ms: None,
@@ -435,14 +456,9 @@ async fn fanout_redaction_journal_and_jsonl_sinks_forward_best_effort_events() {
     );
     assert_eq!(observations[0].root_run_id.as_str(), "root-run");
 
-    let root = std::env::temp_dir().join(format!(
-        "tinyagents-jsonl-sink-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+    let jsonl_store: std::sync::Arc<dyn AppendStore> = std::sync::Arc::new(DriverAppendStore::new(
+        std::sync::Arc::clone(storage::memory().streams()),
     ));
-    let jsonl_store = JsonlAppendStore::new(root.clone());
     let jsonl_sink = JsonlSink::new(jsonl_store.clone(), "events");
     jsonl_sink.on_event(&secret_record);
     jsonl_sink.flush();
@@ -450,6 +466,4 @@ async fn fanout_redaction_journal_and_jsonl_sinks_forward_best_effort_events() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0, 0);
     assert_eq!(rows[0].1["event"]["key"], "prefix-api-key-123-suffix");
-
-    std::fs::remove_dir_all(root).ok();
 }

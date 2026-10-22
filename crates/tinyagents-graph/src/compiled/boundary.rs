@@ -68,6 +68,13 @@ pub(super) struct StepBoundary<'a> {
     pub(super) step: usize,
 }
 
+/// Which requested stop a boundary is handling.
+#[derive(Clone, Copy)]
+enum StopKind {
+    Cancelled,
+    Drained,
+}
+
 impl<State, Update> CompiledGraph<State, Update>
 where
     State: Clone + Send + Sync + 'static,
@@ -458,42 +465,8 @@ where
         active: &[Activation],
         state: &State,
     ) -> Result<GraphExecution<State>> {
-        ctx.disarm_drop_guard();
-        // Settle in-flight Async background writes before persisting the
-        // cancellation checkpoint, same as the failure boundary — best
-        // effort, since a lost background write here must not turn a
-        // successfully-requested cancellation into a hard error.
-        let _ = ctx.async_writes.drain().await;
-        let checkpoint_id = self
-            .persist_stop_checkpoint(ctx, state, active, "cancelled")
+        self.finish_stop_boundary(ctx, active, state, StopKind::Cancelled)
             .await
-            .unwrap_or(None);
-
-        let mut status = ctx.base_status();
-        status.status = ExecutionStatus::Cancelled;
-        status.current_step = ctx.steps;
-        status.active_nodes = activation_nodes(active);
-        status.checkpoint_id = checkpoint_id.clone();
-        status.ended_at = Some(SystemTime::now());
-        ctx.save_status(status.clone()).await;
-        ctx.emit(GraphEvent::RunCancelled {
-            run_id: ctx.run_id.clone(),
-        });
-
-        Ok(GraphExecution {
-            state: state.clone(),
-            run_id: ctx.run_id.clone(),
-            graph_id: self.graph_id.clone(),
-            root_run_id: ctx.root_run_id.clone(),
-            parent_run_id: ctx.parent_run_id.clone(),
-            child_runs: std::mem::take(&mut ctx.all_child_runs),
-            visited: std::mem::take(&mut ctx.visited),
-            steps: ctx.steps,
-            interrupts: Vec::new(),
-            status,
-            checkpoint_id,
-            drained: false,
-        })
     }
 
     /// The graceful-drain boundary: the run's [`super::DrainSignal`] was
@@ -511,25 +484,49 @@ where
         active: &[Activation],
         state: &State,
     ) -> Result<GraphExecution<State>> {
+        self.finish_stop_boundary(ctx, active, state, StopKind::Drained)
+            .await
+    }
+
+    /// Shared body of the cancellation and drain boundaries: both are
+    /// requested stops, so a lost Async background write must not turn either
+    /// into a hard error (the drain and the checkpoint write are best effort).
+    /// They persist `active` as a resumable checkpoint, record the matching
+    /// terminal status, emit the matching event, and return `Ok` with no
+    /// interrupts; only `kind` differs.
+    async fn finish_stop_boundary(
+        &self,
+        ctx: &mut RunCtx<'_, State, Update>,
+        active: &[Activation],
+        state: &State,
+        kind: StopKind,
+    ) -> Result<GraphExecution<State>> {
         ctx.disarm_drop_guard();
-        // A drain is a requested stop, so like cancellation a lost Async
-        // background write must not turn it into a hard error.
         let _ = ctx.async_writes.drain().await;
+        let (marker, terminal) = match kind {
+            StopKind::Cancelled => ("cancelled", ExecutionStatus::Cancelled),
+            StopKind::Drained => ("drained", ExecutionStatus::Drained),
+        };
         let checkpoint_id = self
-            .persist_stop_checkpoint(ctx, state, active, "drained")
+            .persist_stop_checkpoint(ctx, state, active, marker)
             .await
             .unwrap_or(None);
 
         let mut status = ctx.base_status();
-        status.status = ExecutionStatus::Drained;
+        status.status = terminal;
         status.current_step = ctx.steps;
         status.active_nodes = activation_nodes(active);
         status.checkpoint_id = checkpoint_id.clone();
         status.ended_at = Some(SystemTime::now());
         ctx.save_status(status.clone()).await;
-        ctx.emit(GraphEvent::RunDrained {
-            run_id: ctx.run_id.clone(),
-            steps: ctx.steps,
+        ctx.emit(match kind {
+            StopKind::Cancelled => GraphEvent::RunCancelled {
+                run_id: ctx.run_id.clone(),
+            },
+            StopKind::Drained => GraphEvent::RunDrained {
+                run_id: ctx.run_id.clone(),
+                steps: ctx.steps,
+            },
         });
 
         Ok(GraphExecution {
@@ -544,7 +541,7 @@ where
             interrupts: Vec::new(),
             status,
             checkpoint_id,
-            drained: true,
+            drained: matches!(kind, StopKind::Drained),
         })
     }
 
@@ -604,11 +601,7 @@ where
         .with_versions_seen(versions_seen)
         .with_metadata(metadata);
         let writes = checkpoint.pending_writes.clone();
-        let config = CheckpointConfig {
-            thread_id: checkpoint.thread_id.clone(),
-            checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
-            namespace: checkpoint.namespace.clone(),
-        };
+        let config = checkpoint.config();
         let id = checkpointer.put(checkpoint).await?;
         if !writes.is_empty() {
             checkpointer.put_writes(&config, &writes).await?;
@@ -748,11 +741,7 @@ where
             boundary.pending,
         ));
         let writes = checkpoint.pending_writes.clone();
-        let config = CheckpointConfig {
-            thread_id: checkpoint.thread_id.clone(),
-            checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
-            namespace: checkpoint.namespace.clone(),
-        };
+        let config = checkpoint.config();
         let id = checkpointer.put(checkpoint).await?;
         // Also record the ledger through the write protocol, so backends
         // that implement it can answer "did this task run?" without loading
@@ -784,11 +773,7 @@ where
         let checkpoint =
             self.build_loop_checkpoint(ctx, thread, boundary, step, interrupts, interrupted);
         let writes = checkpoint.pending_writes.clone();
-        let config = CheckpointConfig {
-            thread_id: checkpoint.thread_id.clone(),
-            checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
-            namespace: checkpoint.namespace.clone(),
-        };
+        let config = checkpoint.config();
         let id = checkpointer.put(checkpoint).await?;
         checkpointer.put_writes(&config, &writes).await?;
         self.emit(
@@ -838,11 +823,7 @@ where
         // the ledger tooling sees no completion markers for any checkpoint
         // written under `DurabilityMode::Async`.
         let writes = checkpoint.pending_writes.clone();
-        let write_config = CheckpointConfig {
-            thread_id: checkpoint.thread_id.clone(),
-            checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
-            namespace: checkpoint.namespace.clone(),
-        };
+        let write_config = checkpoint.config();
 
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {

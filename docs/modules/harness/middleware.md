@@ -82,9 +82,11 @@ pub trait ModelMiddleware<State, Ctx = ()>: Send + Sync {
 #[async_trait]
 pub trait ToolMiddleware<State, Ctx = ()>: Send + Sync {
     fn name(&self) -> &str;
+    /// Defaults to `true`; `false` keeps multi-call batches serial.
+    fn concurrent_safe(&self) -> bool { true }
     async fn wrap_tool(
         &self,
-        ctx: &mut RunContext<Ctx>,
+        ctx: &RunContext<Ctx>, // shared: calls of one batch overlap
         state: &State,
         call: ToolCall,
         next: ToolHandler<'_, State, Ctx>,
@@ -103,7 +105,10 @@ innermost layer is supplied by the agent loop via the `ModelBaseCall` /
 outermost first). `MiddlewareModelOutcome::Response(ModelResponse)` and
 `MiddlewareToolOutcome::Result(ToolResult)` carry the resolved value; both are
 `#[non_exhaustive]`. The agent loop runs each lifecycle `before_*` hook, then
-the wrap onion, then each lifecycle `after_*` hook.
+the wrap onion, then each lifecycle `after_*` hook. `wrap_tool` and
+`ToolHandler::run` take a shared `&RunContext`; see
+[tool-wrap concurrency](middleware-tool-wrap.md) for what that means for
+multi-call batches and how to migrate a `&mut RunContext` wrap.
 
 ## Ordering
 
@@ -197,6 +202,8 @@ Each built-in must document:
 - interaction with streaming
 - interaction with provider prompt/KV-cache layout
 - interaction with retries and fallbacks
+
+The repeat-progress guard (`RepeatProgressMiddleware`) is documented in [repeat-progress.md](repeat-progress.md).
 
 ## Tool policy enforcement
 
@@ -443,10 +450,17 @@ optional `ToolControl { return_direct, terminate, goto, state_update }`. The
 loop translates it into the same `MiddlewareControl` vocabulary after
 `after_tool`/`after_tool_control` run:
 
-- `return_direct` or `terminate` — the tool's own output becomes
-  `AgentRun::final_response` and the loop requests `JumpTo(End)` (recording the
-  final response directly rather than falling back to the last assistant
-  text, which `JumpTo(End)` alone cannot target precisely).
+- `return_direct` — the tool's own output becomes `AgentRun::final_response`
+  and the loop requests `JumpTo(End)` (recording the final response directly
+  rather than falling back to the last assistant text, which `JumpTo(End)`
+  alone cannot target precisely). Any one call asking is enough.
+- `terminate` — a *batch* decision (pi's `shouldTerminateToolBatch`): the run
+  ends only when **every** call of the turn's batch asked to terminate, because
+  a sibling that did not may have returned something the model still has to
+  read. A mixed batch, or one with a deferred call, ignores the hint and the
+  loop continues. When the batch does end the run, the final response is the
+  last call's output in source order. A call that sets `terminate` does not
+  also act on its own `goto`.
 - `goto: Some("model" | "tools" | "end")` — mapped to the matching
   `JumpTo(LoopTarget)`; an unrecognized value is logged and ignored.
 - `state_update: Some(json)` — queued as raw JSON via

@@ -28,7 +28,7 @@ concrete work items.
 
 One serialized `ThreadGoal` per thread under the `graph.goals` namespace of a
 `crate::harness::store::Store`, keyed by `hex(thread_id)` (hex keeps arbitrary
-thread ids valid across `InMemoryStore` / `FileStore` / Sqlite). CRUD:
+thread ids valid across `InMemoryStore` / `DriverStore`). CRUD:
 `get` / `set` / `set_if_absent` / `complete` / `pause` / `resume` / `clear` /
 `list_all` / `account_usage` / `set_continuation_suppressed_if`.
 
@@ -48,7 +48,7 @@ cross-key transaction, so each mutation runs `load → mutate → put` under a
 per-thread async mutex (a weak-value `graph::thread_locks::ThreadLockMap`, so
 idle threads' mutexes are reclaimed instead of leaking) — atomic **within one
 process**. Across processes sharing
-a `FileStore`, two concurrent read-modify-writes can lose an update; the
+a shared `DriverStore`, two concurrent read-modify-writes can lose an update; the
 `goal_id` guard still prevents logical corruption from stale accounting but not
 lost updates. Funnel goal mutations through one process, or wait for a future
 `Store::compare_and_swap`.
@@ -124,4 +124,4 @@ let exec = graph.run_with_thread("thread-1", St::default()).await?;
 | `tool.rs` | `GoalTool` / `GoalToolKind` harness tools. |
 | `continuation.rs` | `goal_gate_node`, `run_continuation_tick`, `note_user_turn`. |
 | `budget.rs` | `account_turn`, `GoalBudgetGuard`, `BudgetVerdict` — charging a finished turn and stopping an overrunning one. |
-| `test.rs` | Unit tests (types, store, tools, continuation loop, budget). |
+| `mod_tests.rs` | Unit tests (types, store, tools, continuation loop, budget). |

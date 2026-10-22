@@ -26,6 +26,7 @@ mod types;
 
 pub use types::*;
 
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::error::{Result, TinyAgentsError};
@@ -83,6 +84,37 @@ impl RunLimits {
         self.max_tool_concurrency = n;
         self
     }
+
+    /// Sets the maximum nested tool-call depth. See
+    /// [`RunLimits::max_nested_depth`].
+    pub fn with_max_nested_depth(mut self, n: usize) -> Self {
+        self.max_nested_depth = n;
+        self
+    }
+
+    /// Sets the maximum silence between streaming-model output events, after
+    /// the first one. `None` disables the inactivity timeout. See
+    /// [`RunLimits::stream_idle_timeout_ms`].
+    pub fn with_stream_idle_timeout_ms(mut self, ms: Option<u64>) -> Self {
+        self.stream_idle_timeout_ms = ms;
+        self
+    }
+
+    /// Sets the opt-in maximum wait for a streaming model call's first output
+    /// event. `None` (the default) means no separate bound. See
+    /// [`RunLimits::stream_first_event_timeout_ms`].
+    pub fn with_stream_first_event_timeout_ms(mut self, ms: Option<u64>) -> Self {
+        self.stream_first_event_timeout_ms = ms;
+        self
+    }
+
+    /// Sets how many consecutive stream idle timeouts on one model trip the
+    /// breaker. `None` disables it. See
+    /// [`RunLimits::max_consecutive_stream_idle_timeouts`].
+    pub fn with_max_consecutive_stream_idle_timeouts(mut self, n: Option<usize>) -> Self {
+        self.max_consecutive_stream_idle_timeouts = n;
+        self
+    }
 }
 
 /// Tracks live counters for a single harness run and enforces [`RunLimits`].
@@ -95,6 +127,21 @@ pub struct LimitTracker {
     limits: RunLimits,
     model_calls: usize,
     tool_calls: usize,
+    /// Tool calls tools made through `ToolExecutionContext::call_tool`.
+    /// Shared (atomic) because nested calls run from inside a tool future that
+    /// holds only `&RunContext`; they count against `max_tool_calls` together
+    /// with `tool_calls`.
+    nested_tool_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Streaming model calls that ended in an idle timeout since the last
+    /// output event arrived (the agent loop also clears it when it switches to
+    /// a fallback model, making it a per-model count). See [`LimitTracker::record_stream_idle_timeout`].
+    consecutive_stream_idle_timeouts: usize,
+    /// Idle-timeout strikes keyed by model name. The public scalar helpers
+    /// remain for compatibility with callers that track one stream at a time.
+    stream_idle_timeouts_by_model: HashMap<String, usize>,
+    /// Models the failover policy has written off for the rest of the run
+    /// (see [`crate::retry::FailoverReason::skips_model_for_run`]).
+    skipped_models: HashSet<String>,
     started_at: Instant,
 }
 
@@ -106,8 +153,70 @@ impl LimitTracker {
             limits,
             model_calls: 0,
             tool_calls: 0,
+            nested_tool_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            consecutive_stream_idle_timeouts: 0,
+            stream_idle_timeouts_by_model: HashMap::new(),
+            skipped_models: HashSet::new(),
             started_at: Instant::now(),
         }
+    }
+
+    /// Records that a streaming model call went idle past its timeout and
+    /// returns the number of *consecutive* idle timeouts so far.
+    ///
+    /// The count survives the retry loop; the agent loop clears it on any
+    /// output event and when it moves to a fallback model. The caller compares
+    /// it with
+    /// [`RunLimits::max_consecutive_stream_idle_timeouts`].
+    pub fn record_stream_idle_timeout(&mut self) -> usize {
+        self.consecutive_stream_idle_timeouts += 1;
+        self.consecutive_stream_idle_timeouts
+    }
+
+    /// Clears the consecutive stream-idle-timeout count: a stream delivered
+    /// output, or the loop moved to a different model.
+    pub fn reset_stream_idle_timeouts(&mut self) {
+        self.consecutive_stream_idle_timeouts = 0;
+    }
+
+    /// Returns the current consecutive stream-idle-timeout count.
+    pub fn consecutive_stream_idle_timeouts(&self) -> usize {
+        self.consecutive_stream_idle_timeouts
+    }
+
+    /// Records an idle timeout for `model` and returns that model's strikes.
+    pub fn record_stream_idle_timeout_for(&mut self, model: &str) -> usize {
+        let strikes = self
+            .stream_idle_timeouts_by_model
+            .entry(model.to_owned())
+            .or_default();
+        *strikes += 1;
+        *strikes
+    }
+
+    /// Clears the idle-timeout strikes for `model` after visible output.
+    pub fn reset_stream_idle_timeouts_for(&mut self, model: &str) {
+        self.stream_idle_timeouts_by_model.remove(model);
+    }
+
+    /// Returns the idle-timeout strikes for `model`.
+    pub fn consecutive_stream_idle_timeouts_for(&self, model: &str) -> usize {
+        self.stream_idle_timeouts_by_model
+            .get(model)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Marks `model` as unusable for the remainder of this run: later model
+    /// calls skip it in favour of the next fallback (the cross-call skip hint
+    /// recorded for [`crate::retry::FailoverReason::AuthPermanent`]).
+    pub fn skip_model_for_run(&mut self, model: &str) {
+        self.skipped_models.insert(model.to_owned());
+    }
+
+    /// Whether [`LimitTracker::skip_model_for_run`] was called for `model`.
+    pub fn is_model_skipped(&self, model: &str) -> bool {
+        self.skipped_models.contains(model)
     }
 
     /// Resets the wall-clock start to now, leaving the call counters and
@@ -162,10 +271,66 @@ impl LimitTracker {
     /// [`LimitOutcome`]. See [`LimitTracker::try_record_model_call`].
     pub fn try_record_tool_call(&mut self) -> Result<LimitOutcome> {
         self.tool_calls += 1;
-        if self.tool_calls > self.limits.max_tool_calls {
+        if self.tool_calls + self.nested_tool_calls() > self.limits.max_tool_calls {
             return self.exhausted(LimitKind::ToolCalls, self.limits.max_tool_calls);
         }
         Ok(LimitOutcome::Proceed)
+    }
+
+    /// Reserves one slot of the tool-call cap for a nested call (a tool
+    /// calling another tool), counted together with the model-issued calls.
+    ///
+    /// Takes `&self` because nested calls run while a tool future holds a
+    /// shared `&RunContext`. Always fails closed with `LimitExceeded` when the
+    /// cap is spent, whatever [`RunLimits::behavior`] says: there is no loop
+    /// boundary at which a nested call could be answered with a partial result.
+    /// Pair a successful reservation with
+    /// [`LimitTracker::release_nested_tool_call`] when the call never runs.
+    pub fn try_reserve_nested_tool_call(&self) -> Result<()> {
+        // One compare-and-swap loop: the slot is taken only if the combined
+        // count is still under the cap, so a rejected reservation never
+        // touches the counter and concurrent reservations cannot overspend it.
+        let cap = self.limits.max_tool_calls;
+        let issued = self.tool_calls;
+        if self.update_nested(|nested| (issued + nested < cap).then_some(nested + 1)) {
+            return Ok(());
+        }
+        Err(TinyAgentsError::LimitExceeded(format!(
+            "max tool calls ({cap}) exceeded by a nested tool call"
+        )))
+    }
+
+    /// Releases a slot taken by [`LimitTracker::try_reserve_nested_tool_call`]
+    /// for a call that never ran. Saturates at zero.
+    pub fn release_nested_tool_call(&self) {
+        self.update_nested(|nested| nested.checked_sub(1));
+    }
+
+    /// Applies `step` to the nested counter atomically; `false` when `step`
+    /// declined (returned `None`).
+    fn update_nested(&self, step: impl Fn(usize) -> Option<usize>) -> bool {
+        use std::sync::atomic::Ordering;
+        let mut current = self.nested_tool_calls.load(Ordering::SeqCst);
+        loop {
+            let Some(next) = step(current) else {
+                return false;
+            };
+            match self.nested_tool_calls.compare_exchange_weak(
+                current,
+                next,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    /// Returns the number of nested tool calls counted against the cap so far.
+    pub fn nested_tool_calls(&self) -> usize {
+        self.nested_tool_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Shared exhaustion branch: error or clean stop, per [`RunLimits::behavior`].
@@ -264,7 +429,11 @@ impl LimitTracker {
         self.model_calls
     }
 
-    /// Returns the number of tool calls recorded so far.
+    /// Returns the number of **model-issued** tool calls recorded so far.
+    ///
+    /// Nested calls are counted separately
+    /// ([`LimitTracker::nested_tool_calls`]); both count against the cap, so
+    /// the slots left are `max_tool_calls - tool_calls - nested_tool_calls`.
     pub fn tool_calls(&self) -> usize {
         self.tool_calls
     }
@@ -363,4 +532,5 @@ impl LimitTracker {
 }
 
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;
