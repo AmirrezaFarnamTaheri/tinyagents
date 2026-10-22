@@ -5,7 +5,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use tinyagents_graph::checkpoint::DriverCheckpointer;
 use tinystoragedrivers_core::{DocumentStore, MemoryStorage, Scope, ScopedStorage, StorageBackend};
 use tinystoragedrivers_sqlite::SqliteStorage;
 
@@ -27,9 +26,4 @@ pub fn sqlite(dir: &Path, name: &str) -> ScopedStorage {
 /// The document port of `storage`.
 pub fn docs(storage: &ScopedStorage) -> Arc<dyn DocumentStore> {
     Arc::clone(storage.documents())
-}
-
-/// A durable checkpointer over `checkpoints.sqlite` in `dir`.
-pub fn checkpointer<State>(dir: &Path) -> DriverCheckpointer<State> {
-    DriverCheckpointer::new(docs(&sqlite(dir, "checkpoints.sqlite")))
 }

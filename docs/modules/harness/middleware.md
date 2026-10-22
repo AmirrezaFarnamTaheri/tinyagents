@@ -1,7 +1,7 @@
 # Harness Middleware Feature
 
 Middleware is the main extension point for behavior that cuts across models,
-tools, memory, stores, streaming, and graph nodes.
+tools, memory, stores, and streaming.
 
 ## Source Inspiration
 
@@ -35,8 +35,6 @@ understand graph internals for normal harness usage.
 - Allow middleware to emit events.
 - Allow middleware to add local state updates without mutating unrelated state.
 - Allow middleware to jump to model, tools, or end when used inside an agent loop.
-- Translate middleware control outcomes into state-graph commands when a run is
-  graph-backed.
 - Expose errors to middleware for logging, redaction, fallback, or recovery.
 - Keep middleware testable with fake models, tools, and event sinks.
 
@@ -143,27 +141,6 @@ Middleware should be able to return:
 - persist checkpoint
 - resume from checkpoint
 - fail with classified error
-
-Graph-specific commands should be translated at the graph boundary. The harness
-should expose harness-native control outcomes so it remains usable without a
-graph.
-
-## Graph Boundary
-
-Middleware must not need to know whether the caller is using the simple loop or
-the state-graph runtime. The runtime adapter maps harness-native outcomes onto
-graph commands:
-
-- continue -> `Command::Continue`
-- jump to model/tools/end -> `Command::Goto(...)` or `Command::End`
-- human interrupt -> `Command::Interrupt`
-- accepted steering -> `Command::Update`, `Command::Goto`,
-  `Command::Interrupt`, or queued child-run delivery depending on target
-- branch/fan-out middleware -> `Command::Fork`
-- retry/fallback -> handled inside the node or wrap hook before command return
-
-When middleware mutates graph-visible state, it must emit an explicit state
-update event so checkpoint replay can explain the change.
 
 ## Built-In Middleware
 

@@ -6,7 +6,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::json;
 
-use tinyagents_graph::*;
 use tinyagents_harness::context::{MiddlewareControl, RunConfig, RunContext};
 use tinyagents_harness::events::AgentEvent;
 use tinyagents_harness::middleware::Middleware;

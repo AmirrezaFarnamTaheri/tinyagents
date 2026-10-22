@@ -55,7 +55,7 @@ and at a natural finish, `Followup` at a natural finish (one more turn),
 `Collect` onto `AgentRun::collected`; `RunPolicy::queue_mode` (`All` |
 `OneAtATime`); `AgentEvent::QueuedMessageApplied`. `SteeringHandle` is
 unchanged; OpenHuman's `agent/harness/run_queue/` can go. See
-[`runtime.md`](modules/harness/runtime.md#queued-steering-and-follow-ups-a4).
+[`runtime.md`](../modules/harness/runtime.md#queued-steering-and-follow-ups-a4).
 
 Implement:
 
@@ -98,7 +98,7 @@ Acceptance criteria:
 
 ### 13. Middleware Control Outcomes
 
-Status: shipped (harness loop control), partial (graph/sub-agent defer).
+Status: shipped (harness loop control), partial (sub-agent defer); graph control was descoped in TinyAgents #61.
 
 Landed as part of `docs/runtime-comparison/plan.md` Phase 2 item A1. Every
 lifecycle `Middleware` hook has a `_control`-suffixed counterpart
@@ -119,12 +119,12 @@ non-observer hooks are skipped (`Middleware::is_observer`).
 `BudgetMiddleware`/`HumanApprovalMiddleware` are rebased on `JumpTo(End)` and
 `Interrupt` respectively. See
 `crates/tinyagents-harness/src/{context,middleware,agent_loop}/*` and
-[`docs/modules/harness/middleware.md`](modules/harness/middleware.md#middleware-control-a1).
+[`docs/modules/harness/middleware.md`](../modules/harness/middleware.md#middleware-control-a1).
 
-Still open: routing a harness-level control outcome onto a graph `Command`
-node when the loop runs as a graph node, and "defer to task/sub-agent" as a
-control outcome — both remain graph/A5 (loop-as-`CompiledGraph`) territory,
-not yet implemented.
+Still open: a future workflow runtime could route harness-level control
+outcomes through graph commands and add a "defer to task/sub-agent" outcome.
+TinyAgents #61 removed the graph runtime; this remains future design work and
+is not a current harness capability.
 
 Acceptance criteria (harness scope):
 

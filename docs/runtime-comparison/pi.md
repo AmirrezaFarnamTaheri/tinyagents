@@ -90,14 +90,14 @@ Harness/product layer:
 | Tool hooks / terminate | `beforeToolCall`/`afterToolCall`, `terminate` hint, `shouldStopAfterTurn`, `prepareNextTurn` | Partial: middleware `before_tool/after_tool/wrap` (`ta:.../middleware/types.rs:155-244`); no terminate/stop-after-turn hook (sdk-gaps §13) | |
 | `transformContext` / `convertToLlm` split | Yes | Partial: `before_model` middleware mutates request; no app-message vs LLM-message layer | |
 | Abort | `AbortSignal`, `stopReason:"aborted"`, `continue()` | Yes: `CancellationToken`, `AbortOnDrop` (`ti:.../model/types.rs:656`) | |
-| Conversation tree / branching | JSONL v3 tree with `id/parentId`, labels, `/fork`, `/tree` (`pi:packages/coding-agent/src/core/session-manager.ts:53`); `AgentHarness` entry tree + Branches + `ForkOptions` | No for conversations: `tinyagents-session` is linear JSONL + SQLite history; only graph checkpoints fork (`ta:crates/tinyagents-graph/src/checkpoint/types.rs:24-35`) | See gap 3. |
+| Conversation tree / branching | JSONL v3 tree with `id/parentId`, labels, `/fork`, `/tree` (`pi:packages/coding-agent/src/core/session-manager.ts:53`); `AgentHarness` entry tree + Branches + `ForkOptions` | No: `tinyagents-session` is linear JSONL + SQLite history | See gap 3. |
 | Compaction | cut point / `keepRecentTokens` / split turns / iterative summary / `CompactionEntry{firstKeptEntryId,tokensBefore}`; branch summaries | Partial: `SummarizationPolicy`, `Summarizer` trait, trim strategies, `ContextCompressionMiddleware`, `MicrocompactMiddleware` (`ta:.../summarization/`, `middleware/library/context.rs`) | TA has no durable compaction record or turn-boundary rules; no overflow detector (grep `overflow` empty). |
-| Durable per-step run state | `AgentHarness` intent/settlement transactions, `replay: "never"\|"safe"` (`types.ts:422`) | Partial: graph checkpoints + pending writes; harness loop itself not durable per tool call | See gap 7. |
+| Durable per-step run state | `AgentHarness` intent/settlement transactions, `replay: "never"\|"safe"` (`types.ts:422`) | No: the harness loop is not durable per tool call | See gap 7. |
 | Session backends + conformance | memory, JSONL, SQLite, `session/testing/conformance` | Partial: SQLite session DB + JSONL transcript; no backend conformance suite (sdk-gaps §17) | |
 | Extension API / event bus | 40+ product events, `registerTool/Command/Provider`, UI | Partial: middleware + registry; no plugin loader (host concern) | |
 | Skills / prompt templates | Yes (`Skill`, `PromptTemplate` types in agent-core `harness/types.ts`; loaders in coding-agent) | No skills (grep empty); `prompt/` module exists | |
 | Sub-agents | Example extension only (`examples/extensions/subagent/`) | Yes: async `DriverSubAgentTool`, job registry, steering, and detached settlement | TA ahead. |
-| Graph/workflow runtime | None | Yes (`tinyagents-graph`) | TA ahead. |
+| Graph/workflow runtime | None | None in the current TinyAgents workspace; removed in #61 | |
 | Per-tool timeouts / limits / budgets | None (signal only) | Yes: `ToolTimeout`, `RunLimits`, budget middleware | TA ahead. |
 | Telemetry | typed schema spans (`pi-telemetry`) | Yes: `AgentEvent` + Langfuse exporter | |
 | Remote session protocol | CBOR `pi-protocol` | No (host concern) | |
@@ -233,14 +233,14 @@ transition; `AgentTool.replay: "never" | "safe"` (`types.ts:422`) decides whethe
 settle in completion order but materialize in source order; queued input is staged as `pi.pending.entry`
 before placement. Hooks are classified pass-local / request-local / transition-consumed.
 
-Why: TinyAgents' graph has checkpoints and pending writes, but the harness loop (the thing most hosts run)
-is not resumable mid-batch; `append_interrupted_partial` (`ta:.../transcript/writer.rs:175`) is the only
-crash artefact. sdk-gaps §1 asks for `idempotency`/`retry` tool metadata; pi's `replay` is the minimal
+Why: the harness loop is not resumable mid-batch; `append_interrupted_partial`
+(`ta:.../transcript/writer.rs:175`) is the only crash artefact. sdk-gaps §1
+asks for `idempotency`/`retry` tool metadata; pi's `replay` is the minimal
 version of that.
 
-Mapping: add `ToolReplay::{Never, Safe}` to `ToolSchema`/policy; model the loop as a `tinyagents-graph`
-graph with per-tool-call task checkpoints (the graph already has task outcomes and pending writes), rather
-than porting pi's bespoke state machine.
+Mapping: add `ToolReplay::{Never, Safe}` to `ToolSchema`/policy and design
+per-tool-call durable state before attempting to port pi's bespoke state
+machine. The graph runtime was removed in TinyAgents #61.
 
 ### 4.8 Model catalog breadth, compat matrix, thinking-level map, auth resolution
 
@@ -282,8 +282,8 @@ nodes, forks as path copies) is a clean, replay-only design. Its `AgentHarness` 
 AgentLane, "context never reads past a compaction", append-only-context invariant for KV cache) is
 sharper than TinyAgents' linear session history. Worse: pi has two coexisting designs (coding-agent v3
 JSONL and the harness entry tree, plus pico v5 in `pi-durable`) and an admitted O(history) copy on first
-divergence of an uncompacted SQLite branch (§2.6). TinyAgents' graph checkpointer already has
-fork/time-travel; the gap is applying the same idea to conversation history.
+divergence of an uncompacted SQLite branch (§2.6). TinyAgents has no graph
+checkpointer; durable conversation branching remains an open gap.
 
 **Compaction.** pi's is more complete operationally (cut-point rules, split turns, iterative summaries,
 overflow-triggered compaction with retry, hook can decline/replace, usage attributed). TinyAgents is
@@ -310,9 +310,10 @@ and `ProviderRequestOptions.fetch` injection are cheap, useful escape hatches Ti
 
 **General.** pi optimizes for one product and moves fast (100 commits/week, version-locked monorepo);
 its runtime layers are extracted from that product and carry two generations of design at once.
-TinyAgents is spec-first and layered (graph/harness/registry/session/orchestration with enforced
-dependency direction). pi has no graph runtime, no sub-agent primitives, no budgets, no structured
-output, and no permission model; TinyAgents has all of those and should not import pi's product coupling.
+TinyAgents is spec-first and layered (harness/registry/session/orchestration with enforced
+dependency direction). Neither current workspace has a graph runtime. pi has no
+sub-agent primitives, budgets, structured output, or permission model; TinyAgents
+has these and should not import pi's product coupling.
 
 ## 6. Runtime-level vs harness-level split
 
@@ -324,7 +325,7 @@ output, and no permission model; TinyAgents has all of those and should not impo
 | 4.4 Steer/follow-up lanes | Yes: wire `RunQueue` into loop, queue modes, terminate hint | Which channel/message becomes a steer vs follow-up (`agent/harness/run_queue/` already exists in OpenHuman, so this moves down) |
 | 4.5 Compaction rules + overflow | Yes: cut points, overflow classifier, durable record | Summary prompt wording, file-tracking `details`, user-facing `/compact` |
 | 4.6 Handoff transform | Yes (pure function over messages + profile) | — |
-| 4.7 Durable loop state | Yes, via graph-backed loop and `ToolReplay` metadata | Approval gate and sandbox decisions stay in `security/approval`, `security/bubblewrap.rs` |
+| 4.7 Durable loop state | No: `ToolReplay` metadata and per-tool checkpoints remain open work | Approval gate and sandbox decisions stay in `security/approval`, `security/bubblewrap.rs` |
 | 4.8 Catalog/compat/auth | Catalog generator, compat data, `CredentialStore` trait, generic OAuth flow: runtime. Actual key storage, keychain, login UI: host | `security/credentials/`, model picker |
 | 4.9 Deferred, custom roles, skill types | Runtime types; deferred stream item | Skill/template discovery from disk, prompt assembly (`agent/prompts/`) |
 | Extension loader, commands, UI, packages | No | Yes (OpenHuman RPC/bus, `agent/registry`) |
@@ -342,11 +343,10 @@ output, and no permission model; TinyAgents has all of those and should not impo
 - `pi:packages/coding-agent/docs/{session-format,compaction,extensions,skills,prompt-templates,packages,sdk,models}.md`,
   `src/core/{session-manager,agent-session}.ts`, `src/experimental/`
 - GitHub API: repo metadata, releases, commits, contributors (fetched 2026-09-19)
-- TinyAgents: `ta:docs/spec/README.md`, `ta:docs/modules/harness/README.md`, `ta:docs/modules/graph/README.md`,
+- TinyAgents: `ta:docs/spec/README.md`, `ta:docs/modules/harness/README.md`,
   `ta:docs/sdk-gaps/README.md`, `ta:ROADMAP.md`, `ta:crates/*/src/lib.rs`,
-  `ta:crates/tinyagents-harness/src/{agent_loop,steering,run_queue,summarization,middleware,events,stream,cache,cost}/`,
+  `ta:crates/tinyagents-harness/src/{agent_loop,steering,run_queue,summarization,middleware,events,cache,cost}/`,
   `ta:crates/tinyagents-session/src/transcript/`, `ta:crates/tinyagents-registry/src/catalog.rs`,
-  `ta:crates/tinyagents-graph/src/checkpoint/types.rs`
 - tinyinference (main checkout): `ti:crates/tinyinference-llm/src/{message,model,catalog,usage}/types.rs`,
   `ti:crates/tinyinference-llm/src/providers/`, `ti:crates/tinyinference-providers/src/oauth.rs`
 - OpenHuman calibration: `openhuman/crates/openhuman-core/src/agent/README.md`,

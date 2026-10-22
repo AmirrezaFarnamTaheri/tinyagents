@@ -1,9 +1,8 @@
 //! Crate-wide error type and `Result` alias.
 //!
-//! Every fallible surface of the recursive runtime — graph execution, the
-//! harness agent loop, sub-agent recursion, and
-//! registry binding — funnels through [`TinyAgentsError`] so failures from a
-//! deeply nested child run roll up to the caller through one uniform type.
+//! Fallible harness, sub-agent, orchestration-task, and registry operations
+//! use [`TinyAgentsError`] so failures from a nested child run roll up through
+//! one uniform type.
 //! Downstream code should prefer the [`Result`] alias exported here.
 
 use thiserror::Error;
@@ -14,54 +13,49 @@ pub type Result<T> = std::result::Result<T, TinyAgentsError>;
 
 /// The single error type returned by every fallible TinyAgents operation.
 ///
-/// Variants are grouped by the surface that raises them: graph construction and
-/// execution, model/tool invocation, run limits and policy, graph durability,
-/// and graph execution.
+/// Variants cover model/tool invocation, harness control, run limits and
+/// policy, orchestration tasks, and persistence. Legacy graph error variants
+/// remain for public API compatibility; this workspace no longer ships a graph
+/// execution runtime.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum TinyAgentsError {
-    /// A graph was compiled or run without a configured `START` edge, so there
-    /// is no entry node to begin execution from.
+    /// Legacy graph configuration error retained for API compatibility. The
+    /// current workspace has no graph runtime that emits it.
     #[error("graph start node is not configured")]
     MissingStart,
 
-    /// An edge, route, or run referenced a node name that is not present in the
-    /// graph. The payload is the missing node name.
+    /// Legacy graph configuration error retained for API compatibility. The
+    /// payload is the missing node name.
     #[error("node `{0}` does not exist")]
     MissingNode(String),
 
-    /// An edge declares a destination node that does not exist. The payload is
-    /// the missing target name.
+    /// Legacy graph configuration error retained for API compatibility. The
+    /// payload is the missing target name.
     #[error("edge points to missing node `{0}`")]
     MissingEdgeTarget(String),
 
-    /// A conditional router returned a `route` label that is not wired to any
-    /// destination from `node`.
+    /// Legacy graph configuration error retained for API compatibility. The
+    /// current workspace has no graph router that emits it.
     #[error("conditional route `{route}` from node `{node}` does not exist")]
     MissingRoute { node: String, route: String },
 
-    /// Graph execution performed more super-steps than the configured recursion
-    /// limit allows (typically an unintended cycle). The payload is the limit
-    /// that was hit. Contrast with [`TinyAgentsError::SubAgentDepth`], which
-    /// counts nested run-tree levels rather than super-steps.
+    /// Legacy graph recursion error retained for API compatibility. The
+    /// payload is the configured limit; current sub-agent depth failures use
+    /// [`TinyAgentsError::SubAgentDepth`].
     #[error("graph exceeded the recursion limit of {0} steps")]
     RecursionLimit(usize),
 
     /// A sub-agent invocation would exceed the configured maximum recursion
     /// depth. The payload is the `max_depth` cap that was reached.
     ///
-    /// This is distinct from [`TinyAgentsError::RecursionLimit`], which counts
-    /// graph *super-steps*; `SubAgentDepth` counts nested run-tree *levels*
-    /// (parent → child → grandchild …) so the two limits can be reasoned about
-    /// and surfaced independently.
+    /// Nested run-tree levels (parent → child → grandchild …) are counted
+    /// independently from the legacy [`TinyAgentsError::RecursionLimit`].
     #[error("sub-agent recursion exceeded the maximum depth of {0}")]
     SubAgentDepth(usize),
 
-    /// A single graph node was activated more times within one run than the
-    /// `RecursionPolicy`'s (in `tinyagents-graph`) `max_visits_per_node` allows (an
-    /// unbounded node-loop). This is node-loop recursion, tracked separately
-    /// from [`TinyAgentsError::RecursionLimit`] (total super-steps) and
-    /// [`TinyAgentsError::SubAgentDepth`] (run-tree depth).
+    /// Legacy graph node-visit limit retained for API compatibility. The
+    /// current workspace has no graph executor that emits it.
     #[error("node `{node}` exceeded its visit limit of {limit}")]
     NodeVisitLimit {
         /// The node that was over-visited.
@@ -299,30 +293,30 @@ pub enum TinyAgentsError {
     #[error("embedding error: {0}")]
     Embedding(String),
 
-    // --- graph durability errors ---
-    /// Generic graph runtime error.
+    // --- legacy graph errors and current orchestration errors ---
+    /// Generic error variant retained for compatibility and used by the
+    /// orchestration-task and completion-router APIs. It does not imply that a
+    /// graph execution runtime is present.
     #[error("graph error: {0}")]
     Graph(String),
 
-    /// Execution was interrupted (human-in-the-loop / external approval).
+    /// A harness run was interrupted for human input or external approval.
+    /// The legacy display text is retained for compatibility.
     #[error("graph interrupted at node `{node}`: {message}")]
     Interrupted { node: String, message: String },
 
-    /// Two or more concurrent branches in a single superstep wrote the same
-    /// non-aggregate channel (for example a `LastValue` channel, in
-    /// `tinyagents-graph`), so the merge cannot pick a single deterministic winner. Use an
-    /// aggregate channel (one whose `Channel::allows_concurrent` is `true`, such as
-    /// `Topic` or `BinaryAggregate`) when fan-out branches must
-    /// write the same key. The payload describes the offending channel.
+    /// Legacy graph state-merge error retained for API compatibility. The
+    /// current workspace has no graph executor that emits it.
     #[error("invalid concurrent update: {0}")]
     InvalidConcurrentUpdate(String),
 
-    /// A checkpoint could not be written, read, or located.
+    /// Legacy execution-checkpoint error retained for API compatibility.
+    /// Current durable conversation persistence is owned by `tinyagents-session`.
     #[error("checkpoint error: {0}")]
     Checkpoint(String),
 
-    /// Resume was requested but checkpointing was not configured or no
-    /// checkpoint was found.
+    /// Legacy resume error retained for API compatibility. Session resume is
+    /// addressed through `tinyagents-session` records.
     #[error("cannot resume: {0}")]
     Resume(String),
 
@@ -349,11 +343,9 @@ pub enum TinyAgentsError {
     /// writing a backing database for the session store and run ledger
     /// (`tinyagents-session`).
     ///
-    /// Distinct from [`TinyAgentsError::Checkpoint`], which covers graph
-    /// checkpoint durability: a session-store failure means run *history* could
-    /// not be recorded or queried, while a checkpoint failure means a run
-    /// cannot be resumed. The payload carries the operation context and the
-    /// underlying driver message.
+    /// The payload carries the operation context and the underlying driver
+    /// message. Legacy [`TinyAgentsError::Checkpoint`] remains only for public
+    /// compatibility; session persistence failures use this variant.
     #[error("storage error: {0}")]
     Storage(String),
 }

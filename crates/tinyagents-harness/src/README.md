@@ -18,7 +18,7 @@ the module map below.
 
 | Module | Concern |
 | --- | --- |
-| `agent_loop` | The default model-tool-model agent loop — one model call driven to completion, plus tool dispatch. |
+| `agent_loop` | The default model-tool-model agent loop — one model call driven to completion, tool dispatch, and caller-consumable event streaming. |
 | `artifacts` | Filesystem offload for oversized worker artifacts on long-horizon runs. |
 | `blocking` (private) | `run_blocking`, the helper that moves synchronous file/DB work off the tokio runtime. |
 | `cache` | Prompt, response, and layout caches for repeated/replayed requests. |
@@ -45,7 +45,6 @@ the module map below.
 | `runtime` | The harness runtime facade (`AgentHarness`) and invocation-local runtime wiring. See [`runtime/README.md`](runtime/README.md). |
 | `steering` | Policy-checked, observable orchestrator → sub-agent steering commands. See [`steering/README.md`](steering/README.md). |
 | `store` | Long-term key-value and append-only stream storage backends (`Store`, `AppendStore`, `NamespacedStore`). See [`store/README.md`](store/README.md). |
-| `stream` | Higher-level streaming projections (`StreamChunk`, `StreamSink`) from the raw event stream. See [`stream/README.md`](stream/README.md). |
 | `structured` | Structured (typed, JSON-schema-validated) output extraction from a model call. |
 | `summarization` | Explicit message trimming, summarization, and compression policies (the harness's answer to context rot). |
 | `terminal` | `TerminalOutcome`, the typed reason a run ended (completed, halted, limit reached, timeout phase, ...). |
@@ -68,9 +67,8 @@ the module map below.
 3. **Recurse**: a tool can wrap a whole nested `AgentHarness` invocation
    (`DriverSubAgentTool` in `tinyagents-harness-tools`), so the same
    loop runs again one level deeper, tracked by `ids`/`limits`/`cost` roll-up.
-4. **Observe**: every step emits an `AgentEvent` (`events`); `stream` projects
-   those onto consumer-facing `StreamChunk`s, and `observability` durably
-   journals them.
+4. **Observe**: every step emits an `AgentEvent` (`events`); `agent_loop` can
+   stream those events to callers, and `observability` durably journals them.
 5. **Extend**: host-owned `AgentMiddleware` wraps the complete run to load and
    save memory, prepare and clean up workspaces, or attach other product policy.
    The harness keeps only the execution seam.

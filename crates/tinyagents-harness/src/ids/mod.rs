@@ -3,7 +3,7 @@
 //! These ids are the keys that make recursion observable and correlatable: a
 //! [`RunId`] names one run, and pairing it with the `root_run_id` /
 //! `parent_run_id` recorded in [`crate::events::HarnessRunStatus`] lets
-//! a child run (a sub-agent or sub-graph invocation) be traced back up to the
+//! a child run (for example, a sub-agent invocation) be traced back up to the
 //! top-level run that spawned it. A `From`/`Display`/`as_str` surface is
 //! generated for each newtype by a single macro so the ids stay cheap to clone,
 //! log, and serialize.
@@ -88,13 +88,12 @@ pub fn next_seq() -> u64 {
 /// (in practice) distinct across restarts.
 ///
 /// The bare monotonic [`next_seq`] restarts at `0` in every new process, so ids
-/// built from it alone (`ckpt-0`, `ckpt-1`, …) *collide* across a restart — a
-/// resumed thread would re-mint checkpoint ids it already used, corrupting the
-/// parent-lineage map and time-travel resume. Mixing in this nonce makes ids
-/// collision-free across restarts while [`next_seq`] keeps them ordered within
-/// a process. Seeded once from the wall clock (nanoseconds since the epoch);
-/// only ever used as an opaque uniqueness component, never parsed or compared
-/// for time.
+/// built from it alone could repeat after a restart. Mixing in this nonce
+/// avoids collisions for adapters that persist generated ids, while
+/// [`next_seq`] keeps them ordered within a process. Session resume itself is
+/// owned by `tinyagents-session` and does not rely on this nonce. The nonce is
+/// seeded once from wall-clock nanoseconds; it is only used as an opaque
+/// uniqueness component, never parsed or compared for time.
 pub fn process_nonce() -> u64 {
     static NONCE: OnceLock<u64> = OnceLock::new();
     *NONCE.get_or_init(|| {
@@ -128,10 +127,8 @@ pub fn new_run_id() -> RunId {
 /// Allocates a fresh [`CheckpointId`] of the form `ckpt-<nonce>-<n>`,
 /// collision-free across process restarts (see [`process_nonce`]).
 ///
-/// Restart-safety is essential here: checkpoint ids are the keys of the
-/// parent-lineage spine that `prune`, `get_state_history`, and
-/// `ResumeTarget::Checkpoint` all walk, so a duplicate id across a restart can
-/// delete a live record's ancestor or resume the wrong checkpoint.
+/// The process nonce avoids collisions when adapters persist checkpoint ids
+/// across restarts. Session resume itself is handled by `tinyagents-session`.
 pub fn new_checkpoint_id() -> CheckpointId {
     CheckpointId(format!("ckpt-{}-{}", process_nonce(), next_seq()))
 }

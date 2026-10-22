@@ -1,8 +1,7 @@
 //! Session-persistence test building blocks.
 //!
 //! This is the session-layer counterpart to the harness
-//! [`testkit`](tinyagents_harness::testkit) and the graph
-//! [`testkit`](../../tinyagents_graph/testkit/index.html): reusable doubles and
+//! [`testkit`](tinyagents_harness::testkit): reusable doubles and
 //! **conformance** (contract) suites so a downstream backend author can prove
 //! their implementation behaves like the bundled ones, and the bundled ones
 //! can be pinned against each other.
