@@ -318,12 +318,6 @@ struct ActiveTurn<P> {
     queue: Arc<RunQueue<TurnRequest<P>>>,
 }
 
-#[derive(Clone)]
-struct ActiveParallelTurn {
-    cancel: crate::CancellationToken,
-    cancellable: bool,
-}
-
 /// A live turn owned by a runner, suitable for host-side cancellation and
 /// observability without exposing cancellation tokens or queue internals.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -364,7 +358,7 @@ pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value> {
     locks: ThreadLocks,
     parallel_queues: ParallelQueueMap<P>,
     active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<P>>>,
-    parallel_active: Mutex<HashMap<(ScopeKey, String, String), ActiveParallelTurn>>,
+    parallel_active: Mutex<HashMap<(ScopeKey, String, String), crate::CancellationToken>>,
     next_generation: std::sync::atomic::AtomicU64,
 }
 
@@ -440,21 +434,18 @@ where
         drop(active);
         let mut parallel = self.parallel_active.lock().await;
         let mut keys: Vec<_> = parallel
-            .iter()
-            .filter(|((owner, thread, req), turn)| {
-                turn.cancellable
-                    && owner == scope
-                    && thread == thread_id
-                    && request_id.is_none_or(|id| req == id)
+            .keys()
+            .filter(|(owner, thread, req)| {
+                owner == scope && thread == thread_id && request_id.is_none_or(|id| req == id)
             })
-            .map(|(key, _)| key.clone())
+            .cloned()
             .collect();
         keys.sort_by(|left, right| left.2.cmp(&right.2));
         for key in &keys {
-            if let Some(turn) = parallel.get_mut(key) {
-                turn.cancellable = false;
-                turn.cancel.cancel();
+            if let Some(token) = parallel.remove(key) {
+                token.cancel();
             }
+            self.parallel_queues.lock().await.remove(key);
             cancelled.push(key.2.clone());
         }
         cancelled
@@ -489,7 +480,7 @@ where
                 parallel: false,
             });
         }
-        for ((scope, thread_id, request_id), _) in self.parallel_active.lock().await.iter() {
+        for (scope, thread_id, request_id) in self.parallel_active.lock().await.keys() {
             live.push(LiveTurn {
                 scope: scope.clone(),
                 thread_id: thread_id.clone(),
@@ -623,10 +614,7 @@ where
                         request.thread_id.clone(),
                         request.request_id.clone(),
                     ),
-                    ActiveParallelTurn {
-                        cancel: cancellation.clone(),
-                        cancellable: true,
-                    },
+                    cancellation.clone(),
                 );
             } else if let Some(reserved) = reservation.as_ref() {
                 let mut active = self.active.lock().await;
@@ -1280,13 +1268,14 @@ where
                 request.request_id.clone(),
             );
             let mut active = self.parallel_active.lock().await;
-            let Some(turn) = active.get_mut(&key) else {
+            let Some(token) = active.get(&key) else {
                 return !cancellation.is_cancelled();
             };
-            if turn.cancel.is_cancelled() {
+            if token.is_cancelled() {
                 return false;
             }
-            turn.cancellable = false;
+            active.remove(&key);
+            self.parallel_queues.lock().await.remove(&key);
             return true;
         }
         let Some(generation) = generation else {
