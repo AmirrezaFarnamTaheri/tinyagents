@@ -55,7 +55,7 @@ and at a natural finish, `Followup` at a natural finish (one more turn),
 `Collect` onto `AgentRun::collected`; `RunPolicy::queue_mode` (`All` |
 `OneAtATime`); `AgentEvent::QueuedMessageApplied`. `SteeringHandle` is
 unchanged; OpenHuman's `agent/harness/run_queue/` can go. See
-[`runtime.md`](modules/harness/runtime.md#queued-steering-and-follow-ups-a4).
+[`runtime.md`](../modules/harness/runtime.md#queued-steering-and-follow-ups-a4).
 
 Implement:
 
@@ -119,7 +119,7 @@ non-observer hooks are skipped (`Middleware::is_observer`).
 `BudgetMiddleware`/`HumanApprovalMiddleware` are rebased on `JumpTo(End)` and
 `Interrupt` respectively. See
 `crates/tinyagents-harness/src/{context,middleware,agent_loop}/*` and
-[`docs/modules/harness/middleware.md`](modules/harness/middleware.md#middleware-control-a1).
+[`docs/modules/harness/middleware.md`](../modules/harness/middleware.md#middleware-control-a1).
 
 Still open: a future workflow runtime could route harness-level control
 outcomes through graph commands and add a "defer to task/sub-agent" outcome.
