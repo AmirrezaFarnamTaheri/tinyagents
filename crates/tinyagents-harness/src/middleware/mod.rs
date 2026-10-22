@@ -28,8 +28,10 @@
 //! [`Middleware::on_error`] runs, then the original error is returned.
 
 mod types;
+mod stop_hook;
 
 pub use types::*;
+pub use stop_hook::{StopDecision, StopHook, StopHookMetrics, StopReport, TurnState};
 
 pub mod library;
 pub use library::*;
