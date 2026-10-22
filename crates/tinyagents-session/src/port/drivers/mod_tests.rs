@@ -105,6 +105,32 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
 }
 
 #[tokio::test]
+async fn opening_declares_every_session_collection_before_migration() {
+    let declared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let provider = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
+        Arc::new(Flaky {
+            storage: MemoryStorage::new(),
+            down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            reject_declaration: false,
+            declared_collections: Arc::clone(&declared),
+        }),
+        "local",
+    ))
+    .unwrap();
+
+    provider.try_for_agent("agent").unwrap();
+
+    let declared = declared.lock().unwrap();
+    for spec in collections() {
+        assert!(
+            declared.contains(&spec.name),
+            "session collection was not declared before migration: {}",
+            spec.name
+        );
+    }
+}
+
+#[tokio::test]
 async fn memory_backed_stores_meet_the_session_store_contract() {
     session_store_conformance(&memory()).await;
 }
@@ -354,6 +380,7 @@ struct Flaky {
     storage: MemoryStorage,
     down: Arc<std::sync::atomic::AtomicBool>,
     reject_declaration: bool,
+    declared_collections: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 #[derive(Debug)]
@@ -361,6 +388,7 @@ struct FlakyDocs {
     inner: Arc<dyn tinystoragedrivers_api::DocumentStore>,
     down: Arc<std::sync::atomic::AtomicBool>,
     reject_declaration: bool,
+    declared_collections: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl FlakyDocs {
@@ -384,6 +412,10 @@ impl tinystoragedrivers_api::DocumentStore for FlakyDocs {
         &self,
         spec: &tinystoragedrivers_types::CollectionSpec,
     ) -> Result<(), StorageError> {
+        self.declared_collections
+            .lock()
+            .unwrap()
+            .push(spec.name.clone());
         if self.reject_declaration {
             self.check()?;
         }
@@ -482,6 +514,7 @@ impl StorageBackend for Flaky {
                 inner: Arc::clone(inner.documents()),
                 down: Arc::clone(&self.down),
                 reject_declaration: self.reject_declaration,
+                declared_collections: Arc::clone(&self.declared_collections),
             }),
             Arc::clone(inner.streams()),
             Arc::clone(inner.kv()),
@@ -500,6 +533,7 @@ fn a_failed_recovery_fails_closed_and_is_retried() {
             storage: MemoryStorage::new(),
             down: Arc::clone(&down),
             reject_declaration: false,
+            declared_collections: Arc::new(std::sync::Mutex::new(Vec::new())),
         }),
         "local",
     ))
@@ -587,6 +621,7 @@ fn checked_open_preserves_native_recovery_query_refusal_and_retries() {
             storage: MemoryStorage::new(),
             down: down.clone(),
             reject_declaration: false,
+            declared_collections: Arc::new(std::sync::Mutex::new(Vec::new())),
         }),
         "local",
     ))
@@ -615,6 +650,7 @@ fn checked_open_preserves_native_recovery_declaration_refusal() {
             storage: MemoryStorage::new(),
             down: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             reject_declaration: true,
+            declared_collections: Arc::new(std::sync::Mutex::new(Vec::new())),
         }),
         "local",
     ))

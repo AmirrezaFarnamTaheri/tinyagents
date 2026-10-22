@@ -493,10 +493,6 @@ pub fn collections() -> Vec<CollectionSpec> {
 mod schema_tests;
 
 #[cfg(test)]
-#[path = "schema_admission_tests.rs"]
-mod schema_admission_tests;
-
-#[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
 
