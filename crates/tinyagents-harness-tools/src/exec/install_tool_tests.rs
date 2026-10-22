@@ -200,21 +200,19 @@ async fn denied_install_never_calls_backend_and_records_denial() {
 async fn denied_install_is_authorized_before_manager_resolution() {
     for (args, expected_manager) in [
         (json!({"package":"ripgrep"}), "auto"),
-        (json!({"package":"ripgrep","manager":"unsupported"}), "unsupported"),
+        (
+            json!({"package":"ripgrep","manager":"unsupported"}),
+            "unsupported",
+        ),
     ] {
         let (tool, state) = tool(true);
         let result = tool
-            .execute_with_context_and_path_lookup(
-                args,
-                ToolCallOptions::default(),
-                None,
-                |name| {
-                    state.manager_lookup_calls.fetch_add(1, Ordering::SeqCst);
-                    // The automatic-detection case sees no supported manager.
-                    assert_eq!(name, "apt-get");
-                    false
-                },
-            )
+            .execute_with_context_and_path_lookup(args, ToolCallOptions::default(), None, |name| {
+                state.manager_lookup_calls.fetch_add(1, Ordering::SeqCst);
+                // The automatic-detection case sees no supported manager.
+                assert_eq!(name, "apt-get");
+                false
+            })
             .await
             .unwrap();
 

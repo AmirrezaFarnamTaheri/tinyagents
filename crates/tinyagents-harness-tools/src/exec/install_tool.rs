@@ -146,116 +146,116 @@ async fn execute_install(
     context: Option<&dyn ToolRunContext>,
     on_path: impl FnMut(&str) -> bool + Send,
 ) -> anyhow::Result<ToolResult> {
-        let Some(package) = args.get("package").and_then(Value::as_str).map(str::trim) else {
-            return Ok(ToolResult::error("Missing 'package' parameter"));
+    let Some(package) = args.get("package").and_then(Value::as_str).map(str::trim) else {
+        return Ok(ToolResult::error("Missing 'package' parameter"));
+    };
+    if !valid_package(package) {
+        return Ok(ToolResult::error(format!(
+            "Invalid package name '{package}': only letters, digits and ._+-@/: are allowed"
+        )));
+    }
+    let (manager, program, prefix) =
+        match resolve_manager(args.get("manager").and_then(Value::as_str), on_path) {
+            Ok(resolved) => resolved,
+            Err(error) => return Ok(ToolResult::error(error)),
         };
-        if !valid_package(package) {
-            return Ok(ToolResult::error(format!(
-                "Invalid package name '{package}': only letters, digits and ._+-@/: are allowed"
-            )));
+    let operation = ExecOperation::Install {
+        package: package.to_owned(),
+        manager: manager.clone(),
+    };
+    let authorization = ExecAuthorizationRequest {
+        operation: operation.clone(),
+        timeout: Some(INSTALL_TIMEOUT),
+    };
+    let started = Instant::now();
+    let approval_required = tool.gate.external_effect_with_args(&args);
+    let permit = match tool.gate.authorize(&authorization, context).await {
+        Ok(permit) => permit,
+        Err(denied) => {
+            tool.gate.record(ExecAuditEvent {
+                operation,
+                approval_required,
+                authorized: false,
+                allowed: false,
+                backend_selection: None,
+                process_attempted: false,
+                outcome: ExecAuditOutcome::GateDenied,
+                duration: started.elapsed(),
+            });
+            return Ok(ToolResult::error(denied.0));
         }
-        let (manager, program, prefix) =
-            match resolve_manager(args.get("manager").and_then(Value::as_str), on_path) {
-                Ok(resolved) => resolved,
-                Err(error) => return Ok(ToolResult::error(error)),
+    };
+    let backend_selection = permit.backend_selection.clone();
+    let mut argv = prefix.iter().map(OsString::from).collect::<Vec<_>>();
+    argv.push(package.into());
+    let request = ExecRequest {
+        program: program.into(),
+        args: argv,
+        action_dir: permit.action_dir,
+        environment: permit.environment,
+        timeout: Some(INSTALL_TIMEOUT),
+        shell_command: None,
+        backend_selection: permit.backend_selection,
+        backend_capability: permit.backend_capability,
+    };
+    let outcome = tool.backend.execute(request, context, None).await;
+    let (allowed, attempted, audit, result) = match outcome {
+        ExecBackendOutcome::Refused { kind, reason } => (
+            false,
+            false,
+            ExecAuditOutcome::BackendRefused { kind },
+            ToolResult::error(reason),
+        ),
+        ExecBackendOutcome::LaunchFailed { error } => (
+            true,
+            true,
+            ExecAuditOutcome::LaunchFailed,
+            ToolResult::error(format!("Failed to launch {program}: {error}")),
+        ),
+        ExecBackendOutcome::Completed(output) if output.timed_out => (
+            true,
+            true,
+            ExecAuditOutcome::Completed {
+                success: false,
+                timed_out: true,
+            },
+            ToolResult::error("Install timed out after 300s and was killed"),
+        ),
+        ExecBackendOutcome::Completed(output) => {
+            let stdout = truncate_stream(&output.stdout, "stdout");
+            let stderr = truncate_stream(&output.stderr, "stderr");
+            let result = if output.exit_code == Some(0) {
+                ToolResult::success(format!("Installed '{package}' via {program}.\n{stdout}"))
+            } else {
+                ToolResult::error(format!(
+                    "{program} failed to install '{package}' (exit {:?}).\n{}",
+                    output.exit_code,
+                    if stderr.is_empty() { stdout } else { stderr }
+                ))
             };
-        let operation = ExecOperation::Install {
-            package: package.to_owned(),
-            manager: manager.clone(),
-        };
-        let authorization = ExecAuthorizationRequest {
-            operation: operation.clone(),
-            timeout: Some(INSTALL_TIMEOUT),
-        };
-        let started = Instant::now();
-        let approval_required = tool.gate.external_effect_with_args(&args);
-        let permit = match tool.gate.authorize(&authorization, context).await {
-            Ok(permit) => permit,
-            Err(denied) => {
-                tool.gate.record(ExecAuditEvent {
-                    operation,
-                    approval_required,
-                    authorized: false,
-                    allowed: false,
-                    backend_selection: None,
-                    process_attempted: false,
-                    outcome: ExecAuditOutcome::GateDenied,
-                    duration: started.elapsed(),
-                });
-                return Ok(ToolResult::error(denied.0));
-            }
-        };
-        let backend_selection = permit.backend_selection.clone();
-        let mut argv = prefix.iter().map(OsString::from).collect::<Vec<_>>();
-        argv.push(package.into());
-        let request = ExecRequest {
-            program: program.into(),
-            args: argv,
-            action_dir: permit.action_dir,
-            environment: permit.environment,
-            timeout: Some(INSTALL_TIMEOUT),
-            shell_command: None,
-            backend_selection: permit.backend_selection,
-            backend_capability: permit.backend_capability,
-        };
-        let outcome = tool.backend.execute(request, context, None).await;
-        let (allowed, attempted, audit, result) = match outcome {
-            ExecBackendOutcome::Refused { kind, reason } => (
-                false,
-                false,
-                ExecAuditOutcome::BackendRefused { kind },
-                ToolResult::error(reason),
-            ),
-            ExecBackendOutcome::LaunchFailed { error } => (
-                true,
-                true,
-                ExecAuditOutcome::LaunchFailed,
-                ToolResult::error(format!("Failed to launch {program}: {error}")),
-            ),
-            ExecBackendOutcome::Completed(output) if output.timed_out => (
+            let success = !result.is_error;
+            (
                 true,
                 true,
                 ExecAuditOutcome::Completed {
-                    success: false,
-                    timed_out: true,
+                    success,
+                    timed_out: false,
                 },
-                ToolResult::error("Install timed out after 300s and was killed"),
-            ),
-            ExecBackendOutcome::Completed(output) => {
-                let stdout = truncate_stream(&output.stdout, "stdout");
-                let stderr = truncate_stream(&output.stderr, "stderr");
-                let result = if output.exit_code == Some(0) {
-                    ToolResult::success(format!("Installed '{package}' via {program}.\n{stdout}"))
-                } else {
-                    ToolResult::error(format!(
-                        "{program} failed to install '{package}' (exit {:?}).\n{}",
-                        output.exit_code,
-                        if stderr.is_empty() { stdout } else { stderr }
-                    ))
-                };
-                let success = !result.is_error;
-                (
-                    true,
-                    true,
-                    ExecAuditOutcome::Completed {
-                        success,
-                        timed_out: false,
-                    },
-                    result,
-                )
-            }
-        };
-        tool.gate.record(ExecAuditEvent {
-            operation,
-            approval_required,
-            authorized: true,
-            allowed,
-            backend_selection: Some(backend_selection),
-            process_attempted: attempted,
-            outcome: audit,
-            duration: started.elapsed(),
-        });
-        Ok(result)
+                result,
+            )
+        }
+    };
+    tool.gate.record(ExecAuditEvent {
+        operation,
+        approval_required,
+        authorized: true,
+        allowed,
+        backend_selection: Some(backend_selection),
+        process_attempted: attempted,
+        outcome: audit,
+        duration: started.elapsed(),
+    });
+    Ok(result)
 }
 
 #[cfg(test)]
