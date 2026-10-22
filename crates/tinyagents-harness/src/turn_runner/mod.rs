@@ -21,4 +21,4 @@ mod tests;
 
 #[cfg(test)]
 #[path = "mod_api_tests.rs"]
-mod api_api_tests;
+mod api_tests;
