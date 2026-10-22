@@ -3,8 +3,10 @@
 //! The host decides *which* tools exist and how each is wrapped; this module
 //! owns the generic rules for which candidates register: de-duplication by
 //! name, an allowlist whose empty set denies everything, thread-scoped tools
-//! dropped on thread-less turns, and spawn/delegate tools never handed to a
-//! sub-agent run whatever the allowlist says.
+//! dropped on thread-less turns, and spawn/delegate tools withheld from
+//! sub-agent runs by default. A host may grant bounded nested spawning for a
+//! turn; those tools still need to pass the ordinary allowlist, and the host
+//! remains responsible for enforcing the depth ceiling when a child executes.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -85,6 +87,28 @@ pub enum ToolRegistration<State, C> {
     Dispatch(Arc<dyn ToolDispatch<State, C>>),
 }
 
+/// Depth and ceiling supplied by a host that explicitly permits nested
+/// sub-agent creation for this turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NestedSpawnDepth {
+    depth: usize,
+    max_depth: usize,
+}
+
+impl NestedSpawnDepth {
+    /// Creates a depth grant only when the current depth is within its ceiling.
+    pub fn try_new(depth: usize, max_depth: usize) -> Option<Self> {
+        (depth <= max_depth).then_some(Self { depth, max_depth })
+    }
+
+    /// Returns whether one more child fits within the host's ceiling.
+    pub fn allows_child(self) -> bool {
+        self.depth
+            .checked_add(1)
+            .is_some_and(|child_depth| child_depth <= self.max_depth)
+    }
+}
+
 /// Admission rules for one turn's tool registration.
 #[derive(Clone, Default)]
 pub struct ToolAdmission {
@@ -97,8 +121,14 @@ pub struct ToolAdmission {
     pub has_thread: bool,
     /// Names of tools that cannot run without a thread.
     pub thread_scoped: HashSet<String>,
-    /// Names of spawn/delegate tools a sub-agent must never receive.
+    /// Names of spawn/delegate tools denied to sub-agents unless the host
+    /// supplies a [`NestedSpawnDepth`] grant that permits another child.
+    /// These tools must also pass `allowed`; the grant does not expand that
+    /// allowlist.
     pub spawn_tools: HashSet<String>,
+    /// Explicit host grant for bounded nested spawning. `None` keeps the
+    /// default leaf-subagent behavior.
+    pub nested_spawn_depth: Option<NestedSpawnDepth>,
 }
 
 /// The outcome of [`plan_registration`].
@@ -164,7 +194,12 @@ where
         if !allowed {
             continue;
         }
-        if admission.is_subagent_run && admission.spawn_tools.contains(name) {
+        if admission.is_subagent_run
+            && admission.spawn_tools.contains(name)
+            && !admission
+                .nested_spawn_depth
+                .is_some_and(NestedSpawnDepth::allows_child)
+        {
             tracing::warn!(
                 tool = name,
                 "[tool-registration] refused spawn tool on sub-agent"
