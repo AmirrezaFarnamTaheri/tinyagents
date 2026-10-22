@@ -208,7 +208,7 @@ Builds the vocabulary that A1–A4 and B1–B2 share; everything later
 | Per-node `NodePolicy{retry, timeout, idle_timeout, cache, on_error}` reusing `harness::retry::RetryPolicy`; `TaskCache` trait keyed by `(graph_id, node_id, hash)`; `defer` as a scheduling flag; `TaskCompleted{cached: true}` | M | D2 |
 | `interrupt_before/after`, `Interrupt.response_schema`, `SteeringCommand::Drain` honoured at the boundary | S | A7 |
 | `durable_task(ctx, key, fut)` memoised through `PendingWrite` | S | D5 |
-| Lower `WorkflowDefinition` to a `CompiledGraph` behind a feature flag; keep `WorkflowStore` as the status projection and the lease as the durable lock; `workflow/tests.rs` as acceptance | L | G-I12, G-R6 |
+| WorkflowDefinition-to-graph execution | descoped in TinyAgents #61 with graph runtime removal; requires a replacement runtime design | L | G-I12, G-R6 |
 | `NodeHandler` takes `Arc<State>`; `Arc<Value>` send args | M | G-M2 |
 
 ## Phase 5: sessions, context, and loop hardening (3–4 weeks)

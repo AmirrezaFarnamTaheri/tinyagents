@@ -65,16 +65,12 @@ it.
 ## Design Goals
 
 - Make simple agent workflows concise.
-- Make complex workflows explicit, inspectable, and testable.
-- Treat graph execution as a first-class runtime, not an incidental callback
-  chain.
+- Make agent workflows explicit, inspectable, and testable.
 - Keep model providers, tools, memory, and tracing behind stable traits.
 - Allow parent orchestrators and humans to steer orchestrator agents and
   sub-agents through typed, policy-checked, observable commands.
 - Prefer deterministic state transitions around inherently nondeterministic LLM
   calls.
-- Keep every generated or hand-authored graph explainable as topology,
-  capabilities, policies, state channels, checkpoints, and events.
 
 ## Module 1: Harness
 

@@ -48,7 +48,6 @@ runtime injection. TinyAgents should expose stores through `RunContext` and
 
 - It does not decide what enters a prompt.
 - It does not summarize memory.
-- It does not checkpoint graph execution.
 - It does not replace the registry.
 - It does not require one global database.
 

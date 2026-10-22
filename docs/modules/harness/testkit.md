@@ -128,16 +128,5 @@ Provider adapters should run a shared suite that covers:
 - timeout
 - rate-limit error classification
 
-Former graph-runtime conformance cases were removed with the graph crate in TinyAgents #61.
-
-- linear route
-- conditional route
-- fork and merge reducer
-- cycle guarded by max steps
-- cancellation
-- node error propagation
-- run list pagination and newest-first order
-- provider options passthrough
-
 Tests requiring live providers should be opt-in and documented with environment
 variables. Unit-level conformance should run with fakes in normal CI.
