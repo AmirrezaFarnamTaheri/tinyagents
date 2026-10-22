@@ -322,7 +322,7 @@ async fn custom_queue_item_shares_runner_queue_and_preserves_complete_request() 
     };
     started.notified().await;
 
-    let mut runner_queued = request(QueueDisposition::Followup, true);
+    let mut runner_queued = request(QueueDisposition::Followup, false);
     runner_queued.scope.profile_id = Some("profile-x".into());
     runner_queued.thread_id = "thread-from-runner".into();
     runner_queued.request_id = "runner-queued-id".into();
