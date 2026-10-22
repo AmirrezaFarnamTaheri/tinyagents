@@ -205,7 +205,6 @@ Every model call should attach `ResolvedModel` to:
 - model lifecycle events
 - usage and cost records
 - agent run status
-- graph task metadata when graph-backed
 - checkpoint state when the graph or harness state is durable
 
 Agent state should have a standard place for reusable model resolution:

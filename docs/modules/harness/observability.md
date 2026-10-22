@@ -32,7 +32,7 @@ TinyAgents should use typed Rust events rather than stringly callback names.
 - Include usage, cost, cache, retry, fallback, and latency data.
 - Capture model-call and tool-call latency as first-class metrics.
 - Include graph run ids, graph names, super-step indexes, node ids, routing
-  commands, checkpoint ids, and interrupt metadata for state-graph runs.
+  commands and host-defined execution metadata.
 
 ## Execution Status Store
 
@@ -239,21 +239,6 @@ Listener filters should include:
 Live event delivery should not block model or tool execution unless the run
 policy explicitly requires a mandatory observer. Durable listeners should replay
 from the journal rather than relying on in-memory broadcast delivery.
-
-### Implementation status (runtime-comparison Phase 3, C2)
-
-`HarnessEventJournal`/`StoreEventJournal` exist as designed above (offset
-replay, no block-level detail). What is new this phase is a durable shape for
-*in-progress* assistant messages specifically:
-(`crates/tinyagents-harness/src/stream/frame.rs`) — see
-`docs/modules/harness/streaming.md`'s "Implementation status" for the codec
-itself. A journal that persists `AssistantFrame`s alongside its ordinary
-`HarnessEvent` stream lets a reconnecting consumer rebuild a partial
-in-progress message with `reduce_frames` instead of only replaying whichever
-already-flattened `AgentEvent::ModelDelta`s the journal captured — the
-journal wiring (an `AssistantFrame`-aware `HarnessEventJournal`
-implementation, or a `Model*` frame projection alongside `ModelDelta`) is not
-itself implemented yet; the codec is the missing primitive that unblocks it.
 
 ## Observability Cache
 

@@ -27,8 +27,3 @@ pub fn sqlite(dir: &Path, name: &str) -> ScopedStorage {
 pub fn docs(storage: &ScopedStorage) -> Arc<dyn DocumentStore> {
     Arc::clone(storage.documents())
 }
-
-/// A durable checkpointer over `checkpoints.sqlite` in `dir`.
-pub fn checkpointer<State>(dir: &Path) -> DriverCheckpointer<State> {
-    DriverCheckpointer::new(docs(&sqlite(dir, "checkpoints.sqlite")))
-}

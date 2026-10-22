@@ -132,7 +132,6 @@ tests for every adapter.
 
 - It does not own graph topology.
 - It does not decide graph routing except inside an agent-loop node.
-- It does not persist graph checkpoints; that belongs to the graph module.
 - It does not hide provider-specific metadata when users need it.
 - It does not execute arbitrary workflow language source directly.
 - It does not require every provider to support every modality or output
@@ -236,7 +235,6 @@ Feature details:
 - [Local models and embeddings (Ollama, LM Studio)](local-models.md)
 - [Embeddings and retrieval feature](embeddings.md)
 - [Media generation tools](media.md)
-- [State graph runtime feature](state-graph.md)
 - [Prompt feature](prompt.md)
 - [Tool feature](tool.md)
 - [Tool execution context and rich returns (B1/B2)](tool-context.md)

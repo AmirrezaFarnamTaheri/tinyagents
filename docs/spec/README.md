@@ -123,15 +123,6 @@ resume. The `tools` array stays stable between discoveries when no per-turn
 exposure middleware changes the advertised set.
 `RunPolicy::tool_schemas` optionally projects and byte-budgets every schema.
 
-## Module 2: Graph
-
-The graph is the durable, typed state-graph runtime: `START`/`END`, nodes,
-reducers/channels, routing, supersteps, checkpointing, interrupts, streaming,
-subgraphs, and execution guarantees. See [`graph-spec.md`](graph-spec.md) for
-the full specification, and
-[`docs/modules/graph/README.md`](../modules/graph/README.md) for the
-per-topic implementation docs.
-
 ## Package Layout
 
 The repository root is a virtual Cargo workspace. There is no `tinyagents`

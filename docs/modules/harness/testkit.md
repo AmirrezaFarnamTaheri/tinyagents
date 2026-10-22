@@ -30,7 +30,6 @@ adapters can assert behavior without live providers.
 - Provide in-memory stores and event collectors.
 - Provide deterministic clocks and id generators.
 - Provide trajectory assertions for agent loops.
-- Provide graph trajectory assertions for state-graph runs.
 - Provide conformance tests for provider adapters.
 - Provide replay fixtures from recorded events.
 - Provide helpers for structured-output validation tests.

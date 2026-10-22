@@ -1,8 +1,6 @@
 # Harness Streaming Feature
 
-The harness must support streaming independently from the graph. Graph streaming
-can forward harness events, but direct harness users should also be able to
-consume streams.
+The harness supports caller-consumable run events and provider model streams.
 
 ## Responsibilities
 
@@ -41,8 +39,8 @@ tracer streams:
 - `events`: all harness events
 - `final`: final result only
 
-Every stream item should carry run ids and component ids so web UIs can merge
-harness streams with graph streams.
+Every stream item should carry run ids and component ids so web UIs can identify
+the run that emitted it.
 
 ## Stream Items
 
@@ -77,8 +75,8 @@ Streaming adapters must merge chunks deterministically:
 ## Implementation status (runtime-comparison Phase 3, C1/C2)
 
 The design above names the target shape; here is what exists in code today,
-one layer down at `tinyinference_llm::model::ModelStreamItem` and
-`tinyagents_harness::stream`.
+one layer down at `tinyinference_llm::model::ModelStreamItem` and the
+`agent_loop::stream` caller API.
 
 **Block-indexed streaming (C1, vendor `tinyinference-llm`).** Content block
 indexes are respected via new `ModelStreamItem` variants: `BlockStart {
@@ -106,5 +104,3 @@ specifically `ProviderError` — now carries `partial_message:
 Option<AssistantMessage>` and `stop_reason: Option<String>` on both
 adapters, so a mid-stream failure does not discard whatever content had
 already arrived.
-
-**Frame codec (C2, `crates/tinyagents-harness/src/stream/frame.rs`).**

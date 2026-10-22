@@ -12,7 +12,7 @@
 //! - LOOP-6  — `Started` events had no terminal partner on error paths.
 //! - LOOP-8  — steering applied part of a rejected batch, and a pause was unresumable.
 //! - LOOP-9  — a panicking listener wedged the event sink forever.
-//! 
+//!
 use std::sync::Arc;
 use std::time::Duration;
 

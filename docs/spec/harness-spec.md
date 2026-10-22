@@ -304,9 +304,8 @@ Expected middleware:
 
 ### Memory
 
-Memory is host policy applied through harness middleware. The graph runtime
-handles checkpointed graph execution; hosts decide how conversation and
-application memory are loaded and persisted.
+Memory is host policy applied through harness middleware; hosts decide how
+conversation and application memory are loaded and persisted.
 
 Memory is split into two concepts:
 

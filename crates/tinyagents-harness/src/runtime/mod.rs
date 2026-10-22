@@ -332,7 +332,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     pub fn policy(&self) -> &RunPolicy {
         &self.policy
     }
-
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> Default for AgentHarness<State, Ctx> {

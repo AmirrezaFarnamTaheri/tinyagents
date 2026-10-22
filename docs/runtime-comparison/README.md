@@ -26,7 +26,6 @@ as calibration for the runtime/harness split.
 | [`pydantic-ai.md`](pydantic-ai.md) | Pydantic AI v2 / pydantic-graph / pydantic-ai-harness: same structure. |
 | [`pi.md`](pi.md) | pi (`earendil-works/pi`): `pi-ai`, `pi-agent-core` and its `AgentHarness`: same structure. |
 | [`code-review-harness.md`](code-review-harness.md) | `tinyagents-harness` findings (3 critical, 13 important, 14 minor), refactors, test gaps. |
-| [`code-review-graph.md`](code-review-graph.md) | `tinyagents-graph` / `-orchestration` / `-session` findings (4 critical, 12 important, 12 minor). |
 
 ## Executive summary
 

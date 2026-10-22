@@ -89,6 +89,7 @@
 //! provider integration retries after a genuine, growing delay while unit tests
 //! stay sleep-free.
 
+pub mod phases;
 mod types;
 
 pub use types::*;

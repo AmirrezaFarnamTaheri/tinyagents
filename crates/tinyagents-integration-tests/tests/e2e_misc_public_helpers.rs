@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use serde_json::json;
 use tinyagents_harness::limits::{LimitTracker, RunLimits};
+use tinyagents_harness::{new_call_id, new_cell_id, new_session_id, next_seq};
 use tinyinference_llm::tool::{ToolCall, ToolFormat, ToolSchema};
 use tinytools::ToolResult;
 

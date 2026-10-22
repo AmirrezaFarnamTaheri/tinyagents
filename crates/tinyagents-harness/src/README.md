@@ -18,7 +18,7 @@ the module map below.
 
 | Module | Concern |
 | --- | --- |
-| `agent_loop` | The default model-tool-model agent loop — one model call driven to completion, plus tool dispatch. |
+| `agent_loop` | The default model-tool-model agent loop — one model call driven to completion, tool dispatch, and caller-consumable event streaming. |
 | `artifacts` | Filesystem offload for oversized worker artifacts on long-horizon runs. |
 | `blocking` (private) | `run_blocking`, the helper that moves synchronous file/DB work off the tokio runtime. |
 | `cache` | Prompt, response, and layout caches for repeated/replayed requests. |
@@ -67,9 +67,8 @@ the module map below.
 3. **Recurse**: a tool can wrap a whole nested `AgentHarness` invocation
    (`DriverSubAgentTool` in `tinyagents-harness-tools`), so the same
    loop runs again one level deeper, tracked by `ids`/`limits`/`cost` roll-up.
-4. **Observe**: every step emits an `AgentEvent` (`events`); `stream` projects
-   and `observability` durably
-   journals them.
+4. **Observe**: every step emits an `AgentEvent` (`events`); `agent_loop` can
+   stream those events to callers, and `observability` durably journals them.
 5. **Extend**: host-owned `AgentMiddleware` wraps the complete run to load and
    save memory, prepare and clean up workspaces, or attach other product policy.
    The harness keeps only the execution seam.

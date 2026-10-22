@@ -56,10 +56,6 @@ pub struct RunLimits {
 Limits should fail closed. When a limit is reached, the harness should stop the
 agent loop and return a classified error that includes the current counters.
 
-For graph-backed runs, max-step failures should include graph name, run id,
-current super-step, frontier nodes, and the configured cap. The run should be
-persisted as failed when a checkpointer is configured.
-
 ## Retry Policy
 
 ```rust
