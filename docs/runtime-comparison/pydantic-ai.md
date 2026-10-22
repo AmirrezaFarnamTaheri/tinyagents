@@ -55,8 +55,7 @@ and `tinytools` at `a14e24d`.
 ## 2. Feature inventory
 
 Paths are relative to this repository unless prefixed `vendor:`
-(`vendor/tinyinference` / `vendor/tinytools`). H = `crates/tinyagents-harness/src`,
-G = `crates/tinyagents-graph/src`.
+(`vendor/tinyinference` / `vendor/tinytools`). H = `crates/tinyagents-harness/src`. The former graph crate was removed in TinyAgents #61; the current workspace has no state-graph runtime.
 
 | Feature | Pydantic AI | TinyAgents | Notes |
 |---|---|---|---|
@@ -99,7 +98,7 @@ G = `crates/tinyagents-graph/src`.
 | Observability | `Instrumentation` capability, OTel GenAI semconv v5, Logfire | **Partial** — Langfuse client/exporter, event journals, `RedactingSink`; no OTel `gen_ai.*` (grep: none) | |
 | MCP | `MCP` capability / `MCPToolset` (stdio, streamable HTTP, SSE), prefixes, `process_tool_call`, sampling, elicitation, prompts/resources, `load_mcp_toolsets(config.json)` | **No** — MCP appears only inside the Claude Code provider bridge (`H/providers/claude_code`) | `ToolResult` is "MCP-shaped" but no client. |
 | Durable execution | Temporal/DBOS/Prefect/Restate/Kitaru/Airflow/Lambda capabilities; deterministic replay; activities for model/tool/MCP | **Yes (different model)** — built-in `Checkpointer` (`InMemory`, `File`, `Sqlite`), `DurabilityMode`, pending writes, `resume`, time travel (`G/checkpoint`) | See §4. |
-| Run-state persistence (message-history checkpoints) | Harness `StepPersistence`: `InMemory/File/Sqlite/Mongo` step stores, `continue_run`, `fork_run`, tool-effect ledger `(run_id, tool_call_id)` with `started/completed/failed`, `MediaStore` externalization | **Partial** — `tinyagents-session` (history/run ledger), harness `store/`, graph checkpoints | No tool-effect ledger for crash-time "did this side effect happen". |
+| Run-state persistence (message-history checkpoints) | Harness `StepPersistence`: `InMemory/File/Sqlite/Mongo` step stores, `continue_run`, `fork_run`, tool-effect ledger `(run_id, tool_call_id)` with `started/completed/failed`, `MediaStore` externalization | **Partial** — `tinyagents-session` (history/run ledger), harness `store/`; no graph checkpoints | No tool-effect ledger for crash-time "did this side effect happen". |
 | Graph library | `pydantic_graph`: `BaseNode`/`End`, builder `@g.step`, `g.join(reducer)`, `edge_from().map().to()`, broadcast, `transform`, `graph.render()` mermaid; persistence removed in v2 | **Yes, richer** — `GraphBuilder`, channels/reducers (`LastValue`, `Topic`, `BinaryAggregate`, `Barrier`, `NamedBarrier`), `Send`, `Command`, subgraphs, `map_reduce`, `to_mermaid` (`G/`) | |
 | Sub-agents / delegation | tool-call delegation, `Subagents` (`delegate_task`), `Advisor`, `DynamicWorkflow` | **Yes** — async `DriverSubAgentTool`, `SubAgentJobRegistry`, `DetachedTaskRegistry`, graph `subagent_node`, and steering | TinyAgents is deeper (detached, wait, steer). |
 | Declarative agent spec | `Agent.from_file('agent.yaml')`, `from_spec`, capability `from_spec` | **Yes** — `AgentDefinition` (`tinyagents-definition`) | |
@@ -274,7 +273,7 @@ sanitisation belong to the host (§5).
 - **Typed deps.** Both inject a typed context; Pydantic passes `RunContext[Deps]`
   into tools, instructions, validators, `prepare`, and toolset factories with
   one signature. TinyAgents splits `&State` (graph state) from `Ctx`
-  (runtime deps), which is the right split for a graph runtime but means
+  (runtime deps), which is the right split for a workflow runtime but means
   tools receive `ToolRunContext` (tinytools) rather than the harness
   `RunContext`; the injected-argument mechanism (`tool/injected.rs`) is a
   workaround Pydantic does not need. Worse in Pydantic: no separate durable
@@ -309,7 +308,7 @@ sanitisation belong to the host (§5).
   applies it to the *agent loop itself*, so any host can step, inspect, or
   override the next node. TinyAgents' loop is a closed `run_loop.rs`;
   exposing it as a `CompiledGraph` (the docs promise this in
-  `docs/modules/harness/state-graph.md`) would close the gap and reuse the
+  a replacement execution engine would close the gap and reuse the
   checkpointer for free.
 - **Durable execution.** Pydantic explicitly refuses to own a checkpointer:
   "durability is not storage", and it delegates replay to Temporal/DBOS/etc.
@@ -352,7 +351,7 @@ sanitisation belong to the host (§5).
 | 3.8 prompted/union output, `EndStrategy` | **Runtime** | |
 | 3.9 audio/video/document blocks | **Runtime** (tinyinference) | OpenHuman's `agent/multimodal.rs` currently works around it with markers. |
 | 3.10 schema-driven test model, network kill-switch | **Runtime** (testkit) | |
-| 3.11 tool-effect ledger, media externalisation | **Runtime** (session + graph checkpoint) with **Host** deciding idempotency | Matches sdk-gaps §4/§6. |
+| 3.11 tool-effect ledger, media externalisation | **Runtime** (session state) with **Host** deciding idempotency | Matches sdk-gaps §4/§6; no graph checkpoint runtime is currently shipped. |
 | 3.12 OTel semconv sink | **Runtime** (optional sink) | Langfuse already lives there. |
 | UI adapters (AG-UI/Vercel), `sanitize_messages` | **Host** | Transport; but a `sanitize_history()` helper is cheap to put in harness. |
 | Harness batteries (`Coder`, `Shell`, `FileSystem`, `Memory`, `Guardrails`, `Planning`) | **Host** (OpenHuman `tools`, `security`, `agent/goals`, `agent/todos`) | TinyAgents' stance (tools are host vocabulary) is the same as Pydantic's core/Harness split; note Pydantic still ships them as an *official* library, which TinyAgents could mirror as an optional `tinyagents-batteries` crate. |
