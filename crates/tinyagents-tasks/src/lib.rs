@@ -35,9 +35,9 @@ pub use reconcile::{
     ReconcileOutcome, ReconcileReport, ReconciledTask, reconcile_orphaned_tasks, task_status_label,
 };
 pub use runtime::{DetachedAbortEvent, DetachedTaskRegistry};
+pub use steering_registry::SteeringRegistry;
 pub use storage::{collections, open_storage, storage_schema};
 pub use store::{InMemoryTaskStore, TaskStore};
-pub use steering_registry::SteeringRegistry;
 pub use store_registry::{
     TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store,
     open_driver_task_store_or_memory,

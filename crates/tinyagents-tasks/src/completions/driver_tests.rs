@@ -1,15 +1,15 @@
-use std::sync::Arc;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::completions::{CompletionResult, RecordOutcome};
 use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
+use crate::storage::{COMPLETIONS, task_id_key};
 use tinyagents_storage_kit::{Scope, StorageBackend};
 use tinystoragedrivers_document::memory::MemoryConnection;
 use tinystoragedrivers_document::sqlite::SqliteDocuments;
 use tinystoragedrivers_testkit::MemoryBackend;
-use crate::storage::{COMPLETIONS, task_id_key};
 
 fn record(task: &str, parent: &str) -> CompletionRecord {
     CompletionRecord::new(
