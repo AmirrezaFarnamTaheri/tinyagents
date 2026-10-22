@@ -460,12 +460,13 @@ where
         request_id: Option<&str>,
     ) -> Vec<String> {
         let key = (scope.clone(), thread_id.to_owned());
-        let active = self.active.lock().await;
+        let mut active = self.active.lock().await;
         let mut cancelled = Vec::new();
         if let Some(turn) = active
-            .get(&key)
+            .get_mut(&key)
             .filter(|turn| turn.cancellable && request_id.is_none_or(|id| turn.request_id == id))
         {
+            turn.cancellable = false;
             turn.queue.clear().await;
             turn.cancel.cancel();
             cancelled.push(turn.request_id.clone());

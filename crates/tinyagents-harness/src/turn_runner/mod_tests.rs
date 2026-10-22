@@ -418,6 +418,16 @@ async fn custom_queue_item_shares_runner_queue_and_preserves_complete_request() 
         stored_runner_request.idle_timeout,
         runner_queued.idle_timeout
     );
+    let round_tripped = runner_item.1.clone().into_turn_request();
+    assert_eq!(round_tripped.scope, runner_queued.scope);
+    assert_eq!(round_tripped.thread_id, runner_queued.thread_id);
+    assert_eq!(round_tripped.request_id, runner_queued.request_id);
+    assert_eq!(round_tripped.text, runner_queued.text);
+    assert_eq!(round_tripped.payload, runner_queued.payload);
+    assert_eq!(round_tripped.host_authored, runner_queued.host_authored);
+    assert_eq!(round_tripped.disposition, runner_queued.disposition);
+    assert_eq!(round_tripped.deadline, runner_queued.deadline);
+    assert_eq!(round_tripped.idle_timeout, runner_queued.idle_timeout);
 
     let mut host_queued = request(QueueDisposition::Steer, false);
     host_queued.scope = scope.clone();
