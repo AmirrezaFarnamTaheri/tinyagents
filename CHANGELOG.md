@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased: `AgentProgress::ContextCompacting`
+
+**Breaking.** Added `AgentProgress::ContextCompacting` to the public
+`AgentProgress` enum. Downstream exhaustive matches must handle the new
+variant.
+
 ## Unreleased: settled completions drop their result (tinyagents#354)
 
 `CompletionRouter` now empties a record's `result` when the record settles:
