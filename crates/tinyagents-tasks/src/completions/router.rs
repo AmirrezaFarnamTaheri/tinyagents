@@ -536,6 +536,10 @@ impl CompletionRouter {
     /// can apply its own give-up policy (the router never delivers it again).
     /// The returned record carries the full result; the stored one does not,
     /// so the host's give-up writer is the result's last reader.
+    ///
+    /// A record whose give-up cannot be stored stays `Pending` (its lease is
+    /// released) and is retried; the ones already given up are still returned,
+    /// so a partly written batch never strands a give-up the host has not seen.
     pub fn mark_failed<S: AsRef<str>>(&self, task_ids: &[S]) -> Result<Vec<CompletionRecord>> {
         let mut state = self.lock()?;
         let mut gave_up = Vec::new();
@@ -548,13 +552,15 @@ impl CompletionRouter {
             if record.state != CompletionState::Pending || record.attempts < self.max_attempts {
                 continue;
             }
-            // The stored copy keeps its result until every give-up in the batch
-            // has landed: a later put failing returns Err, and this record's
-            // result would otherwise be gone with no one holding it.
+            // The stored copy keeps its result until the host has the record:
+            // the cleanup below drops it only for records returned from here.
             let result = std::mem::take(&mut record.result);
             record.settle(CompletionState::GaveUp);
             record.result = result;
-            state.store.put(&record)?;
+            if let Err(error) = state.store.put(&record) {
+                tracing::warn!(task_id = %record.task_id, %error, "{LOG_PREFIX} could not store a give-up; it stays pending");
+                continue;
+            }
             tracing::warn!(
                 task_id = %record.task_id,
                 parent_key = %record.parent_key,

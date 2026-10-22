@@ -825,12 +825,16 @@ async fn partial_mark_failed_keeps_a_gave_up_result() {
     router.record(record("t2", "p")).await.unwrap();
     router.claim_pending("p", 10).unwrap();
     store.fail_from.store(store.puts.load(SeqCst) + 1, SeqCst);
-    assert!(router.mark_failed(&["t1", "t2"]).is_err());
-    let t1 = store.inner.get("t1").unwrap();
-    assert!(
-        t1.state == CompletionState::Pending || t1.result.text == "result of t1",
-        "t1 result lost: state={:?} text={:?}",
-        t1.state,
-        t1.result.text
+    // t2's give-up cannot be stored: t1's is still handed to the host with its
+    // result, and t2 stays pending so a later failure gives it up again.
+    let gave_up = router.mark_failed(&["t1", "t2"]).unwrap();
+    assert_eq!(
+        gave_up
+            .iter()
+            .map(|r| (r.task_id.as_str(), r.result.text.as_str()))
+            .collect::<Vec<_>>(),
+        [("t1", "result of t1")]
     );
+    let t2 = store.inner.get("t2").unwrap();
+    assert_eq!(t2.state, CompletionState::Pending);
 }
