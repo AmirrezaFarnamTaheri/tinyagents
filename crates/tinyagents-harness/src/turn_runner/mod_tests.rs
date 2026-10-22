@@ -1890,8 +1890,10 @@ impl Summarizer for BlockingSummary {
 #[tokio::test]
 async fn live_turns_and_cancel_requests_report_scoped_primary_before_parallel() {
     let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
     let host = Arc::new(Host {
         started: Some(started.clone()),
+        release: Some(release),
         ..Host::default()
     });
     let runner = Arc::new(runner(
@@ -1946,8 +1948,10 @@ async fn live_turns_and_cancel_requests_report_scoped_primary_before_parallel() 
 #[tokio::test]
 async fn queue_snapshot_preserves_lane_fifo_and_does_not_drain_work() {
     let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
     let host = Arc::new(Host {
         started: Some(started.clone()),
+        release: Some(release),
         ..Host::default()
     });
     let runner = Arc::new(runner(
