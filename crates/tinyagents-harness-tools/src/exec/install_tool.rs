@@ -26,6 +26,16 @@ impl InstallTool {
     pub fn new(gate: Arc<dyn ExecGate>, backend: Arc<dyn ExecBackend>) -> Self {
         Self { gate, backend }
     }
+
+    async fn execute_with_context_and_path_lookup(
+        &self,
+        args: Value,
+        _options: ToolCallOptions,
+        context: Option<&dyn ToolRunContext>,
+        on_path: impl FnMut(&str) -> bool + Send,
+    ) -> anyhow::Result<ToolResult> {
+        execute_install(self, args, context, on_path).await
+    }
 }
 
 fn manager_argv(manager: &str) -> Option<(&'static str, &'static [&'static str])> {
@@ -120,9 +130,22 @@ impl Tool for InstallTool {
     async fn execute_with_context(
         &self,
         args: Value,
-        _options: ToolCallOptions,
+        options: ToolCallOptions,
         context: Option<&dyn ToolRunContext>,
     ) -> anyhow::Result<ToolResult> {
+        self.execute_with_context_and_path_lookup(args, options, context, |name| {
+            find_on_path(name).is_some()
+        })
+        .await
+    }
+}
+
+async fn execute_install(
+    tool: &InstallTool,
+    args: Value,
+    context: Option<&dyn ToolRunContext>,
+    on_path: impl FnMut(&str) -> bool + Send,
+) -> anyhow::Result<ToolResult> {
         let Some(package) = args.get("package").and_then(Value::as_str).map(str::trim) else {
             return Ok(ToolResult::error("Missing 'package' parameter"));
         };
@@ -132,9 +155,7 @@ impl Tool for InstallTool {
             )));
         }
         let (manager, program, prefix) =
-            match resolve_manager(args.get("manager").and_then(Value::as_str), |name| {
-                find_on_path(name).is_some()
-            }) {
+            match resolve_manager(args.get("manager").and_then(Value::as_str), on_path) {
                 Ok(resolved) => resolved,
                 Err(error) => return Ok(ToolResult::error(error)),
             };
@@ -147,11 +168,11 @@ impl Tool for InstallTool {
             timeout: Some(INSTALL_TIMEOUT),
         };
         let started = Instant::now();
-        let approval_required = self.gate.external_effect_with_args(&args);
-        let permit = match self.gate.authorize(&authorization, context).await {
+        let approval_required = tool.gate.external_effect_with_args(&args);
+        let permit = match tool.gate.authorize(&authorization, context).await {
             Ok(permit) => permit,
             Err(denied) => {
-                self.gate.record(ExecAuditEvent {
+                tool.gate.record(ExecAuditEvent {
                     operation,
                     approval_required,
                     authorized: false,
@@ -177,7 +198,7 @@ impl Tool for InstallTool {
             backend_selection: permit.backend_selection,
             backend_capability: permit.backend_capability,
         };
-        let outcome = self.backend.execute(request, context, None).await;
+        let outcome = tool.backend.execute(request, context, None).await;
         let (allowed, attempted, audit, result) = match outcome {
             ExecBackendOutcome::Refused { kind, reason } => (
                 false,
@@ -224,7 +245,7 @@ impl Tool for InstallTool {
                 )
             }
         };
-        self.gate.record(ExecAuditEvent {
+        tool.gate.record(ExecAuditEvent {
             operation,
             approval_required,
             authorized: true,
@@ -235,7 +256,6 @@ impl Tool for InstallTool {
             duration: started.elapsed(),
         });
         Ok(result)
-    }
 }
 
 #[cfg(test)]
