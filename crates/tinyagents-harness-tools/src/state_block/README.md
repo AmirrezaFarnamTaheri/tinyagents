@@ -67,3 +67,10 @@ session key-value store). Install it on the turns that have
 the `todo` tool; it is an observer, so another middleware's control outcome
 never hides a call from its ledger. Per-run state is keyed by the run
 instance and dropped in `after_agent` / `on_error`.
+
+`hide_goal(true)` leaves the thread goal out of the block for the turns the
+middleware is installed on; the plan, the model's notes and the run's facts
+still show, and the goal itself is not touched. A host that installs the block
+per turn sets it for a turn that must not be steered by the thread's goal (in
+OpenHuman, a turn with `TurnOverrides::suppress_active_goal`, such as a
+conversational reply on a thread whose goal belongs to an earlier task).
