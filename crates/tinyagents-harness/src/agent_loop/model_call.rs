@@ -828,13 +828,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                 call_id: call_id.clone(),
                                 attempt,
                             });
-                            // Sleep for the backoff only when the policy opts in
-                            // (`with_backoff_sleep`); otherwise this is a no-op so
-                            // the loop stays fast and deterministic in tests.
-                            self.policy
-                                .retry
-                                .sleep_backoff_for_error(backoff_attempt, &error)
-                                .await;
+                            // Sleep the backoff (on by default; tests opt out with
+                            // `with_backoff_sleep(false)`), raced against
+                            // cancellation so a cancel during the wait stops the
+                            // run now, not after the full backoff.
+                            tokio::select! {
+                                biased;
+                                _ = ctx.cancellation.cancelled() => {
+                                    return Err(TinyAgentsError::Cancelled);
+                                }
+                                _ = self.policy.retry.sleep_backoff_for_error(backoff_attempt, &error) => {}
+                            }
                             continue;
                         }
                         break Err(error);

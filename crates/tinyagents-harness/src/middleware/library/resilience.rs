@@ -24,8 +24,9 @@ impl RetryMiddleware {
     /// Returns the policy-derived backoff for the given retry `attempt`.
     ///
     /// Exposed for callers that want to inspect the backoff. The middleware
-    /// itself sleeps between retries only when the policy opts in via
-    /// [`RetryPolicy::with_backoff_sleep`]; otherwise it retries back-to-back.
+    /// sleeps it between retries unless the policy opts out with
+    /// [`RetryPolicy::with_backoff_sleep`]`(false)`, and a cancel during the
+    /// sleep ends the call with `Cancelled`.
     pub fn backoff_for_attempt(&self, attempt: usize) -> Duration {
         self.policy.backoff_for_attempt(attempt)
     }
@@ -82,9 +83,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx> for Retry
                             .clone()
                             .unwrap_or_else(|| CallId::new(format!("{}-model", ctx.run_id())));
                         ctx.emit(AgentEvent::RetryScheduled { call_id, attempt });
-                        // Sleep for the backoff only when the policy opts in
-                        // (`with_backoff_sleep`); a no-op otherwise.
-                        self.policy.sleep_backoff(backoff_attempt).await;
+                        // Sleep the backoff (on by default), raced against
+                        // cancellation so a cancel during the wait stops now.
+                        tokio::select! {
+                            biased;
+                            _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
+                            _ = self.policy.sleep_backoff(backoff_attempt) => {}
+                        }
                         continue;
                     }
                     return Err(error);
