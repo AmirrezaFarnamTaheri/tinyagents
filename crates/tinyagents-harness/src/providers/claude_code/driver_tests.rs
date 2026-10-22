@@ -448,17 +448,26 @@ fn the_shape_of_the_line_is_reported() {
 // ---- nonzero exit with a structured stdout error (openhuman#5712) ----
 
 #[cfg(unix)]
-async fn run_fake_claude(script_body: &str, api_key: Option<&str>) -> anyhow::Result<ChatResponse> {
-    use std::os::unix::fs::PermissionsExt;
+async fn run_fake_claude(
+    stdout: &str,
+    stderr: &str,
+    exit_code: i32,
+    api_key: Option<&str>,
+) -> anyhow::Result<ChatResponse> {
     let dir = tempfile::tempdir().expect("tempdir");
-    let bin = dir.path().join("claude");
-    std::fs::write(&bin, format!("#!/bin/sh\ncat >/dev/null\n{script_body}\n")).expect("script");
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/providers/claude_code/fixtures/fake-claude");
+    let project_dir = dir.path().join("project");
+    std::fs::create_dir_all(&project_dir).expect("project dir");
+    std::fs::write(project_dir.join(".fake-claude-stdout"), stdout).expect("stdout fixture");
+    std::fs::write(project_dir.join(".fake-claude-stderr"), stderr).expect("stderr fixture");
+    std::fs::write(project_dir.join(".fake-claude-exit"), exit_code.to_string())
+        .expect("exit fixture");
     let messages = [ChatMessage::user("hello")];
     run_turn(TurnContext {
         bin_path: bin,
         workspace_dir: dir.path().join("ws"),
-        project_dir: dir.path().join("project"),
+        project_dir,
         thread_id: "t-5712".into(),
         model: "sonnet".into(),
         append_system_prompt: None,
@@ -476,7 +485,10 @@ async fn run_fake_claude(script_body: &str, api_key: Option<&str>) -> anyhow::Re
 #[tokio::test]
 async fn nonzero_exit_surfaces_structured_stdout_error() {
     let err = run_fake_claude(
-        r#"echo '{"type":"result","subtype":"success","is_error":true,"result":"Invalid API key - please run /login"}'; exit 1"#,
+        r#"{"type":"result","subtype":"success","is_error":true,"result":"Invalid API key - please run /login"}
+"#,
+        "",
+        1,
         None,
     )
     .await
@@ -493,7 +505,10 @@ async fn nonzero_exit_surfaces_structured_stdout_error() {
 #[tokio::test]
 async fn nonzero_exit_surfaces_error_event_message() {
     let err = run_fake_claude(
-        r#"echo '{"type":"error","error":"model not found"}'; exit 2"#,
+        r#"{"type":"error","error":"model not found"}
+"#,
+        "",
+        2,
         None,
     )
     .await
@@ -504,7 +519,7 @@ async fn nonzero_exit_surfaces_error_event_message() {
 #[cfg(unix)]
 #[tokio::test]
 async fn nonzero_exit_without_stdout_error_falls_back_to_stderr() {
-    let err = run_fake_claude(r#"echo 'boom on stderr' >&2; exit 1"#, None)
+    let err = run_fake_claude("", "boom on stderr\n", 1, None)
         .await
         .expect_err("nonzero exit must fail");
     let text = err.to_string();
@@ -515,7 +530,10 @@ async fn nonzero_exit_without_stdout_error_falls_back_to_stderr() {
 #[tokio::test]
 async fn nonzero_exit_stdout_error_keeps_secrets_out() {
     let err = run_fake_claude(
-        r#"echo '{"type":"result","is_error":true,"result":"auth failed for key sk-ant-live-key-1234 and my-configured-secret"}'; exit 1"#,
+        r#"{"type":"result","is_error":true,"result":"auth failed for key sk-ant-live-key-1234 and my-configured-secret"}
+"#,
+        "",
+        1,
         Some("my-configured-secret"),
     )
     .await
@@ -562,10 +580,11 @@ fn configured_key_embedded_in_larger_token_is_redacted() {
 #[tokio::test]
 async fn zero_exit_is_error_result_is_sanitized_and_bounded() {
     let big = "x".repeat(5_000);
-    let script = format!(
-        r#"echo '{{"type":"result","subtype":"success","is_error":true,"result":"bad key topsecret99 sk-ant-zzz {big}"}}'; exit 0"#
+    let stdout = format!(
+        r#"{{"type":"result","subtype":"success","is_error":true,"result":"bad key topsecret99 sk-ant-zzz {big}"}}
+"#
     );
-    let err = run_fake_claude(&script, Some("topsecret99"))
+    let err = run_fake_claude(&stdout, "", 0, Some("topsecret99"))
         .await
         .expect_err("is_error must fail");
     let text = err.to_string();
@@ -579,8 +598,11 @@ async fn zero_exit_is_error_result_is_sanitized_and_bounded() {
 #[cfg(unix)]
 #[tokio::test]
 async fn nonzero_exit_stderr_fallback_is_redacted_and_bounded() {
-    let script = r#"echo "auth failed key=topsecret99 sk-ant-live-1234" >&2; head -c 5000 /dev/zero | tr '\0' x >&2; exit 1"#;
-    let err = run_fake_claude(script, Some("topsecret99"))
+    let stderr = format!(
+        "auth failed key=topsecret99 sk-ant-live-1234 {}\n",
+        "x".repeat(5_000)
+    );
+    let err = run_fake_claude("", &stderr, 1, Some("topsecret99"))
         .await
         .expect_err("nonzero exit must fail");
     let text = err.to_string();
@@ -595,7 +617,10 @@ async fn nonzero_exit_stderr_fallback_is_redacted_and_bounded() {
 #[tokio::test]
 async fn nonzero_exit_surfaces_object_error_message_sanitized() {
     let err = run_fake_claude(
-        r#"echo '{"type":"error","error":{"message":"denied for topsecret99 sk-ant-xyz"}}'; exit 2"#,
+        r#"{"type":"error","error":{"message":"denied for topsecret99 sk-ant-xyz"}}
+"#,
+        "",
+        2,
         Some("topsecret99"),
     )
     .await

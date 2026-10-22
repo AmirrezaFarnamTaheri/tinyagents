@@ -17,7 +17,7 @@ tinyagents-tasks = { path = "../tinyagents-tasks", version = "2.2.0", default-fe
 tinyagents-harness = { path = "../tinyagents-harness", version = "2.2.0", default-features = false, features = [
     "langfuse",
 ] }
-tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.4.1" }
+tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.5.0" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.6.0" }
 tokio = { workspace = true, features = ["sync", "time", "macros", "rt", "rt-multi-thread", "fs"] }
 tracing = { workspace = true }

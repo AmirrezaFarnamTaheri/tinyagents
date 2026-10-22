@@ -2081,6 +2081,7 @@ dependencies = [
  "tinyinference-embeddings",
  "tinyinference-image",
  "tinyinference-llm",
+ "tinyinference-providers",
  "tinyinference-video",
  "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
@@ -2127,6 +2128,7 @@ dependencies = [
  "tinyagents-harness",
  "tinyagents-harness-tools",
  "tinyinference-llm",
+ "tinyinference-providers",
  "tinytools",
  "tokio",
  "tracing",
@@ -2216,6 +2218,7 @@ dependencies = [
  "tinyagents-definition",
  "tinyagents-harness",
  "tinyinference-llm",
+ "tinyinference-providers",
  "tinytools",
  "tokio",
 ]
@@ -2284,7 +2287,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-core"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "httpdate",
@@ -2294,7 +2297,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-embeddings"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2312,7 +2315,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-image"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2329,7 +2332,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-llm"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2340,6 +2343,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tinyinference-core",
+ "tinyinference-embeddings",
  "tinyinference-providers",
  "tinytools-agent",
  "tokio",
@@ -2348,7 +2352,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-providers"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "base64 0.23.1",
  "rand 0.10.3",
@@ -2364,7 +2368,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-video"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "serde",

@@ -177,7 +177,8 @@ changing the outer transcript or treating a preview as a write.
 ## Subagent orchestration
 
 `tinyagents-orchestration` owns child-agent composition and the shared
-`SubAgentJobRegistry`. The `subagents` feature in `tinyagents-harness-tools`
+`tinyagents_orchestration::subagent::SubAgentJobRegistry`. The `subagents`
+feature in `tinyagents-harness-tools`
 exposes `tinyagents_harness_tools::subagents`, which provides
 `DriverSubAgentTool`, the host-planned typed dispatcher: its `background` mode
 starts a child and returns a stable job id, while `inline` mode waits for the
