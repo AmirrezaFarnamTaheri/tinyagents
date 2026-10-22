@@ -37,6 +37,36 @@ pub struct TurnRequest<P = serde_json::Value> {
     pub idle_timeout: Option<Duration>,
 }
 
+/// A request item stored by a runner and shared with its host's running agent
+/// loop. Implementations must preserve the complete request in both directions.
+pub trait TurnQueueItem<P>: Clone + Send + Sync + 'static {
+    /// Wraps an accepted request without changing its identity or payload.
+    fn from_turn_request(request: TurnRequest<P>) -> Self;
+
+    /// Borrows the request represented by this item.
+    fn as_turn_request(&self) -> &TurnRequest<P>;
+
+    /// Consumes this item into the request it represents.
+    fn into_turn_request(self) -> TurnRequest<P>;
+}
+
+impl<P> TurnQueueItem<P> for TurnRequest<P>
+where
+    P: Clone + Send + Sync + 'static,
+{
+    fn from_turn_request(request: TurnRequest<P>) -> Self {
+        request
+    }
+
+    fn as_turn_request(&self) -> &TurnRequest<P> {
+        self
+    }
+
+    fn into_turn_request(self) -> TurnRequest<P> {
+        self
+    }
+}
+
 /// Host-owned identity and fingerprint for the checked-out durable session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnSession {
@@ -177,7 +207,7 @@ impl WorkTracker {
 }
 
 #[async_trait]
-pub trait TurnHost<P = serde_json::Value>: Send + Sync {
+pub trait TurnHost<P = serde_json::Value, Q = TurnRequest<P>>: Send + Sync {
     /// Check out or create the session for this request and verify its fingerprint.
     async fn checkout(&self, request: &TurnRequest<P>) -> Result<TurnSession, String>;
     /// Check out an independent transcript/session snapshot for Parallel mode.
@@ -200,7 +230,7 @@ pub trait TurnHost<P = serde_json::Value>: Send + Sync {
         session: &TurnSession,
         origin: &serde_json::Value,
         cancellation: crate::CancellationToken,
-        queue: Arc<RunQueue<TurnRequest<P>>>,
+        queue: Arc<RunQueue<Q>>,
         progress: mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String>;
     /// Release the session after the run, including on cancellation or failure.
@@ -310,12 +340,12 @@ pub enum TurnRunnerError {
 }
 
 #[derive(Clone)]
-struct ActiveTurn<P> {
+struct ActiveTurn<P, Q> {
     request_id: String,
     cancel: crate::CancellationToken,
     cancellable: bool,
     generation: u64,
-    queue: Arc<RunQueue<TurnRequest<P>>>,
+    queue: Arc<RunQueue<Q>>,
 }
 
 /// A live turn owned by a runner, suitable for host-side cancellation and
@@ -335,7 +365,7 @@ pub struct LiveTurn {
 type ThreadLockKey = (ScopeKey, String);
 type ThreadLocks = Mutex<HashMap<ThreadLockKey, Weak<Mutex<()>>>>;
 type ParallelQueueKey = (ScopeKey, String, String);
-type ParallelQueueMap<P> = Mutex<HashMap<ParallelQueueKey, Arc<RunQueue<TurnRequest<P>>>>>;
+type ParallelQueueMap<Q> = Mutex<HashMap<ParallelQueueKey, Arc<RunQueue<Q>>>>;
 
 fn queue_lane(disposition: QueueDisposition) -> Option<QueueLane> {
     match disposition {
@@ -347,7 +377,16 @@ fn queue_lane(disposition: QueueDisposition) -> Option<QueueLane> {
 }
 
 /// Reusable turn lifecycle coordinator, parameterized entirely by host ports.
-pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value> {
+pub struct TurnRunner<
+    H,
+    I,
+    R,
+    E,
+    F,
+    S,
+    P = serde_json::Value,
+    Q = TurnRequest<P>,
+> {
     host: Arc<H>,
     ingress: Arc<I>,
     replies: Arc<R>,
@@ -356,21 +395,22 @@ pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value> {
     summarizer: Arc<S>,
     config: TurnRunnerConfig,
     locks: ThreadLocks,
-    parallel_queues: ParallelQueueMap<P>,
-    active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<P>>>,
+    parallel_queues: ParallelQueueMap<Q>,
+    active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<P, Q>>>,
     parallel_active: Mutex<HashMap<(ScopeKey, String, String), crate::CancellationToken>>,
     next_generation: std::sync::atomic::AtomicU64,
 }
 
-impl<H, I, R, E, F, S, P> TurnRunner<H, I, R, E, F, S, P>
+impl<H, I, R, E, F, S, P, Q> TurnRunner<H, I, R, E, F, S, P, Q>
 where
-    H: TurnHost<P> + 'static,
+    H: TurnHost<P, Q> + 'static,
     I: IngressPolicy<P> + 'static,
     R: ReplyStore<P> + 'static,
     E: EventSink<P> + 'static,
     F: FailureClassifier + 'static,
     S: Summarizer<P> + 'static,
     P: Clone + Send + Sync + 'static,
+    Q: TurnQueueItem<P>,
 {
     pub fn new(
         host: Arc<H>,
