@@ -280,3 +280,22 @@ async fn parent_steer_over_the_cap_is_refused() {
         "{texts:?}"
     );
 }
+
+// An over-cap steer must not consume its request id: the caller can retry the
+// same id with a legal text and it is delivered, not treated as a duplicate.
+#[tokio::test]
+async fn an_over_cap_steer_leaves_its_request_id_unclaimed() {
+    let jobs = SubAgentJobRegistry::new();
+    let (id, steering) = jobs.create("worker", 1);
+    let limit = tinyagents_harness::steering::MAX_STEER_TEXT_BYTES;
+    assert_eq!(
+        jobs.send_message_with_request_id(id.as_str(), 1, "a".repeat(limit + 1), Some("req-1")),
+        Err(SubAgentJobError::MessageTooLong { limit })
+    );
+    assert_eq!(
+        jobs.send_message_with_request_id(id.as_str(), 1, "short", Some("req-1")),
+        Ok(false),
+        "the retried request id must not read as a duplicate"
+    );
+    assert_eq!(steering.pending(), 1);
+}
