@@ -23,7 +23,7 @@ ever seen.
 ## Public surface
 
 This module is `pub(crate)` — it has no crate-external API. Within
-`tinyagents-graph`:
+the graph runtime:
 
 - `ThreadLockMap` — the weak-value lock map.
   - `ThreadLockMap::new(what: &'static str)` — creates an empty map; `what`

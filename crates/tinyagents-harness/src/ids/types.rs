@@ -1,7 +1,6 @@
 //! Identifier newtypes and lifecycle enums for the harness.
 //!
-//! Every long-lived harness concept (runs, threads, calls, events, graph
-//! nodes, checkpoints, interrupts) is keyed by a small, cheap-to-clone string
+//! Every long-lived harness concept (runs, threads, calls, and events) is keyed by a small, cheap-to-clone string
 //! newtype. Wrapping the raw `String` in a distinct type prevents accidentally
 //! passing, say, a [`ThreadId`] where a [`RunId`] is expected.
 
@@ -10,8 +9,8 @@ use serde::{Deserialize, Serialize};
 /// Identifies a single harness run (one model call, one agent loop, or one
 /// graph-node invocation of the harness).
 ///
-/// A `RunId` is the unit of recursion in TinyAgents: when a run spawns a
-/// sub-agent or sub-graph, the child gets its own `RunId` while
+/// A `RunId` identifies a unit of agent work: when a run spawns a
+/// sub-agent, the child gets its own `RunId` while
 /// [`crate::events::HarnessRunStatus`] records that child's
 /// `parent_run_id` (the spawning run) and `root_run_id` (the top-level
 /// ancestor), so the full recursion tree is reconstructable from these ids.
