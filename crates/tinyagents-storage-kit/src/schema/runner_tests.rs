@@ -26,7 +26,7 @@ async fn stream_resume_refuses_a_target_with_a_foreign_appended_entry() {
         );
     let registry = Registry::compose([schema]).unwrap();
     registry.prepare(&backend).await.unwrap();
-    let storage = backend.for_scope(&scope).unwrap();
+    let storage = crate::ScopedStorage::new(backend.for_scope(&scope).unwrap(), scope);
     let source = "legacy/events/session";
     let target = "stream_owner.events/session";
     storage
