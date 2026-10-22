@@ -44,14 +44,12 @@ async fn stream_resume_refuses_a_target_with_a_foreign_appended_entry() {
         .ensure_collection(&CollectionSpec::new("tsd.migrations"))
         .await
         .unwrap();
-    let progress_id = Key::of(["stream_owner", "stream_owner.events", "copy", source])
-        .unwrap()
-        .to_string();
+    let progress_id = Key::of(["stream_owner", "stream_owner.events", "copy", source]).unwrap();
     storage
         .documents()
         .put(
             "tsd.migrations",
-            &progress_id,
+            progress_id.as_str(),
             json!({
                 "owner": "stream_owner",
                 "step": "copy",

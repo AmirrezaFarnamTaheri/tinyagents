@@ -16,10 +16,12 @@ async fn completed_import_marker_reads_back_as_done() {
     .await
     .unwrap();
 
-    assert!(Migrations::new(&storage)
-        .done("tasks", "records_v2")
-        .await
-        .unwrap());
+    assert!(
+        Migrations::new(&storage)
+            .done("tasks", "records_v2")
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

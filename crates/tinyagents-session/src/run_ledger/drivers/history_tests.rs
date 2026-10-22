@@ -187,8 +187,20 @@ async fn collided_native_session_does_not_receive_legacy_child_rows() {
     assert_eq!(report.messages.imported, 0);
     assert_eq!(report.tool_calls.imported, 0);
     assert_eq!(ledger.get_session("shared-id").await.unwrap(), Some(native));
-    assert!(ledger.list_messages("shared-id", None).await.unwrap().is_empty());
-    assert!(ledger.list_tool_calls("shared-id", None).await.unwrap().is_empty());
+    assert!(
+        ledger
+            .list_messages("shared-id", None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        ledger
+            .list_tool_calls("shared-id", None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 async fn say(ledger: &DriverRunLedger, session: &str, content: &str) -> i64 {
