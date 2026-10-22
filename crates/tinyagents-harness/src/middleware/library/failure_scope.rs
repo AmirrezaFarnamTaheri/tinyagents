@@ -473,6 +473,20 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                 {
                     run.tracker.reset();
                 }
+                // A dead-call retry runs without the reasoning that led to the
+                // last action and tends to repeat it: on Terminal-Bench
+                // `regex-chess` three such retries re-ran the same check before
+                // the file it checked existed, and the identical-repeat stop
+                // ended a 58-minute run at minute 11. Those repeats say nothing
+                // about the model insisting on a failing action, so they do not
+                // count toward it; a repeat made with reasoning still does.
+                if ctx.dead_call_retry {
+                    tracing::debug!(
+                        tool,
+                        "[failure_scope] failure from a dead-call retry: not counted toward the repeat stop"
+                    );
+                    return;
+                }
                 let attempt = ToolAttempt {
                     tool,
                     arg_fingerprint: &argument_key,
