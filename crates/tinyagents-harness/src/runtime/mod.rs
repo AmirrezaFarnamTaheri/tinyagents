@@ -430,3 +430,7 @@ mod test;
 #[cfg(test)]
 #[path = "mod_authorization_context_tests.rs"]
 mod authorization_context_tests;
+
+#[cfg(test)]
+#[path = "mod_tool_gate_tests.rs"]
+mod tool_gate_tests;

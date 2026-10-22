@@ -273,12 +273,19 @@ fn exact_denials_apply_to_intrinsic_tools() {
 }
 
 #[test]
-fn exact_exclusions_apply_to_dynamic_wildcards_without_interpreting_patterns() {
+fn glob_exclusions_apply_to_dynamic_wildcards() {
     let gate = ToolGate::new(None, &ToolRulePolicy::default(), None)
         .with_denied_names(["blocked".to_string(), "literal*".to_string()]);
     assert!(!gate.allows_name("blocked"));
     assert!(!gate.allows_name("literal*"));
-    assert!(gate.allows_name("literal_suffix"));
+    assert!(!gate.allows_name("literal_suffix"));
+    assert!(!gate.allows_name("LITERAL_SUFFIX"));
+    assert!(!gate.lists("literal_suffix", None, Surface::Catalog));
+    assert!(matches!(
+        gate.admits_intrinsic("literal_search", Surface::Call),
+        CallGate::Refuse(_)
+    ));
+    assert!(gate.allows_name("blocked_not"));
     assert!(gate.lists("live_tool", None, Surface::Catalog));
     let restricted = ToolGate::new(
         Some(["registered".to_string()].into()),
