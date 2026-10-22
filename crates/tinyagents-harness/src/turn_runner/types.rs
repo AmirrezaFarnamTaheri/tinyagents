@@ -377,16 +377,7 @@ fn queue_lane(disposition: QueueDisposition) -> Option<QueueLane> {
 }
 
 /// Reusable turn lifecycle coordinator, parameterized entirely by host ports.
-pub struct TurnRunner<
-    H,
-    I,
-    R,
-    E,
-    F,
-    S,
-    P = serde_json::Value,
-    Q = TurnRequest<P>,
-> {
+pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value, Q = TurnRequest<P>> {
     host: Arc<H>,
     ingress: Arc<I>,
     replies: Arc<R>,
@@ -1107,13 +1098,9 @@ where
         }
     }
 
-    /// Non-destructively snapshot the active primary turn's queued requests in
+    /// Non-destructively snapshot the active primary turn's host queue items in
     /// lane order, preserving FIFO order within each lane.
-    pub async fn queue_snapshot(
-        &self,
-        scope: &ScopeKey,
-        thread_id: &str,
-    ) -> Vec<(QueueLane, Q)> {
+    pub async fn queue_snapshot(&self, scope: &ScopeKey, thread_id: &str) -> Vec<(QueueLane, Q)> {
         let key = (scope.clone(), thread_id.to_owned());
         let active = self.active.lock().await;
         match active.get(&key) {
@@ -1159,7 +1146,7 @@ where
         match active.get(&key) {
             Some(turn) => {
                 turn.queue
-                    .remove_where(|turn| turn.request_id == request_id)
+                    .remove_where(|turn| turn.as_turn_request().request_id == request_id)
                     .await
             }
             None => 0,
