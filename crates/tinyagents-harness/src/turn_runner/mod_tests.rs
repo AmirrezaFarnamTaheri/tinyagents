@@ -286,10 +286,13 @@ async fn cancelled_parallel_turn_remains_visible_until_cleanup_finishes() {
 async fn custom_queue_item_shares_runner_queue_and_preserves_complete_request() {
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
-    let host = Arc::new(Host {
-        started: Some(started.clone()),
-        release: Some(release),
-        ..Host::default()
+    let host = Arc::new(WrappedHost {
+        inner: Host {
+            started: Some(started.clone()),
+            release: Some(release),
+            ..Host::default()
+        },
+        wrapped_queue: Mutex::default(),
     });
     let runner = Arc::new(TurnRunner::<
         _,
