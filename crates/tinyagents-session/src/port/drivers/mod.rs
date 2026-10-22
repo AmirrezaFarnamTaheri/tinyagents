@@ -34,8 +34,7 @@ use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission}
 #[cfg(test)]
 use tinyagents_storage_kit::Scope;
 use tinyagents_storage_kit::{
-    Blocking, MIGRATIONS_COLLECTION, MigrateOptions, Registry, ScopedStorage,
-    with_migration_lease,
+    Blocking, MIGRATIONS_COLLECTION, MigrateOptions, Registry, ScopedStorage, with_migration_lease,
 };
 use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::{CollectionSpec, StorageError};
