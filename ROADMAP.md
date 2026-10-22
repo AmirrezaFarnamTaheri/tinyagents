@@ -8,15 +8,11 @@ build toward a production-grade Rust agent runtime.
 - typed harness model calls, tools, middleware, structured output, streaming,
   usage/cost tracking, retry/limits, cache, memory/embeddings, sub-agents,
   and steering (`harness/`)
-- durable typed state graph runtime: `START`/`END`, nodes, conditional
-  routing, `Command`s, fan-out, reducers/channels, checkpoints, interrupts,
-  subgraphs, streaming, and topology export (`graph/`)
 - per-thread `ThreadGoal` and `TodoList` productivity primitives, exposed as
   harness tools
-- named capability registry (models, tools, agents, graphs, stores,
+- named capability registry (models, tools, agents, stores,
   middleware, policy) bound by name (`registry/`)
-- an optional SQLite-backed checkpointer (`sqlite` feature)
-- an embedded Langfuse client and graph exporter for observability
+- an embedded Langfuse client for observability
 
 ## Near-Term Work
 
@@ -31,14 +27,11 @@ build toward a production-grade Rust agent runtime.
   ranks the correctness fixes and feature gaps found by comparing TinyAgents
   with LangGraph, Pydantic AI and pi
 
-## Parallel Agents And Sub-Agents
+## Sub-Agents
 
-Shipped: forked child contexts, shared caches with explicit isolation policy,
-child event namespaces, parent/child run ids, deterministic reducer-based
-merges, optional/blocking/race/quorum/fallback/compare policies, and
-resumable checkpoints across parallel branches. Ongoing work focuses on
-hardening edge cases surfaced by the `e2e_parallel_*` and `live_subagent_*`
-test suites.
+Shipped: child contexts, shared caches with explicit isolation policy,
+child event namespaces, parent/child run ids, policy-controlled detached
+work, and durable child task lifecycle through `tinyagents-orchestration`.
 
 ## Stability
 
