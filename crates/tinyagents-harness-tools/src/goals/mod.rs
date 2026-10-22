@@ -11,7 +11,7 @@
 //!
 //! It is the harness-level counterpart of OpenHuman's `thread_goals`, minus the
 //! app-specific coupling (event bus, RPC envelopes, heartbeat scheduler): the
-//! primitive is provider-neutral and drives off the graph runtime.
+//! primitive is provider-neutral and works with the harness tools runtime.
 
 pub mod budget;
 mod observer;

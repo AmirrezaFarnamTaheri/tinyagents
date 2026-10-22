@@ -35,7 +35,7 @@ role-specific payloads and serialized forms, with conversions documented in
 ## Boundaries
 
 This crate owns async subagent lifecycle only. Generic graph execution stays
-in `tinyagents-graph`; tool dispatch, events, and run contexts stay in
+in `tinyagents-orchestration`; tool dispatch, events, and run contexts stay in
 `tinyagents-harness`. Hosts remain responsible for agent definitions, model
 selection, credentials, workspace policy, storage implementations, and
 authorization.

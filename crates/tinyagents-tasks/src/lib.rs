@@ -3,7 +3,7 @@
 //! This crate is the managed child-work surface: task model, `TaskStore`
 //! implementations, the detached task registry and restart reconciliation.
 //! It does not depend on the graph engine, so
-//! `tinyagents-graph` and `tinyagents-orchestration` both build on it.
+//! `tinyagents-orchestration` builds on it.
 //!
 //! Hosts can track child work by stable task id without exposing raw executor
 //! handles such as `tokio::JoinHandle`.

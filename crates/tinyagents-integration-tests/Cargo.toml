@@ -16,7 +16,6 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
-tinyagents-graph = { path = "../tinyagents-graph" }
 tinyagents-harness = { path = "../tinyagents-harness" }
 tinyagents-harness-tools = { path = "../tinyagents-harness-tools" }
 tinyagents-orchestration = { path = "../tinyagents-orchestration" }
@@ -26,8 +25,8 @@ tinyagents-session = { path = "../tinyagents-session" }
 tinyagents-tasks = { path = "../tinyagents-tasks" }
 tinystoragedrivers-core = { workspace = true }
 tinystoragedrivers-sqlite = { workspace = true }
-tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.4.1" }
-tinyinference-embeddings = { path = "../../vendor/tinyinference/crates/tinyinference-embeddings", version = "0.4.1" }
+tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.5.0" }
+tinyinference-embeddings = { path = "../../vendor/tinyinference/crates/tinyinference-embeddings", version = "0.5.0" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.6.0" }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
@@ -41,7 +40,6 @@ multimodal = ["tinyagents-harness/multimodal"]
 claude-code = ["tinyagents-harness/claude-code"]
 langfuse = ["tinyagents-harness/langfuse"]
 tracing = [
-    "tinyagents-graph/tracing",
     "tinyagents-harness/tracing",
     "tinyagents-registry/tracing",
     "tinyagents-session/tracing",
