@@ -307,12 +307,8 @@ impl SessionHistoryStore for DriverRunLedger {
         let mut imported = 0;
         for session in &import.sessions {
             imported += usize::from(
-                self.import_if_absent(
-                    HIST_SESSIONS,
-                    &key(&[&session.id])?,
-                    encode(session)?,
-                )
-                .await?,
+                self.import_if_absent(HIST_SESSIONS, &key(&[&session.id])?, encode(session)?)
+                    .await?,
             );
             self.ensure_fts(session_fts_id(&session.id)?, &session_fts_row(session))
                 .await?;
@@ -323,16 +319,14 @@ impl SessionHistoryStore for DriverRunLedger {
         let mut highest = 0_u64;
         for message in &import.messages {
             if message.id <= 0 {
-                return Err(StorageError::invalid_input("legacy message ids must be positive").into());
+                return Err(
+                    StorageError::invalid_input("legacy message ids must be positive").into(),
+                );
             }
             highest = highest.max(message.id as u64);
             imported += usize::from(
-                self.import_if_absent(
-                    HIST_MESSAGES,
-                    &message_id(message.id)?,
-                    encode(message)?,
-                )
-                .await?,
+                self.import_if_absent(HIST_MESSAGES, &message_id(message.id)?, encode(message)?)
+                    .await?,
             );
             self.ensure_fts(
                 message_fts_id(message.id)?,
@@ -349,16 +343,14 @@ impl SessionHistoryStore for DriverRunLedger {
         let mut highest = 0_u64;
         for call in &import.tool_calls {
             if call.id <= 0 {
-                return Err(StorageError::invalid_input("legacy tool-call ids must be positive").into());
+                return Err(
+                    StorageError::invalid_input("legacy tool-call ids must be positive").into(),
+                );
             }
             highest = highest.max(call.id as u64);
             imported += usize::from(
-                self.import_if_absent(
-                    HIST_TOOL_CALLS,
-                    &tool_call_id(call.id)?,
-                    encode(call)?,
-                )
-                .await?,
+                self.import_if_absent(HIST_TOOL_CALLS, &tool_call_id(call.id)?, encode(call)?)
+                    .await?,
             );
             self.ensure_fts(
                 tool_fts_id(call.id)?,
@@ -369,7 +361,8 @@ impl SessionHistoryStore for DriverRunLedger {
         Counters::new(self.scoped.documents())
             .set_at_least(HISTORY_OWNER, TOOL_CALL_COUNTER, highest)
             .await?;
-        report.tool_calls = super::super::import::ImportCounts::new(import.tool_calls.len(), imported);
+        report.tool_calls =
+            super::super::import::ImportCounts::new(import.tool_calls.len(), imported);
         Ok(report)
     }
 
