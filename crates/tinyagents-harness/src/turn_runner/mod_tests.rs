@@ -1886,3 +1886,110 @@ impl Summarizer for BlockingSummary {
         std::future::pending().await
     }
 }
+
+#[tokio::test]
+async fn live_turns_and_cancel_requests_report_scoped_primary_before_parallel() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        ..Host::default()
+    });
+    let runner = Arc::new(runner(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+
+    let mut primary_request = request(QueueDisposition::Interrupt, false);
+    primary_request.request_id = "primary".into();
+    let scope = primary_request.scope.clone();
+    let primary = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(primary_request).await })
+    };
+    started.notified().await;
+
+    let mut parallel_request = request(QueueDisposition::Parallel, false);
+    parallel_request.request_id = "parallel".into();
+    let parallel = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(parallel_request).await })
+    };
+    while host.runs.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+        tokio::task::yield_now().await;
+    }
+
+    let live = runner.live_turns().await;
+    assert_eq!(
+        live.iter()
+            .map(|turn| (turn.request_id.as_str(), turn.parallel))
+            .collect::<Vec<_>>(),
+        [("primary", false), ("parallel", true)]
+    );
+
+    assert_eq!(runner.cancel_requests(&scope, "thread-a", None).await, [
+        "primary".to_owned(),
+        "parallel".to_owned(),
+    ]);
+    assert!(matches!(primary.await.unwrap(), Err(TurnRunnerError::Cancelled)));
+    assert!(matches!(parallel.await.unwrap(), Err(TurnRunnerError::Cancelled)));
+    assert!(runner.live_turns().await.is_empty());
+}
+
+#[tokio::test]
+async fn queue_snapshot_preserves_lane_fifo_and_does_not_drain_work() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        ..Host::default()
+    });
+    let runner = Arc::new(runner(
+        host,
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+    let primary = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(request(QueueDisposition::Interrupt, false)).await })
+    };
+    started.notified().await;
+
+    for (disposition, id) in [
+        (QueueDisposition::Steer, "steer-1"),
+        (QueueDisposition::Steer, "steer-2"),
+        (QueueDisposition::Followup, "followup-1"),
+        (QueueDisposition::Collect, "collect-1"),
+    ] {
+        let mut queued = request(disposition, false);
+        queued.request_id = id.into();
+        assert!(matches!(runner.run(queued).await, Err(TurnRunnerError::Queued)));
+    }
+    let scope = request(QueueDisposition::Interrupt, false).scope;
+
+    let snapshot = runner.queue_snapshot(&scope, "thread-a").await;
+    assert_eq!(
+        snapshot
+            .iter()
+            .map(|(lane, item)| (*lane, item.request_id.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (QueueLane::Steer, "steer-1"),
+            (QueueLane::Steer, "steer-2"),
+            (QueueLane::Followup, "followup-1"),
+            (QueueLane::Collect, "collect-1"),
+        ]
+    );
+    assert_eq!(runner.queue_status(&scope, "thread-a").await.total, 4);
+    assert_eq!(
+        runner
+            .take_queued(&scope, "thread-a", QueueLane::Steer, QueueMode::OneAtATime)
+            .await[0]
+            .request_id,
+        "steer-1"
+    );
+
+    runner.cancel_requests(&scope, "thread-a", None).await;
+    assert!(matches!(primary.await.unwrap(), Err(TurnRunnerError::Cancelled)));
+}
