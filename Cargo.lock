@@ -2196,6 +2196,7 @@ version = "2.2.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tempfile",
  "tinyagents-harness",
  "tinyagents-storage-kit",
  "tinyinference-llm",
