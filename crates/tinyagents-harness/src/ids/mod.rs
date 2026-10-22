@@ -128,10 +128,8 @@ pub fn new_run_id() -> RunId {
 /// Allocates a fresh [`CheckpointId`] of the form `ckpt-<nonce>-<n>`,
 /// collision-free across process restarts (see [`process_nonce`]).
 ///
-/// Restart-safety is essential here: checkpoint ids are the keys of the
-/// parent-lineage spine that `prune`, `get_state_history`, and
-/// `ResumeTarget::Checkpoint` all walk, so a duplicate id across a restart can
-/// delete a live record's ancestor or resume the wrong checkpoint.
+/// The process nonce avoids collisions when adapters persist checkpoint ids
+/// across restarts. Session resume itself is handled by `tinyagents-session`.
 pub fn new_checkpoint_id() -> CheckpointId {
     CheckpointId(format!("ckpt-{}-{}", process_nonce(), next_seq()))
 }
