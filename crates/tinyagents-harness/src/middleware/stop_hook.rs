@@ -79,4 +79,3 @@ pub struct StopReport {
     /// Reason returned by the hook.
     pub reason: String,
 }
-

@@ -16,6 +16,12 @@ as models call models and graphs run graphs.
   `on_tool_delta` / `after_tool`, and `on_error`. Every hook has a no-op
   default, is async, and returns `Result<()>`; an `Err` short-circuits the
   stack.
+
+Host stop policies implement `StopHook<T>` and receive a `TurnState<T>` after
+each completed model response. `StopHookMiddleware` accumulates per-run metrics,
+runs hooks in registration order, and converts the first stop vote into an
+interrupt at the next safe loop checkpoint. The harness provides the generic
+contract; the host owns the policy and stop reason.
 - **Executor observation** (`Middleware::observe_tool_execution`) — a
   synchronous, read-only hook inside the terminal tool future. It receives the
   admitted outer identity plus the actual bound target and arguments after

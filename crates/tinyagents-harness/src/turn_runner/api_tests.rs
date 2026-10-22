@@ -52,7 +52,10 @@ fn work_tracker_emits_balanced_signals_for_overlapping_tool_calls() {
         display_detail: None,
     };
 
-    assert!(matches!(tracker.observe(&started("a")), Some(TurnSignal::WorkStarted)));
+    assert!(matches!(
+        tracker.observe(&started("a")),
+        Some(TurnSignal::WorkStarted)
+    ));
     assert!(tracker.observe(&started("b")).is_none());
     assert!(tracker.observe(&tool_completed("a")).is_none());
     assert!(matches!(

@@ -9,7 +9,9 @@ use tinyinference_llm::model::ModelResponse;
 use crate::context::{MiddlewareControl, RunContext};
 use crate::cost::TurnCost;
 use crate::error::Result;
-use crate::middleware::{Middleware, StopDecision, StopHook, StopHookMetrics, StopReport, TurnState};
+use crate::middleware::{
+    Middleware, StopDecision, StopHook, StopHookMetrics, StopReport, TurnState,
+};
 
 type StopObserver = Arc<dyn Fn(StopReport) + Send + Sync>;
 
@@ -35,24 +37,21 @@ pub struct StopHookMiddleware<M: StopHookMetrics = TurnCost> {
 impl<M: StopHookMetrics + Default> StopHookMiddleware<M> {
     /// Creates a stop-hook middleware with default metrics.
     pub fn new(model: impl Into<String>, hooks: Vec<Arc<dyn StopHook<M>>>) -> Self {
-        Self::with_metrics_seed(model, hooks, M::default())
+        Self {
+            model: model.into(),
+            hooks,
+            metrics_seed: M::default(),
+            runs: Mutex::new(HashMap::new()),
+            observer: None,
+        }
     }
 }
 
 impl<M: StopHookMetrics> StopHookMiddleware<M> {
     /// Creates a stop-hook middleware with an initial metrics snapshot.
-    pub fn with_metrics_seed(
-        model: impl Into<String>,
-        hooks: Vec<Arc<dyn StopHook<M>>>,
-        metrics_seed: M,
-    ) -> Self {
-        Self {
-            model: model.into(),
-            hooks,
-            metrics_seed,
-            runs: Mutex::new(HashMap::new()),
-            observer: None,
-        }
+    pub fn with_metrics_seed(mut self, metrics_seed: M) -> Self {
+        self.metrics_seed = metrics_seed;
+        self
     }
 
     /// Sets an observer for stop votes after the winning hook is selected.
@@ -65,7 +64,9 @@ impl<M: StopHookMetrics> StopHookMiddleware<M> {
     }
 
     fn lock_runs(&self) -> std::sync::MutexGuard<'_, HashMap<u64, RunState<M>>> {
-        self.runs.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.runs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -89,19 +90,17 @@ where
         let (metrics, iteration) = {
             let mut runs = self.lock_runs();
             runs.retain(|_, run| run.lifecycle.strong_count() > 0);
-            let run = runs
-                .entry(ctx.instance_id())
-                .or_insert_with(|| RunState {
-                    lifecycle: Arc::downgrade(&ctx.lifecycle),
-                    metrics: self.metrics_seed.clone(),
-                    iteration: 0,
-                });
+            let run = runs.entry(ctx.instance_id()).or_insert_with(|| RunState {
+                lifecycle: Arc::downgrade(&ctx.lifecycle),
+                metrics: self.metrics_seed.clone(),
+                iteration: 0,
+            });
             run.iteration = run.iteration.saturating_add(1);
             run.metrics.record_model(&self.model, response);
             (run.metrics.clone(), run.iteration)
         };
-        let max_iterations = u32::try_from(ctx.config.effective_max_model_calls())
-            .unwrap_or(u32::MAX);
+        let max_iterations =
+            u32::try_from(ctx.config.effective_max_model_calls()).unwrap_or(u32::MAX);
         let state = TurnState {
             iteration,
             max_iterations,

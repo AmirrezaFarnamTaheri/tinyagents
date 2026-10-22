@@ -102,18 +102,15 @@ async fn stop_vote_uses_seeded_metrics_and_reports_the_winning_hook() {
         order: order.clone(),
         observed: Some(observed.clone()),
     };
-    let middleware = StopHookMiddleware::with_metrics_seed(
-        "model-b",
-        vec![Arc::new(first)],
-        TurnCost {
+    let middleware = StopHookMiddleware::new("model-b", vec![Arc::new(first)])
+        .with_metrics_seed(TurnCost {
             call_count: 4,
             ..Default::default()
-        },
-    )
-    .with_stop_observer({
-        let observer_reports = observer_reports.clone();
-        move |report| observer_reports.lock().unwrap().push(report)
-    });
+        })
+        .with_stop_observer({
+            let observer_reports = observer_reports.clone();
+            move |report| observer_reports.lock().unwrap().push(report)
+        });
     let mut ctx = RunContext::new(RunConfig::new("stop"), ());
 
     middleware
