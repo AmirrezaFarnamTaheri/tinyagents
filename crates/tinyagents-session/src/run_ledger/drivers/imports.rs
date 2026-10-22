@@ -21,6 +21,13 @@ const AGENT_IMPORT_PREFIX: &str = "agent_import";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AgentImportReceipt {
+    owner: String,
+    step: String,
+    from: u32,
+    to: u32,
+    cursor: Option<String>,
+    written: u64,
+    done: bool,
     fingerprint: String,
     report: AgentFamilyImportReport,
 }
@@ -66,6 +73,37 @@ impl DriverRunLedger {
             .map(|row| row.doc))
     }
 
+    async fn raise_event_heads(&self, events: &[crate::run_ledger::types::RunEvent]) -> Result<()> {
+        let mut highest = std::collections::BTreeMap::<String, u64>::new();
+        for event in events {
+            highest
+                .entry(event.run_id.clone())
+                .and_modify(|value| *value = (*value).max(event.sequence))
+                .or_insert(event.sequence);
+        }
+        for (run_id, sequence) in highest {
+            self.change(
+                super::storage::EVENT_HEADS,
+                &run_id,
+                |current: Option<EventHead>| {
+                    let next = head_after(sequence);
+                    match current {
+                        Some(head)
+                            if head
+                                .next
+                                .is_none_or(|value| next.is_some_and(|n| value >= n)) =>
+                        {
+                            Ok((None, ()))
+                        }
+                        _ => Ok((Some(EventHead { next }), ())),
+                    }
+                },
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     pub(super) async fn import_agent_family_rows(
         &self,
         import: AgentFamilyImport,
@@ -79,6 +117,7 @@ impl DriverRunLedger {
         }
         if let Some(receipt) = self.agent_import_receipt(&import.operation_id).await? {
             return if receipt.fingerprint == import.source_fingerprint {
+                self.raise_event_heads(&import.events).await?;
                 Ok(receipt.report)
             } else {
                 Err(StorageError::conflict("agent import operation source changed").into())
@@ -91,6 +130,13 @@ impl DriverRunLedger {
             telemetry: ImportCounts::new(import.telemetry.len(), import.telemetry.len()),
         };
         let receipt = AgentImportReceipt {
+            owner: LEDGER_OWNER.into(),
+            step: format!("{AGENT_IMPORT_PREFIX}/{}", import.operation_id),
+            from: 0,
+            to: 0,
+            cursor: Some(import.source_fingerprint.clone()),
+            written: (import.runs.len() + import.events.len() + import.telemetry.len()) as u64,
+            done: true,
             fingerprint: import.source_fingerprint.clone(),
             report,
         };
@@ -143,6 +189,7 @@ impl DriverRunLedger {
             Err(error) if error.kind() == ErrorKind::Conflict => {
                 if let Some(receipt) = self.agent_import_receipt(&import.operation_id).await? {
                     return if receipt.fingerprint == import.source_fingerprint {
+                        self.raise_event_heads(&import.events).await?;
                         Ok(receipt.report)
                     } else {
                         Err(StorageError::conflict("agent import operation source changed").into())
@@ -154,27 +201,9 @@ impl DriverRunLedger {
         }
 
         // The imported event rows and receipt are atomic. Heads are derived
-        // allocator state and can be safely raised after that commit.
-        for (run_id, sequence) in highest {
-            self.change(
-                super::storage::EVENT_HEADS,
-                &run_id,
-                |current: Option<EventHead>| {
-                    let next = head_after(sequence);
-                    match current {
-                        Some(head)
-                            if head
-                                .next
-                                .is_none_or(|value| next.is_some_and(|n| value >= n)) =>
-                        {
-                            Ok((None, ()))
-                        }
-                        _ => Ok((Some(EventHead { next }), ())),
-                    }
-                },
-            )
-            .await?;
-        }
+        // allocator state and are raised after that commit and on every replay.
+        let _ = highest;
+        self.raise_event_heads(&import.events).await?;
         Ok(report)
     }
 

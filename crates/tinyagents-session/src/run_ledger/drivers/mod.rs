@@ -1071,3 +1071,7 @@ mod team_tests;
 #[cfg(test)]
 #[path = "history_tests.rs"]
 mod history_tests;
+
+#[cfg(test)]
+#[path = "imports_tests.rs"]
+mod imports_tests;
