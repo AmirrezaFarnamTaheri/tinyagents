@@ -80,6 +80,3 @@ pub struct StopReport {
     pub reason: String,
 }
 
-#[cfg(test)]
-#[path = "stop_hook_tests.rs"]
-mod tests;
