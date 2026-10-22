@@ -51,11 +51,6 @@ tracing = [
 unused_imports = "allow"
 
 [[test]]
-name = "live_subagents"
-path = "tests/live_subagents.rs"
-required-features = ["subagents"]
-
-[[test]]
 name = "subagent_sessions_tools"
 path = "tests/subagent_sessions_tools.rs"
 required-features = ["subagents"]

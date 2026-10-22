@@ -14,12 +14,8 @@ use tinyagents_tasks::DetachedTaskRegistryError;
 use tinyinference_llm::message::Message;
 use tokio::sync::watch;
 
-use crate::subagent::{AppliedResult, IncompleteKind};
-
 use super::types::{DriverJobRegistration, JobControl, JobMeta, ParentJobScope};
-use super::{
-    JobLink, SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus,
-};
+use super::{SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus};
 
 const LOG_PREFIX: &str = "[subagent-jobs]";
 type DriverJobControls = (
@@ -38,6 +34,15 @@ struct JobExecutionControls {
     cancellation: CancellationToken,
     steering: SteeringHandle,
     run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+}
+
+struct JobInsert {
+    id: SubAgentJobId,
+    agent: String,
+    owner: String,
+    parent_run_id: tinyagents_harness::ids::RunId,
+    metadata: JobMeta,
+    execution: JobExecutionControls,
 }
 
 pub(super) struct JobWaitGuard {
@@ -61,16 +66,16 @@ impl Drop for JobWaitGuard {
     }
 }
 
-/// Settles an inline job if its tool future is dropped (tool timeout, parent
-/// stream drop) or unwinds from a panic before the result is recorded.
+/// Settles a driver-backed job if its future is dropped or unwinds before its
+/// result is recorded.
 /// Call [`Self::disarm`] once the result has been written.
-pub struct InlineJobGuard {
+pub struct JobSettleGuard {
     jobs: SubAgentJobRegistry,
     id: SubAgentJobId,
     armed: bool,
 }
 
-impl InlineJobGuard {
+impl JobSettleGuard {
     pub fn new(jobs: SubAgentJobRegistry, id: SubAgentJobId) -> Self {
         Self {
             jobs,
@@ -84,7 +89,7 @@ impl InlineJobGuard {
     }
 }
 
-impl Drop for InlineJobGuard {
+impl Drop for JobSettleGuard {
     fn drop(&mut self) {
         if self.armed {
             self.jobs.mark_aborted(&self.id, std::thread::panicking());
@@ -104,95 +109,37 @@ impl SubAgentJobRegistry {
         &self.tasks
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn create(&self, agent: &str, owner: u64) -> (SubAgentJobId, SteeringHandle) {
-        self.create_with_cancellation(agent, owner, CancellationToken::new(), JobLink::default())
-    }
-
-    /// Registers a job whose child run observes `cancellation`, so
-    /// [`Self::cancel_owned`] can stop exactly this job.
-    pub(crate) fn create_with_cancellation(
-        &self,
-        agent: &str,
-        owner: u64,
-        cancellation: CancellationToken,
-        link: JobLink,
-    ) -> (SubAgentJobId, SteeringHandle) {
-        self.create_with_cancellation_and_queue(agent, owner, cancellation, link, None)
-    }
-
-    /// Registers a job with an optional loop-consumed queue for content
-    /// messages routed to a specific lane.
-    pub(crate) fn create_with_cancellation_and_queue(
-        &self,
-        agent: &str,
-        owner: u64,
-        cancellation: CancellationToken,
-        link: JobLink,
-        run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
-    ) -> (SubAgentJobId, SteeringHandle) {
-        let id = SubAgentJobId(format!("subagent-job-{}", next_seq()));
-        let steering =
-            SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage));
-        let mut driver_jobs = self
-            .driver_jobs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Root leases serialize with lineage insertion and pruning. Lock order:
-        // driver_jobs -> root_leases -> controls -> detached task registry.
-        let mut root_leases = self.root_leases();
-        if let Err(error) = self.insert_job(
-            id.clone(),
-            agent,
-            owner.to_string(),
-            link,
-            JobExecutionControls {
-                cancellation,
-                steering: steering.clone(),
-                run_queue,
-            },
-            &mut driver_jobs,
-        ) {
-            tracing::error!("{LOG_PREFIX} register.failed job_id={id} error={error}");
-        } else {
-            let mut controls = self.controls();
-            self.refresh_root_leases_locked(&mut root_leases, &mut controls);
-        }
-        (id, steering)
-    }
-
     fn insert_job(
         &self,
-        id: SubAgentJobId,
-        agent: &str,
-        owner: String,
-        link: JobLink,
-        execution: JobExecutionControls,
+        insert: JobInsert,
         driver_jobs: &mut std::collections::HashMap<
             crate::subagent::SubagentTaskKey,
             SubAgentJobId,
         >,
     ) -> Result<(), SubAgentJobError> {
+        let JobInsert {
+            id,
+            agent,
+            owner,
+            parent_run_id,
+            metadata,
+            execution,
+        } = insert;
         if id.as_str().is_empty() {
             return Err(SubAgentJobError::Registry("empty job id".into()));
         }
-        let metadata = JobMeta {
-            parent_thread_id: link.parent_thread_id.clone(),
-            workspace: link.workspace.clone(),
-        };
-        let lineage =
-            super::types::JobLineage::new(link.parent_run_id.clone(), link.child_run_id.clone());
+        let lineage = super::types::JobLineage::new(Some(parent_run_id), None);
         let task_id = TaskId::new(id.as_str());
         let job = SubAgentJob {
             id: id.clone(),
-            agent: agent.to_owned(),
+            agent,
             status: SubAgentJobStatus::Queued,
             output: None,
             error: None,
-            subagent_run_id: link.subagent_run_id,
+            subagent_run_id: None,
             worker_thread_id: None,
             extensions: std::collections::BTreeMap::new(),
-            parent_tool_call_id: link.parent_tool_call_id,
+            parent_tool_call_id: None,
             incomplete_kind: None,
             artifacts: Vec::new(),
             schema_error: None,
@@ -448,19 +395,20 @@ impl SubAgentJobRegistry {
             tinyagents_harness::ids::RunId::new(key.parent_run_id.clone())
         });
         self.insert_job(
-            id.clone(),
-            &agent,
-            owner,
-            JobLink {
-                parent_thread_id: key.thread_id.clone(),
-                workspace,
-                parent_run_id: Some(parent_run_id),
-                ..JobLink::default()
-            },
-            JobExecutionControls {
-                cancellation,
-                steering: steering.clone(),
-                run_queue: Some(queue.clone()),
+            JobInsert {
+                id: id.clone(),
+                agent,
+                owner,
+                parent_run_id,
+                metadata: JobMeta {
+                    parent_thread_id: key.thread_id.clone(),
+                    workspace,
+                },
+                execution: JobExecutionControls {
+                    cancellation,
+                    steering: steering.clone(),
+                    run_queue: Some(queue.clone()),
+                },
             },
             &mut driver_jobs,
         )?;
@@ -541,65 +489,6 @@ impl SubAgentJobRegistry {
                 Ordering::Release,
                 Ordering::Relaxed,
             );
-        }
-    }
-
-    pub(crate) fn mark_result(
-        &self,
-        id: &SubAgentJobId,
-        result: Result<tinyagents_harness::middleware::AgentRun, TinyAgentsError>,
-    ) {
-        self.mark_result_applied(id, result, None);
-    }
-
-    /// Settles a job like [`Self::mark_result`], publishing the
-    /// result-policy-applied output in the same registry write so no reader
-    /// ever sees a terminal job with the raw, unpolicied output.
-    pub(crate) fn mark_result_applied(
-        &self,
-        id: &SubAgentJobId,
-        result: Result<tinyagents_harness::middleware::AgentRun, TinyAgentsError>,
-        applied: Option<AppliedResult>,
-    ) {
-        let settled = self.settle(id, |job, cancellation_requested| match result {
-            Ok(run) => {
-                if cancellation_requested {
-                    job.status = SubAgentJobStatus::Cancelled;
-                    job.error = Some(TinyAgentsError::Cancelled.to_string());
-                } else {
-                    job.status = SubAgentJobStatus::Completed;
-                    job.output = run.text();
-                    if let Some(applied) = applied {
-                        job.output = Some(applied.text);
-                        job.artifacts.extend(applied.artifact);
-                        job.schema_error = applied.schema_error;
-                        job.artifact_error = applied.artifact_error;
-                    }
-                }
-            }
-            Err(TinyAgentsError::Cancelled) => {
-                job.status = SubAgentJobStatus::Cancelled;
-                job.error = Some(TinyAgentsError::Cancelled.to_string());
-            }
-            Err(error @ TinyAgentsError::LimitExceeded(_)) => {
-                job.status = SubAgentJobStatus::Incomplete;
-                job.incomplete_kind = Some(IncompleteKind::BudgetExceeded);
-                job.error = Some(error.to_string());
-            }
-            Err(error @ TinyAgentsError::Timeout(_)) => {
-                job.status = SubAgentJobStatus::Incomplete;
-                job.incomplete_kind = Some(IncompleteKind::Timeout);
-                job.error = Some(error.to_string());
-            }
-            Err(error) => {
-                job.status = SubAgentJobStatus::Failed;
-                job.error = Some(error.to_string());
-            }
-        });
-        if !settled {
-            // Already settled (e.g. cancelled by the owner): the first
-            // terminal state wins.
-            tracing::debug!("{LOG_PREFIX} mark_result.ignored job_id={id}");
         }
     }
 
@@ -777,32 +666,6 @@ impl SubAgentJobRegistry {
             }
             self.refresh_root_leases_locked(&mut root_leases, &mut controls);
         }
-    }
-
-    /// Settles a job whose run finished but overshot a budget: it keeps the
-    /// (policy-applied) output and ends `Incomplete(BudgetExceeded)`.
-    pub(crate) fn mark_budget_overrun(
-        &self,
-        id: &SubAgentJobId,
-        applied: AppliedResult,
-        reason: String,
-    ) {
-        self.settle(id, |job, cancellation_requested| {
-            if cancellation_requested {
-                // An owner cancellation that raced the finish wins, as in
-                // `mark_result`.
-                job.status = SubAgentJobStatus::Cancelled;
-                job.error = Some(TinyAgentsError::Cancelled.to_string());
-                return;
-            }
-            job.status = SubAgentJobStatus::Incomplete;
-            job.incomplete_kind = Some(IncompleteKind::BudgetExceeded);
-            job.error = Some(reason);
-            job.output = Some(applied.text);
-            job.artifacts.extend(applied.artifact);
-            job.schema_error = applied.schema_error;
-            job.artifact_error = applied.artifact_error;
-        });
     }
 
     /// Marks a job `Failed` because its child task panicked or was aborted

@@ -2,16 +2,13 @@
 
 `tinyagents_orchestration::subagent` owns child-agent orchestration policy. Generic
 job and message tool shells live in `tinyagents_harness_tools::subagents`.
-It contains two complementary surfaces.
+It exposes a driver-backed asynchronous job registry and durable lifecycle ports.
 
-The invocation surface provides `SubAgent`, `SubAgentTool`,
-`SubAgentJobRegistry`, `SubAgentSession`, and `ChildDataPolicy`. It wraps an
-`AgentHarness` as a child run, enforces recursion depth, and inherits live
-parent cancellation, events, and host authority. Model-facing delegation is
-background by default: `SubAgentTool` returns a job id immediately while the
-child continues in the background. Callers can request `mode: "inline"` to
-wait for the child and receive its final result in the same tool call. A host
-constructs `tinyagents_harness_tools::subagents::SubAgentJobsTool` and
+The async surface provides `SubagentDriver` and `SubAgentJobRegistry`. A
+`DriverSubAgentTool` call always registers and starts a background job, then
+returns its task reference immediately. Hosts wait separately through the
+registry or detached settlement APIs. A host constructs
+`tinyagents_harness_tools::subagents::SubAgentJobsTool` and
 `SubAgentMessageTool` over the same registry to query status/results and send
 messages to queued or running jobs. Message delivery is cooperative at the
 child loop's next safe steering checkpoint. The registry is process-local and
@@ -60,7 +57,7 @@ without making product-policy decisions. Its dependency direction is:
 
 ```text
 tinyagents-harness-tools::subagents -> orchestration::subagent
-orchestration::subagent -> {tinyagents-graph, tinyagents-harness, tinyagents-session}
+orchestration::subagent -> {tinyagents-harness, tinyagents-session}
 ```
 
 Hosts provide three object-safe lifecycle seams. `SubagentPlanner<C, H>`
@@ -153,27 +150,26 @@ Enforcement uses *reservation* semantics: `try_reserve` checks every limit and
 claims the slot under one lock, returning a `SpawnReservation` guard, so
 concurrent spawns cannot race past a cap. Dropping the guard releases the live
 slot; dropping it without `commit()` (the spawn failed before the child
-launched) also refunds the total budget. `SubAgentTool` (background and inline)
+launched) also refunds the total budget. `DriverSubAgentTool`
 reserves before creating the child and moves the guard into the child's task
-for its whole lifetime (a panic, abort, or dropped inline call still releases
+for its whole lifetime (a panic or abort still releases
 it); `SubagentDriver::run` reserves after the cancellation and resume checks and
 before the planner runs, and commits just before the executor launches.
 Coalesced followers and cached terminal results never reserve; a resumed
 lifecycle takes a live slot but no new total budget.
 
-An over-limit `SubAgentTool` call returns a tool error worded as a limit signal
+An over-limit `DriverSubAgentTool` call returns a tool error worded as a limit signal
 ("...treat this as a delegated-agent limit signal, not a completed answer"),
 like the depth-limit error; the driver returns `SubagentError::SpawnRejected`.
 Because the neutral `SubagentRequest` carries no agent identity, a driver host
 that configures `allowed_targets` must name each request with
 `SubagentRequest::with_target`; an unnamed request is refused (fail closed).
 
-**Bypass.** Only `SubAgentTool` and `SubagentDriver` enforce admission. Calling
-`SubAgent::invoke_in_parent` / `invoke_hosted_in_parent` (or `SubAgentSession`)
+**Bypass.** Admission is enforced through `SubagentDriver`.
 directly bypasses it; a host exposing those paths must reserve itself.
 
 Every limit defaults to `None` (unlimited), so nothing changes until a host opts
-in with `SubAgentTool::with_spawn_admission` /
+in with `DriverSubAgentTool::with_spawn_admission` /
 `SubagentDriver::with_spawn_admission`. Recommended guard-rail starting point:
 `max_children_per_parent: Some(5)` (OpenClaw's default) and a
 `max_total_per_root` of a few dozen.
@@ -218,18 +214,18 @@ watching across a pause and skips a child whose ledger shows a cancellation.
 ## Policy, result and role (D5/D6/D9)
 
 One `SubAgentPolicy { timeout, retry, budget, retry_after_tool_calls }` governs
-every path (it is defined in `tinyagents-graph` and re-exported here, because
-orchestration depends on graph).
+every path (it is defined in orchestration and temporarily re-exported by
+`tinyagents-graph` for the deprecated graph subagent node).
 
 - **Timeout.** `SubagentDriver` runs the executor under its own child token; on
   elapse the child is cancelled (the caller's token is not) and the outcome is
-  `Incomplete(kind: Timeout)`. `SubAgentTool` cancels the job token and marks
+  `Incomplete(kind: Timeout)`. `DriverSubAgentTool` cancels the job token and marks
   the job `Incomplete` (`incomplete_kind: "timeout"`). A timeout is never retried.
 - **Retry.** Only a failure the `RetryPolicy` deems retryable, and never after
   the attempt ran tools unless `retry_after_tool_calls`. The driver retries
   `SubagentError::Transient { tools_ran, .. }` (adapters classify; anything else
   is never retried) and needs `PreparedSubagent::retry_context`, a factory for a
-  fresh run context per attempt; without it one attempt runs. `SubAgentTool`
+  fresh run context per attempt; without it one attempt runs. `DriverSubAgentTool`
   pre-mints one child per attempt and watches `ToolStarted` events to learn
   whether tools ran. A host-visible side effect of retry: the job's recorded
   `subagent_run_id` is the first attempt's.
@@ -263,45 +259,25 @@ orchestration depends on graph).
   `restrict_tools` drops `subagent_jobs`, `subagent_message` and the host's
   `delegation_tools` for a leaf and intersects with `tool_ceiling` so a child
   never widens what it inherited; the driver applies it to
-  `PreparedSubagent::tools`. `SubAgentTool` cannot filter a shared harness, so a
+  `PreparedSubagent::tools`. The host driver cannot filter a shared harness, so a
   leaf tool refuses to spawn when the child harness exposes a delegation tool.
   `subagent_framing(role, depth, task)` is an optional neutral preamble hosts
   may prepend; nothing applies it by default.
 
 **Retry notes.** Subagent retry compounds with the harness's per-call model
 retry (each attempt may retry model calls first), so keep one of the two low.
-`SubAgentTool` attempts after the first get run ids `{first}-a{n}` (no extra
+Driver attempts after the first get run ids `{first}-a{n}` (no extra
 child ordinals are consumed, so sibling ids do not depend on retry) and the job's
 `subagent_run_id` follows the attempt that is running. The retry predicate
 (`RetryPolicy::retry_on`) sees the real error on the tool path; the driver only
 has the `Transient` message, so it sees a synthetic tool error. Usage of a failed
 or timed-out attempt is not reported (an error carries no run).
 
-## Agent steps: one engine for teams, workflows and the driver (D11)
+## Graph compatibility
 
-`run_agent_step(&AgentStepConfig, AgentStepIdentity, CancellationToken, work)`
-adapts an opaque host worker (a team member closure, a workflow child
-executor) to the driver's planner / executor / in-memory persistence seams and
-runs it on a real `SubagentDriver`. `teams::run_member_graph_with` and
-`WorkflowEngine::with_step_config` call it, so those steps honour `SpawnPolicy`
-admission (scope = team id / workflow run id, target = member / agent id),
-`SubAgentPolicy::timeout` and `ResultPolicy` and the typed
-`SubagentOutcomeKind`. Retry (`StepWorkError::Transient`), token budget (`StepSuccess::usage`) and
-`SubagentRole` are supported by `run_agent_step` itself, but the team and
-workflow adapters have no source for them (their workers report no transient
-failures or usage and expose no tools), so they only take effect for callers
-that use `run_agent_step` directly.
-
-`AgentStepConfig::default()` is inert (unlimited admission, no timeout, one
-attempt, no trimming), so `run_member_graph` and a `WorkflowEngine` without
-`with_step_config` behave as before. A worker `Err` is returned unchanged as
-`AgentStepError::Worker`.
-
-`tinyagents_graph::SubAgentNode` / `subagent_node` are `#[deprecated]` rather
-than adapters: graph cannot depend on orchestration. Their behaviour is
-unchanged; `SubAgentPolicy` is shared and not deprecated.
-
-`StepContext` hands the worker the role and the model/tool call caps (`max_model_calls`, `max_tool_calls`) to enforce, since the crate cannot count an opaque worker's calls.
+`tinyagents-graph` temporarily re-exports `SubAgentBudget`, `SubAgentPolicy`,
+and `SubAgentOutput` from this crate while its deprecated subagent node is
+removed.
 
 ## Breaking changes
 

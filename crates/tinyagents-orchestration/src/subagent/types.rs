@@ -376,8 +376,8 @@ pub struct PreparedSubagent<C = ()> {
     /// The tool set the child inherited. When set, the driver intersects
     /// [`Self::tools`] with it so a child can never widen what it inherited.
     pub tool_ceiling: Option<ToolSnapshot>,
-    /// Names of the host's own [`SubAgentTool`](super::SubAgentTool)s, which a
-    /// leaf must not keep (the crate cannot know custom tool names).
+    /// Names of the host's own spawn tools, which a leaf must not keep (the
+    /// crate cannot know custom tool names).
     pub delegation_tools: Vec<String>,
     /// Authored capability scope to intersect with the supplied declarations.
     pub tool_scope: Option<tinyagents_definition::ToolScope>,

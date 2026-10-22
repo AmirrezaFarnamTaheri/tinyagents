@@ -287,7 +287,7 @@ artifact_offload,tool_result_artifacts}`. Those are the OpenHuman analogues of D
 | Deep Agents FS tools, backends, sandboxes, permissions | **OpenHuman** (`sandbox/`, `agent/tools`, `tool_policy.rs`) | LangChain also keeps these out of the runtime; only `WorkspaceIsolation` roots stay in TinyAgents. |
 | AGENTS.md memory, SKILL.md skills, harness profiles | **OpenHuman** (`memory/`, `skills/`) | Prompt conventions over a file backend. |
 | Summarization-with-offload thresholds, large-result eviction | Mechanism in runtime (`artifacts/`, `handoff.rs` exist); thresholds/prompts in OpenHuman | Already split this way. |
-| Subagent `task` tool, fork mode | Runtime has `SubAgentTool`/`subagent_node`; prompts and delegation policy in OpenHuman | Already split. |
+| Subagent `task` tool, fork mode | TinyAgents has async `DriverSubAgentTool` and graph `subagent_node`; prompts and delegation policy stay in OpenHuman | Already split. |
 | Double texting, cron, thread TTL, background runs | Runtime has `run_queue`, `DetachedTaskRegistry`, store TTL; scheduler/cron and UI in OpenHuman (`cron/`) | LangGraph puts these in the paid server. |
 | Rubric grader, LLM tool emulator | OpenHuman / test tooling | |
 

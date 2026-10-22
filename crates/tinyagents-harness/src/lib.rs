@@ -13,7 +13,8 @@
 //! # Cargo features
 //!
 //! - `sqlite` — retained as a no-op for compatibility; durable stores are the `Driver*` types over `tinystoragedrivers`.
-//! - `multimodal` — image/audio/binary content resolution ([`multimodal`]),
+//! - `multimodal` — image/audio/binary content resolution (see the `multimodal`
+//!   module when the feature is enabled),
 //!   pulling in `reqwest` and `flate2`.
 //! - `claude-code` — the Claude Code CLI and Claude Agent SDK provider
 //!   adapters under [`providers`].

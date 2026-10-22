@@ -45,6 +45,10 @@ impl ChatModel<()> for CloseCorrectionModel {
 
 struct Planner;
 
+struct RecordingRequestPlanner {
+    requests: Arc<std::sync::Mutex<Vec<(SubagentTaskKey, String)>>>,
+}
+
 struct ReplacingPlanner;
 
 struct ReplacingRetryPlanner;
@@ -150,6 +154,43 @@ impl SubagentPlanner<(), ()> for Planner {
             ToolSnapshot::new(vec![]).unwrap(),
             parts.run_context,
         ))
+    }
+}
+
+#[async_trait]
+impl SubagentPlanner<(), ()> for RecordingRequestPlanner {
+    async fn prepare(
+        &self,
+        request: SubagentRequest<(), ()>,
+    ) -> std::result::Result<PreparedSubagent<()>, SubagentError> {
+        let parts = request.into_parts();
+        self.requests
+            .lock()
+            .unwrap()
+            .push((parts.task_key.clone(), parts.input.clone()));
+        Ok(PreparedSubagent::new(
+            parts.task_key.task_id,
+            "worker",
+            vec![Message::user(parts.input)],
+            ToolSnapshot::new(vec![]).unwrap(),
+            parts.run_context,
+        ))
+    }
+}
+
+struct TimeoutPlanner;
+
+#[async_trait]
+impl SubagentPlanner<(), ()> for TimeoutPlanner {
+    async fn prepare(
+        &self,
+        request: SubagentRequest<(), ()>,
+    ) -> Result<PreparedSubagent<()>, SubagentError> {
+        Planner.prepare(request).await.map(|prepared| {
+            prepared.with_policy(
+                SubAgentPolicy::default().with_timeout(std::time::Duration::from_millis(10)),
+            )
+        })
     }
 }
 
@@ -701,7 +742,7 @@ async fn bounded_await_observes_terminal_state_after_deadline_before_same_future
     let task_key = SubagentTaskKey::from_context(&parent, "bounded-await-race", None);
     let request_key = task_key.clone();
     let tool = DriverSubAgentTool::new(
-        "spawn_async_subagent",
+        "spawn_subagent",
         "Run the worker in the background.",
         driver,
         move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
@@ -723,14 +764,14 @@ async fn bounded_await_observes_terminal_state_after_deadline_before_same_future
     .with_parameters(json!({
         "type":"object",
         "required":["agent_id","prompt"],
-        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
+        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"}}
     }))
     .with_job_registry(jobs.clone());
     let spawned = ToolDispatch::<(), ()>::execute(
         &tool,
         &(),
         CallId::new("spawn-bounded-await-race"),
-        json!({"agent_id":"worker","prompt":"finish at the deadline","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"finish at the deadline"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1077,8 +1118,72 @@ impl SubagentPersistence for TerminalReplayPersistence {
     }
 }
 
+#[tokio::test(start_paused = true)]
+async fn detached_driver_timeout_is_recorded_as_incomplete_job_status() {
+    let jobs = SubAgentJobRegistry::new();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let driver = Arc::new(
+        SubagentDriver::new(SubagentCapabilities {
+            planner: Some(Arc::new(TimeoutPlanner)),
+            executor: Some(Arc::new(BlockingExecutor {
+                started: started.clone(),
+                release,
+                calls,
+            })),
+            persistence: Some(Arc::new(Persistence)),
+        })
+        .unwrap(),
+    );
+    let tool = DriverSubAgentTool::new(
+        "spawn_subagent",
+        "worker description",
+        driver,
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("timeout-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "timeout-task",
+                (),
+                args["prompt"].as_str().unwrap_or_default(),
+                None,
+            )
+        },
+        |_| None,
+    )
+    .with_job_registry(jobs.clone());
+    let parent = RunContext::new(RunConfig::new("timeout-parent"), ());
+    let spawned = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("timeout-spawn"),
+        json!({"prompt":"work"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let value: Value = serde_json::from_str(&spawned.output()).unwrap();
+    started.notified().await;
+    tokio::time::advance(std::time::Duration::from_millis(11)).await;
+    let job = jobs
+        .wait_owned(
+            value["task_id"].as_str().unwrap(),
+            parent.instance_id().to_string(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(job.status, SubAgentJobStatus::Incomplete);
+    assert_eq!(job.incomplete_kind, Some(IncompleteKind::Timeout));
+}
+
 #[tokio::test]
-async fn background_request_without_delivery_target_runs_inline() {
+async fn background_request_without_delivery_target_spawns_and_can_be_waited_separately() {
+    let jobs = SubAgentJobRegistry::new();
     let tool = DriverSubAgentTool::new(
         "worker",
         "worker description",
@@ -1097,14 +1202,15 @@ async fn background_request_without_delivery_target_runs_inline() {
             )
         },
         |_request| None,
-    );
+    )
+    .with_job_registry(jobs.clone());
     let parent = RunContext::new(RunConfig::new("parent"), ());
 
     let result = ToolDispatch::<(), ()>::execute(
         &tool,
         &(),
         CallId::new("call-1"),
-        json!({"input":"do work", "mode":"background"}),
+        json!({"input":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1113,8 +1219,16 @@ async fn background_request_without_delivery_target_runs_inline() {
 
     assert!(!result.is_error);
     let value: Value = serde_json::from_str(&result.output()).unwrap();
-    assert_eq!(value["status"], "completed");
-    assert_eq!(value["output"], "driver result");
+    assert_eq!(value["status"], "running");
+    let job = jobs
+        .wait_owned(
+            value["task_id"].as_str().unwrap(),
+            &parent.instance_id().to_string(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(job.status, SubAgentJobStatus::Completed);
+    assert_eq!(job.output.as_deref(), Some("driver result"));
 }
 
 #[tokio::test]
@@ -1144,7 +1258,7 @@ async fn background_request_with_delivery_target_returns_task_reference() {
         &tool,
         &(),
         CallId::new("call-2"),
-        json!({"input":"do work", "mode":"background"}),
+        json!({"input":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1155,7 +1269,6 @@ async fn background_request_with_delivery_target_returns_task_reference() {
     let value: Value = serde_json::from_str(&result.output()).unwrap();
     assert_eq!(value["status"], "running");
     assert_eq!(value["delivery_target"], "parent-thread");
-    assert_eq!(value["task_id"], "worker-task");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1203,7 +1316,7 @@ async fn awaited_background_completion_commits_before_jobs_become_terminal() {
         &tool,
         &(),
         CallId::new("call-await-completion"),
-        json!({"input":"do work", "mode":"background"}),
+        json!({"input":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1285,7 +1398,7 @@ async fn awaited_completion_repairs_replayed_terminal_before_jobs_become_termina
         &tool,
         &(),
         CallId::new("call-replayed-completion"),
-        json!({"input":"do work", "mode":"background"}),
+        json!({"input":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1324,7 +1437,7 @@ fn driver_subagent_tool_preserves_host_name_description_and_schema() {
     let schema = json!({
         "type":"object",
         "required":["agent_id","prompt"],
-        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
+        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"}}
     });
     let tool = DriverSubAgentTool::new(
         "delegate_to",
@@ -1358,10 +1471,21 @@ fn driver_subagent_tool_preserves_host_name_description_and_schema() {
 #[tokio::test]
 async fn driver_subagent_tool_routes_execution_through_the_driver() {
     let jobs = SubAgentJobRegistry::new();
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let driver = Arc::new(
+        SubagentDriver::new(SubagentCapabilities {
+            planner: Some(Arc::new(RecordingRequestPlanner {
+                requests: requests.clone(),
+            })),
+            executor: Some(Arc::new(Executor)),
+            persistence: Some(Arc::new(Persistence)),
+        })
+        .unwrap(),
+    );
     let tool = DriverSubAgentTool::new(
         "subagent",
         "worker description",
-        driver(),
+        driver,
         |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("worker-child"), ())
@@ -1383,16 +1507,36 @@ async fn driver_subagent_tool_routes_execution_through_the_driver() {
         &tool,
         &(),
         CallId::new("driver-route"),
-        json!({"input":"do work", "mode":"inline"}),
+        json!({"input":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
     .await
     .unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(&result.output()).unwrap()["output"],
-        "driver result"
-    );
+    assert!(!result.is_error);
+    let response: Value = serde_json::from_str(&result.output()).unwrap();
+    assert_eq!(response["status"], "running");
+    let task_id = response["task_id"].as_str().expect("spawned job id");
+    assert!(!task_id.is_empty());
+    assert!(response.get("output").is_none());
+
+    let job = jobs
+        .wait_owned(task_id, parent.instance_id().to_string())
+        .await
+        .unwrap();
+    assert_eq!(job.status, SubAgentJobStatus::Completed);
+    assert_eq!(job.agent, "subagent");
+    assert_eq!(job.output.as_deref(), Some("driver result"));
+
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let (request_key, request_input) = &requests[0];
+        assert_eq!(request_key.task_id, "driver-task");
+        assert_eq!(request_key.parent_run_id, parent.run_id().as_str());
+        assert_eq!(request_input, "do work");
+    }
+
     let settled = jobs
         .settle_root_run_descendants(
             parent.run_id(),
@@ -1589,7 +1733,7 @@ async fn driver_subagent_tool_routes_detached_completion_to_host_callback() {
         &tool,
         &(),
         CallId::new("driver-background"),
-        json!({"input":"do work", "mode":"background"}),
+        json!({"input":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1656,10 +1800,10 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     let schema = json!({
         "type":"object",
         "required":["agent_id","prompt"],
-        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
+        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"}}
     });
     let tool = DriverSubAgentTool::new(
-        "spawn_async_subagent",
+        "spawn_subagent",
         "Run the allowed worker in the background.",
         driver,
         |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
@@ -1700,7 +1844,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         &tool,
         &(),
         CallId::new("spawn"),
-        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1714,7 +1858,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         &tool,
         &(),
         CallId::new("spawn-again"),
-        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -1852,7 +1996,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         &tool,
         &(),
         CallId::new("spawn-foreign"),
-        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"do work"}),
         tinytools::ToolCallOptions::default(),
         &foreign,
     )
@@ -1980,7 +2124,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         &tool,
         &(),
         CallId::new("spawn-terminal-replay"),
-        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2025,7 +2169,7 @@ async fn jobs_tool_treats_a_null_action_as_query() {
         &tool,
         &(),
         CallId::new("spawn-null-action"),
-        json!({"input":"work", "mode":"background"}),
+        json!({"input":"work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2079,7 +2223,7 @@ async fn oversized_message_request_ids_are_rejected_by_the_moved_shell() {
         &tool,
         &(),
         CallId::new("spawn-oversized-request"),
-        json!({"input":"work", "mode":"background"}),
+        json!({"input":"work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2171,7 +2315,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
         "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"continue":{"type":"boolean"}}
     });
     let tool = DriverSubAgentTool::new(
-        "spawn_async_subagent",
+        "spawn_subagent",
         "worker description",
         driver,
         move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
@@ -2200,7 +2344,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
             .with_target("worker");
             Ok(request)
         },
-        |_| Some("parent-thread".into()),
+        |_| None,
     )
     .with_parameters(schema)
     .with_job_registry(jobs.clone())
@@ -2210,7 +2354,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
         &tool,
         &(),
         CallId::new("spawn-pausing-child"),
-        json!({"agent_id":"worker","prompt":"wait","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"wait"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2267,7 +2411,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
         &tool,
         &(),
         CallId::new("continue-child"),
-        json!({"agent_id":"worker","prompt":"answer","continue":true,"mode":"background"}),
+        json!({"agent_id":"worker","prompt":"answer","continue":true}),
         tinytools::ToolCallOptions::default(),
         &next_turn,
     )
@@ -2309,7 +2453,11 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
     let key = SubagentTaskKey::from_context(&parent, "cancel-task", None);
     let request_key = key.clone();
     let owner_scope: Arc<dyn Fn(u64) -> String + Send + Sync> = Arc::new(|_| "parent-a".into());
-    let tool = DriverSubAgentTool::new("spawn_async_subagent", "worker description", driver, move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+    let tool = DriverSubAgentTool::new(
+        "spawn_subagent",
+        "worker description",
+        driver,
+        move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("child-run"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
@@ -2322,16 +2470,21 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
                 None,
             )
             .map(|request| request.with_target("worker"))
-        }, |_| Some("thread-a".into())).with_parameters(json!({
+        },
+        |_| Some("thread-a".into()),
+    )
+    .with_parameters(json!({
         "type":"object",
         "required":["agent_id","prompt"],
-        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
-    })).with_job_registry(jobs.clone()).with_owner_scope(owner_scope);
+        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"}}
+    }))
+    .with_job_registry(jobs.clone())
+    .with_owner_scope(owner_scope);
     let spawned = ToolDispatch::<(), ()>::execute(
         &tool,
         &(),
         CallId::new("spawn-cancellable"),
-        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        json!({"agent_id":"worker","prompt":"do work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2413,7 +2566,7 @@ async fn parent_cancellation_cascades_to_running_driver_jobs() {
         &tool,
         &(),
         CallId::new("spawn-parent-cancel"),
-        json!({"input":"work", "mode":"background"}),
+        json!({"input":"work"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2476,7 +2629,7 @@ async fn cancelling_one_driver_job_leaves_its_sibling_running() {
             &tool,
             &(),
             CallId::new(call_id),
-            json!({"task_id":task_id,"input":"work","mode":"background"}),
+            json!({"task_id":task_id,"input":"work"}),
             tinytools::ToolCallOptions::default(),
             &parent,
         )
@@ -2564,7 +2717,7 @@ fn inline_blocking_alias(
 }
 
 #[tokio::test(start_paused = true)]
-async fn concurrent_inline_driver_alias_coalesces_and_awaits_shared_result() {
+async fn concurrent_async_driver_aliases_coalesce_without_waiting_for_completion() {
     let jobs = SubAgentJobRegistry::new();
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Semaphore::new(0));
@@ -2584,34 +2737,29 @@ async fn concurrent_inline_driver_alias_coalesces_and_awaits_shared_result() {
             &parent,
         )
     };
-    let mut leader = Box::pin(dispatch("inline-leader"));
-    tokio::select! {
-        biased;
-        result = &mut leader => panic!("leader completed before being released: {result:?}"),
-        _ = started.notified() => {},
-    }
-    let mut follower = Box::pin(dispatch("inline-follower"));
-    tokio::select! {
-        biased;
-        result = &mut follower => panic!("coalesced inline call returned before the shared result: {result:?}"),
-        _ = tokio::task::yield_now() => {},
-    }
+    let leader = dispatch("async-leader").await.unwrap();
+    let leader_value: Value = serde_json::from_str(&leader.output()).unwrap();
+    assert_eq!(leader_value["status"], "running");
+    started.notified().await;
+    let follower = dispatch("async-follower").await.unwrap();
+    let follower_value: Value = serde_json::from_str(&follower.output()).unwrap();
+    assert_eq!(follower_value["status"], "running");
+    assert_eq!(follower_value["task_id"], leader_value["task_id"]);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     release.add_permits(1);
-    let leader = leader.await.unwrap();
-    let follower = follower.await.unwrap();
-    for result in [leader, follower] {
-        assert!(!result.is_error);
-        assert_eq!(
-            serde_json::from_str::<Value>(&result.output()).unwrap()["status"],
-            "completed"
-        );
-    }
+    let settled = jobs
+        .wait_owned(
+            leader_value["task_id"].as_str().unwrap(),
+            &parent.instance_id().to_string(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.status, SubAgentJobStatus::Completed);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
-async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_completion() {
+async fn immediate_async_replay_returns_job_snapshot_and_emits_one_completion() {
     let jobs = SubAgentJobRegistry::new();
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Semaphore::new(0));
@@ -2624,7 +2772,7 @@ async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_compl
         "required":["prompt"],
         "properties":{"prompt":{"type":"string"}}
     });
-    let make_tool = |background: bool| {
+    let make_tool = || {
         let request = |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("mixed-child"), ())
@@ -2639,16 +2787,8 @@ async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_compl
             )
             .map(|request| request.with_target("worker"))
         };
-        let name = if background {
-            "spawn_async_subagent"
-        } else {
-            "spawn_subagent"
-        };
-        let delivery = if background {
-            Some("parent-thread".to_owned())
-        } else {
-            None
-        };
+        let name = "spawn_subagent";
+        let delivery = Some("parent-thread".to_owned());
         let tool = DriverSubAgentTool::new(
             name,
             "worker description",
@@ -2658,27 +2798,22 @@ async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_compl
         )
         .with_parameters(schema.clone())
         .with_job_registry(jobs.clone());
-        if background {
-            let completions = completions.clone();
-            let completion_notified = completion_notified.clone();
-            tool.with_completion_handler(move |_, result| {
-                assert!(result.is_ok());
-                completions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                completion_notified.notify_one();
-            })
-        } else {
-            tool
-        }
+        let completions = completions.clone();
+        let completion_notified = completion_notified.clone();
+        tool.with_completion_handler(move |_, result| {
+            assert!(result.is_ok());
+            completions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            completion_notified.notify_one();
+        })
     };
-    let background = make_tool(true);
-    let inline = make_tool(false);
+    let tool = make_tool();
     let parent = RunContext::new(RunConfig::new("mixed-parent"), ());
 
     let spawned = ToolDispatch::<(), ()>::execute(
-        &background,
+        &tool,
         &(),
         CallId::new("background-first"),
-        json!({"prompt":"same request","mode":"background"}),
+        json!({"prompt":"same request"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2689,28 +2824,22 @@ async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_compl
         .unwrap()
         .to_owned();
 
-    let inline_result = ToolDispatch::<(), ()>::execute(
-        &inline,
+    started.notified().await;
+    let replay = ToolDispatch::<(), ()>::execute(
+        &tool,
         &(),
-        CallId::new("inline-immediately-after-background"),
-        json!({"prompt":"same request","mode":"inline"}),
+        CallId::new("async-replay"),
+        json!({"prompt":"same request"}),
         tinytools::ToolCallOptions::default(),
         &parent,
-    );
-    tokio::pin!(inline_result);
-    tokio::select! {
-        biased;
-        result = &mut inline_result => panic!("inline alias returned before background winner finished: {result:?}"),
-        _ = started.notified() => {},
-    }
+    )
+    .await
+    .unwrap();
+    let replay_value: Value = serde_json::from_str(&replay.output()).unwrap();
+    assert_eq!(replay_value["status"], "running");
+    assert_eq!(replay_value["task_id"], task_id);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     release.add_permits(1);
-    let inline_result = inline_result.await.unwrap();
-    assert!(!inline_result.is_error);
-    assert_eq!(
-        serde_json::from_str::<Value>(&inline_result.output()).unwrap()["status"],
-        "completed"
-    );
     completion_notified.notified().await;
     assert_eq!(completions.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(
@@ -2720,7 +2849,7 @@ async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_compl
 }
 
 #[tokio::test(start_paused = true)]
-async fn dropping_inline_driver_alias_marks_its_registered_job_cancelled() {
+async fn dropping_caller_does_not_cancel_async_job_but_owner_can_cancel_it() {
     let jobs = SubAgentJobRegistry::new();
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Semaphore::new(0));
@@ -2730,30 +2859,27 @@ async fn dropping_inline_driver_alias_marks_its_registered_job_cancelled() {
         blocking_driver(started.clone(), release, calls),
     );
     let parent = RunContext::new(RunConfig::new("drop-parent"), ());
-    let mut execution = Box::pin(ToolDispatch::<(), ()>::execute(
+    let result = ToolDispatch::<(), ()>::execute(
         &tool,
         &(),
-        CallId::new("drop-inline"),
-        json!({"prompt":"inline"}),
+        CallId::new("spawn-before-caller-drop"),
+        json!({"prompt":"async"}),
         tinytools::ToolCallOptions::default(),
         &parent,
-    ));
-    tokio::select! {
-        biased;
-        result = &mut execution => panic!("child completed before drop: {result:?}"),
-        _ = started.notified() => {},
-    }
-    drop(execution);
+    )
+    .await
+    .unwrap();
+    let value: Value = serde_json::from_str(&result.output()).unwrap();
+    started.notified().await;
+    let job_id = value["task_id"].as_str().unwrap();
+    assert_eq!(jobs.get(job_id).unwrap().status, SubAgentJobStatus::Running);
+    jobs.cancel_owned(job_id, parent.instance_id().to_string())
+        .unwrap();
     let job = jobs
-        .list()
-        .into_iter()
-        .next()
-        .expect("registered job remains visible");
+        .wait_owned(job_id, parent.instance_id().to_string())
+        .await
+        .unwrap();
     assert_eq!(job.status, SubAgentJobStatus::Cancelled);
-    assert_eq!(
-        jobs.get(job.id.as_str()).unwrap().status,
-        SubAgentJobStatus::Cancelled
-    );
 }
 
 #[tokio::test]
@@ -2768,7 +2894,7 @@ async fn panicking_background_driver_alias_settles_and_replays_as_tool_error() {
         .unwrap(),
     );
     let tool = DriverSubAgentTool::new(
-        "spawn_async_subagent",
+        "spawn_subagent",
         "worker description",
         driver,
         |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
@@ -2798,7 +2924,7 @@ async fn panicking_background_driver_alias_settles_and_replays_as_tool_error() {
         &tool,
         &(),
         CallId::new("panic-spawn"),
-        json!({"prompt":"panic","mode":"background"}),
+        json!({"prompt":"panic"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )
@@ -2835,7 +2961,7 @@ async fn panicking_background_driver_alias_settles_and_replays_as_tool_error() {
         &tool,
         &(),
         CallId::new("panic-replay"),
-        json!({"prompt":"panic","mode":"background"}),
+        json!({"prompt":"panic"}),
         tinytools::ToolCallOptions::default(),
         &parent,
     )

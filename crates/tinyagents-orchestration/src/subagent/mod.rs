@@ -1,13 +1,13 @@
 //! Host-neutral subagent invocation and lifecycle orchestration.
 //!
-//! [`SubAgent`], [`SubAgentTool`], and [`SubAgentSession`] compose harness
-//! agents as direct child runs. The `Subagent*` lifecycle traits and driver
-//! separately coordinate resume loading, preparation, execution, and one
-//! mutually exclusive persistence action. Hosts still resolve policy, agent
-//! definitions, prompts, tool allowlists, and persistence implementations.
+//! The `Subagent*` lifecycle traits and driver coordinate async child work:
+//! resume loading, preparation, execution, and one mutually exclusive
+//! persistence action. Hosts still resolve policy, agent definitions,
+//! prompts, tool allowlists, and persistence implementations.
 //!
-//! Dependency direction remains `orchestration -> {harness, runtime}`. Lower
-//! TinyAgents layers must not depend on this module.
+//! Dependency direction remains `orchestration -> {harness, session, tasks}`.
+//! Graph compatibility code may depend on this crate, while orchestration does
+//! not depend on graph.
 
 mod admission;
 mod awaiting_user;
@@ -26,7 +26,6 @@ mod policy;
 mod result_policy;
 mod role;
 mod sessions;
-mod step;
 mod summarization;
 mod turn_storage;
 mod types;
@@ -58,33 +57,25 @@ pub use driver::{SubagentCapabilities, SubagentDriver, SubagentInFlight};
 pub use executor::SubagentExecutor;
 pub use file_persistence::FileSubagentPersistence;
 pub use invocation::{
-    ChildDataPolicy, DELEGATION_EXECUTE_PROMPT, DELEGATION_MODE_FIELD, DELEGATION_PLAN_PROMPT,
-    DELEGATION_REVIEW_PROMPT, DelegationEnvelope, DelegationRequest, DelegationTool,
-    DriverJobRegistration, InlineJobGuard, MultiTargetDelegationTool, ParentJobScope,
-    ReviewApprovalPolicy, RootRunDescendantLease, SUBAGENT_MODE_FIELD, SubAgent, SubAgentJob,
-    SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus, SubAgentMode,
-    SubAgentSession, SubAgentTool, parse_approval, review_stage_output,
+    DriverJobRegistration, JobSettleGuard, ParentJobScope, RootRunDescendantLease, SubAgentJob,
+    SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus,
 };
 pub use persistence::SubagentPersistence;
 pub use planner::SubagentPlanner;
-pub use policy::{SubAgentBudget, SubAgentPolicy};
+pub use policy::{SubAgentBudget, SubAgentOutput, SubAgentPolicy};
 pub use result_policy::{
     AppliedResult, ArtifactStore, ResultOverflow, ResultPolicy, frame_unexecuted_outcome,
     is_safe_task_id, is_unexecuted_tool_call_stub, truncate_head_tail,
 };
 pub use role::{
-    FLEET_TOOLS, FleetToolSet, SUBAGENT_JOBS_TOOL, SUBAGENT_MESSAGE_TOOL, SubagentRole,
-    is_delegation_tool, restrict_tools, restrict_tools_with_scope, subagent_framing,
+    SUBAGENT_JOBS_TOOL, SUBAGENT_MESSAGE_TOOL, SubagentRole, is_delegation_tool, restrict_tools,
+    restrict_tools_with_scope, subagent_framing,
 };
 pub use sessions::{
     DriverSubagentSessionStore, DurableSubagentSession, DurableSubagentSessionSummary,
     DurableSubagentStatus, ReuseDecision, ScopedSubagentSessionStore, SubagentSessionSelector,
     SubagentSessionStore, SubagentSessionUpsert, find_reusable_session, normalize_task_key,
     reuse_decision, task_title_from_prompt,
-};
-pub use step::{
-    AgentStepConfig, AgentStepError, AgentStepIdentity, AgentStepResult, StepContext, StepSuccess,
-    StepWorkError, run_agent_step,
 };
 pub use summarization::{CapSummary, CapSummaryModel, summarize_at_cap};
 pub use turn_storage::FencedSessionBackend;

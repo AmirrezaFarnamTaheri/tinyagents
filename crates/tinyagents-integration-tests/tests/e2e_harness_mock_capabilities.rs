@@ -14,9 +14,6 @@ use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::middleware::{LoggingMiddleware, MicrocompactMiddleware, Middleware};
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::{FakeTool, ScriptedModel};
-use tinyagents_orchestration::subagent::{
-    ChildDataPolicy, SubAgent, SubAgentSession, SubAgentTool,
-};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
 use tinyinference_llm::model::{ModelRequest, ModelResponse};
 use tinyinference_llm::tool::ToolCall;
@@ -209,104 +206,42 @@ async fn tool_loop_compacts_old_results_and_runs_all_lifecycle_hooks() {
     assert_eq!(counts.on_error, 0);
 }
 
+/// This deterministic matrix exercises both the no-tool and regular-tool paths.
 #[tokio::test]
-async fn subagent_session_keeps_context_across_multiple_turns() {
-    let child_model = Arc::new(ScriptedModel::replies(vec![
-        "first answer",
-        "second answer",
-    ]));
-    let mut child_harness: AgentHarness<()> = AgentHarness::new();
-    child_harness.with_model_resolver(Arc::new(
-        tinyagents_harness::host::FixedModelResolver::named("child", child_model.clone()),
-    ));
-    let child = Arc::new(SubAgent::new(
-        "researcher",
-        "researches",
-        Arc::new(child_harness),
-    ));
-
-    let mut session = SubAgentSession::new(child);
-    session
-        .send(&(), (), vec![Message::user("first question")])
-        .await
-        .expect("first child turn");
-    let second = session
-        .send(&(), (), vec![Message::user("follow up")])
-        .await
-        .expect("reused child turn");
-
-    assert_eq!(session.turns(), 2);
-    assert_eq!(second.text(), Some("second answer".to_string()));
-    let second_request = &child_model.requests()[1];
-    let texts: Vec<String> = second_request.messages.iter().map(Message::text).collect();
-    assert!(texts.contains(&"first question".to_string()));
-    assert!(texts.contains(&"first answer".to_string()));
-    assert!(texts.contains(&"follow up".to_string()));
-}
-
-/// This is intentionally deterministic rather than random: every combination
-/// is reproducible, prints its flags on failure, and still exercises the same
-/// branching surface a seed-based fuzz test would explore.
-#[tokio::test]
-async fn mock_fuzz_matrix_composes_regular_and_subagent_tools() {
+async fn mock_matrix_composes_regular_tools() {
     for use_lookup in [false, true] {
-        for use_subagent in [false, true] {
-            let label = format!("lookup={use_lookup}, subagent={use_subagent}");
-            let mut harness: AgentHarness<()> = AgentHarness::new();
-            let mut calls = Vec::new();
-            if use_lookup {
-                harness.register_tool(Arc::new(FakeTool::returning("lookup", "lookup result")));
-                calls.push(ToolCall::new("lookup-call", "lookup", json!({"q": "x"})));
-            }
-            if use_subagent {
-                let mut child_harness: AgentHarness<()> = AgentHarness::new();
-                child_harness.with_model_resolver(Arc::new(
-                    tinyagents_harness::host::FixedModelResolver::named(
-                        "child",
-                        Arc::new(ScriptedModel::replies(vec!["child result"])),
-                    ),
-                ));
-                let child = Arc::new(SubAgent::new(
-                    "delegate",
-                    "delegates",
-                    Arc::new(child_harness),
-                ));
-                harness.register_tool_dispatch(Arc::new(SubAgentTool::new(
-                    child,
-                    ChildDataPolicy::new(|state: &()| *state),
-                )));
-                calls.push(ToolCall::new(
-                    "child-call",
-                    "delegate",
-                    json!({"input": "work"}),
-                ));
-            }
-            let responses = if calls.is_empty() {
-                vec![text_turn("final")]
-            } else {
-                vec![tool_turn(calls), text_turn("final")]
-            };
-            harness
-                .with_model_resolver(Arc::new(
-                    tinyagents_harness::host::FixedModelResolver::named(
-                        "parent",
-                        Arc::new(ScriptedModel::new(responses)),
-                    ),
-                ))
-                .with_policy(RunPolicy::default());
-
-            let run = harness
-                .invoke_default(&(), vec![Message::user(format!("run {label}"))])
-                .await
-                .unwrap_or_else(|error| panic!("scenario {label} failed: {error:?}"));
-            let expected_tools = usize::from(use_lookup) + usize::from(use_subagent);
-            assert_eq!(run.tool_calls, expected_tools, "scenario {label}");
-            assert_eq!(
-                run.model_calls,
-                if expected_tools == 0 { 1 } else { 2 },
-                "scenario {label}"
-            );
-            assert_eq!(run.text(), Some("final".to_string()), "scenario {label}");
+        let label = format!("lookup={use_lookup}");
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        let mut calls = Vec::new();
+        if use_lookup {
+            harness.register_tool(Arc::new(FakeTool::returning("lookup", "lookup result")));
+            calls.push(ToolCall::new("lookup-call", "lookup", json!({"q": "x"})));
         }
+        let responses = if calls.is_empty() {
+            vec![text_turn("final")]
+        } else {
+            vec![tool_turn(calls), text_turn("final")]
+        };
+        harness
+            .with_model_resolver(Arc::new(
+                tinyagents_harness::host::FixedModelResolver::named(
+                    "parent",
+                    Arc::new(ScriptedModel::new(responses)),
+                ),
+            ))
+            .with_policy(RunPolicy::default());
+
+        let run = harness
+            .invoke_default(&(), vec![Message::user(format!("run {label}"))])
+            .await
+            .unwrap_or_else(|error| panic!("scenario {label} failed: {error:?}"));
+        let expected_tools = usize::from(use_lookup);
+        assert_eq!(run.tool_calls, expected_tools, "scenario {label}");
+        assert_eq!(
+            run.model_calls,
+            if expected_tools == 0 { 1 } else { 2 },
+            "scenario {label}"
+        );
+        assert_eq!(run.text(), Some("final".to_string()), "scenario {label}");
     }
 }

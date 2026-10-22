@@ -176,14 +176,12 @@ run with `AgentMiddleware`.
 `tinyagents-orchestration` owns child-agent composition and the shared
 `SubAgentJobRegistry`. The `subagents` feature in `tinyagents-harness-tools`
 exposes `tinyagents_harness_tools::subagents`, which provides
-`DriverSubAgentTool`, the host-planned typed dispatcher: its `background` mode
-starts a child and returns a stable job id, while `inline` mode waits for the
-final result. That module also provides the `SubAgentJobsTool` and
-`SubAgentMessageTool` declarations over the shared registry. `SubAgentSession`
-covers retained post-completion
-conversations, while `SubagentDriver` coordinates durable lifecycle
-preparation, execution, pause, resume, and persistence. Teams and workflow DAGs
-are intentionally outside this focused crate.
+`DriverSubAgentTool`, the host-planned typed dispatcher. Every call starts an
+asynchronous job and returns its stable job id; `SubAgentJobsTool` provides
+status, wait, cancellation, and steering over the shared registry, while
+`SubAgentMessageTool` delivers messages. `SubagentDriver` coordinates durable
+lifecycle preparation, execution, pause, resume, and persistence. Teams and
+workflow DAGs are intentionally outside this focused crate.
 
 ## Session runtime
 
