@@ -479,7 +479,7 @@ where
                 parallel: false,
             });
         }
-        for ((scope, thread_id, request_id), _) in self.parallel_active.lock().await.iter() {
+        for (scope, thread_id, request_id) in self.parallel_active.lock().await.keys() {
             live.push(LiveTurn {
                 scope: scope.clone(),
                 thread_id: thread_id.clone(),
