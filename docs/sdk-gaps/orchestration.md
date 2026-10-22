@@ -98,7 +98,7 @@ Acceptance criteria:
 
 ### 13. Middleware Control Outcomes
 
-Status: shipped (harness loop control), partial (graph/sub-agent defer).
+Status: shipped (harness loop control), partial (sub-agent defer); graph control was descoped in TinyAgents #61.
 
 Landed as part of `docs/runtime-comparison/plan.md` Phase 2 item A1. Every
 lifecycle `Middleware` hook has a `_control`-suffixed counterpart
