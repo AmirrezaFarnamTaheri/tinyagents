@@ -15,6 +15,7 @@
 //! an error instead of using another backend.
 
 use super::error::LedgerResult as Result;
+use super::import::{AgentFamilyImport, AgentFamilyImportReport, LegacyLedgerImport, LegacyLedgerImportReport};
 use chrono::{DateTime, Utc};
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
@@ -34,6 +35,24 @@ use crate::retention::RetentionReport;
 /// synchronous. Callback parameters are shared safely across awaited operations.
 #[async_trait::async_trait]
 pub trait RunLedgerStore: Send + Sync {
+    /// Imports agent runs, events, and telemetry as one idempotent operation.
+    ///
+    /// The receipt is committed in the same atomic batch as all imported rows.
+    /// Reusing an operation id with the same source fingerprint returns the
+    /// original report; reusing it with a different fingerprint is a conflict.
+    async fn import_agent_family(
+        &self,
+        import: AgentFamilyImport,
+    ) -> Result<AgentFamilyImportReport>;
+
+    /// Imports fully decoded legacy ledger rows, preserving their ids and
+    /// timestamps. Existing rows are left untouched so an interrupted pass can
+    /// be retried safely. Source discovery and decoding remain host concerns.
+    async fn import_legacy_rows(
+        &self,
+        import: LegacyLedgerImport,
+    ) -> Result<LegacyLedgerImportReport>;
+
     /// Inserts a new [`AgentRun`] or merges fields into an existing one with the
     /// same id, returning the row as stored.
     ///

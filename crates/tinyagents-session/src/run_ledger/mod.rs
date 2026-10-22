@@ -13,6 +13,7 @@ pub mod command_center;
 pub mod drivers;
 pub mod error;
 pub mod history;
+pub mod import;
 pub mod port;
 pub mod recovery;
 mod status_map;
@@ -24,6 +25,10 @@ pub use error::{LedgerError, LedgerResult};
 pub use history::{
     MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryStore,
     SessionStart,
+};
+pub use import::{
+    AgentFamilyImport, AgentFamilyImportReport, ImportCounts, LegacyLedgerImport,
+    LegacyLedgerImportReport,
 };
 pub use port::RunLedgerStore;
 
