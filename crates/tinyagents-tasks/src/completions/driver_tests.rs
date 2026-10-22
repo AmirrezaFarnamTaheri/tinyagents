@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
@@ -33,6 +34,14 @@ fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> 
 fn open_router(storage: &MemoryBackend) -> CompletionRouter {
     let store = DriverCompletionStore::new(docs_of(storage, "local")).unwrap();
     CompletionRouter::new(Arc::new(store))
+}
+
+fn open_sqlite_router(path: &Path) -> CompletionRouter {
+    let scope = Scope::new("local").unwrap();
+    let connection = tinystoragedrivers_connect::sqlite::SqliteConnection::open(path).unwrap();
+    let docs = Arc::new(SqliteDocuments::new(connection, scope))
+        as Arc<dyn tinyagents_storage_kit::DocumentStore>;
+    CompletionRouter::new(Arc::new(DriverCompletionStore::new(docs).unwrap()))
 }
 
 #[tokio::test]
@@ -170,7 +179,7 @@ async fn settled_records_reopen_without_their_result_and_stay_deduped() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("completions.sqlite");
     {
-        let router = open_router(&path).with_max_attempts(1);
+        let router = open_sqlite_router(&path).with_max_attempts(1);
         router.record(record("delivered", "p")).await.unwrap();
         router.record(record("gave-up", "p")).await.unwrap();
         router.record(record("waited", "p")).await.unwrap();
@@ -181,12 +190,8 @@ async fn settled_records_reopen_without_their_result_and_stay_deduped() {
         assert_eq!(gave_up[0].result.text, "result of gave-up");
         router.tombstone("waited").unwrap();
     }
-    let scope = Scope::new("local").unwrap();
-    let connection = tinystoragedrivers_connect::sqlite::SqliteConnection::open(&path).unwrap();
-    let docs = Arc::new(SqliteDocuments::new(connection, scope))
-        as Arc<dyn tinyagents_storage_kit::DocumentStore>;
-    let store = Arc::new(DriverCompletionStore::new(docs).unwrap());
-    let router = CompletionRouter::new(store.clone());
+    let router = open_sqlite_router(&path);
+    let store = router.store.clone();
     let pending = router.pending_for("p");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].task_id, "live");
@@ -215,7 +220,7 @@ async fn settled_records_reopen_without_their_result_and_stay_deduped() {
     assert_eq!(router.claim_pending("p", 10).unwrap().len(), 1);
     assert_eq!(router.cancel_parent("p").unwrap(), 1);
     drop(router);
-    let router = open_router(&path);
+    let router = open_sqlite_router(&path);
     assert!(router.pending_for("p").is_empty());
     assert_eq!(
         router.record(record("live", "p")).await.unwrap(),
