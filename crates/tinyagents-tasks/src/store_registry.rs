@@ -161,3 +161,32 @@ pub async fn open_driver_task_store(
         .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
     Ok(Arc::new(store))
 }
+
+/// Opens a durable [`DriverTaskStore`] over `docs`, degrading to an in-memory store.
+///
+/// A failure to start the store's bridge thread or to declare its collections
+/// yields an [`InMemoryTaskStore`](crate::InMemoryTaskStore) instead of an error.
+/// The host-owned storage schema must already have been applied before this
+/// adapter is constructed.
+pub fn open_driver_task_store_or_memory(
+    docs: Arc<dyn tinyagents_storage_kit::DocumentStore>,
+) -> Arc<dyn TaskStore> {
+    let store = match DriverTaskStore::new(docs) {
+        Ok(store) => store,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "[orchestration] durable task store unavailable; falling back to memory"
+            );
+            return Arc::new(crate::InMemoryTaskStore::new());
+        }
+    };
+    if let Err(err) = store.declare_collections() {
+        tracing::warn!(
+            error = %err,
+            "[orchestration] durable task store unavailable; falling back to memory"
+        );
+        return Arc::new(crate::InMemoryTaskStore::new());
+    }
+    Arc::new(store)
+}

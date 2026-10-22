@@ -6,7 +6,9 @@ use crate::completions::{CompletionResult, RecordOutcome};
 use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
 use tinyagents_storage_kit::{Scope, StorageBackend};
 use tinystoragedrivers_document::memory::MemoryConnection;
+use tinystoragedrivers_document::sqlite::SqliteDocuments;
 use tinystoragedrivers_testkit::MemoryBackend;
+use crate::storage::{COMPLETIONS, task_id_key};
 
 fn record(task: &str, parent: &str) -> CompletionRecord {
     CompletionRecord::new(
@@ -103,6 +105,123 @@ async fn delivered_and_tombstoned_stay_deduped_after_a_reopen() {
         );
     }
     assert!(router.pending_for("p").is_empty());
+}
+
+#[tokio::test]
+async fn a_settled_record_is_persisted_without_its_result() {
+    let storage = MemoryBackend::new();
+    let docs = docs_of(&storage, "local");
+    let store = Arc::new(DriverCompletionStore::new(docs.clone()).unwrap());
+    let router = CompletionRouter::new(store.clone()).with_max_attempts(1);
+    let doc_of = |task: &str| {
+        let docs = docs.clone();
+        let id = task_id_key(task).unwrap();
+        async move { docs.get(COMPLETIONS, &id).await.unwrap().unwrap().doc }
+    };
+    for (index, task) in ["delivered", "tombstoned", "gave-up", "cancelled"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut record = record(task, "p");
+        record.finished_at = UNIX_EPOCH + Duration::from_secs(index as u64 + 1);
+        record.result.omitted_chars = 7;
+        record.result.artifact = Some(crate::completions::CompletionArtifact {
+            id: format!("art-{task}"),
+            ..Default::default()
+        });
+        router.record(record).await.unwrap();
+        let persisted = doc_of(task).await;
+        assert_eq!(persisted["result"]["text"], format!("result of {task}"));
+        assert_eq!(persisted["result"]["artifact"]["id"], format!("art-{task}"));
+    }
+    // Oldest first: the claim leases the first three; `cancelled` stays
+    // unclaimed for `cancel_parent` to withdraw.
+    let claimed = router.claim_pending("p", 3).unwrap();
+    assert_eq!(claimed.len(), 3);
+    router.mark_delivered(&["delivered"]).unwrap();
+    assert_eq!(router.mark_failed(&["gave-up"]).unwrap().len(), 1);
+    router.tombstone("tombstoned").unwrap();
+    assert_eq!(router.cancel_parent("p").unwrap(), 1);
+    for (task, state) in [
+        ("delivered", "delivered"),
+        ("tombstoned", "tombstoned"),
+        ("gave-up", "gave_up"),
+        ("cancelled", "tombstoned"),
+    ] {
+        let persisted = doc_of(task).await;
+        assert_eq!(persisted["state"], state, "{task}");
+        assert_eq!(persisted["task_id"], task, "{task}");
+        assert_eq!(persisted["parent_key"], "p", "{task}");
+        assert_eq!(persisted["result"]["text"], "", "{task}");
+        assert_eq!(persisted["result"]["omitted_chars"], 0, "{task}");
+        assert!(
+            persisted["result"].get("artifact").is_none(),
+            "{task}: {}",
+            persisted["result"]
+        );
+        let read = store.get(task).unwrap();
+        assert_eq!(read.result, CompletionResult::default(), "{task}");
+        assert_eq!(read.task_id, task, "{task}");
+    }
+}
+
+#[tokio::test]
+async fn settled_records_reopen_without_their_result_and_stay_deduped() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("completions.sqlite");
+    {
+        let router = open_router(&path).with_max_attempts(1);
+        router.record(record("delivered", "p")).await.unwrap();
+        router.record(record("gave-up", "p")).await.unwrap();
+        router.record(record("waited", "p")).await.unwrap();
+        router.record(record("live", "p")).await.unwrap();
+        router.claim_pending("p", 2).unwrap();
+        router.mark_delivered(&["delivered"]).unwrap();
+        let gave_up = router.mark_failed(&["gave-up"]).unwrap();
+        assert_eq!(gave_up[0].result.text, "result of gave-up");
+        router.tombstone("waited").unwrap();
+    }
+    let scope = Scope::new("local").unwrap();
+    let connection = tinystoragedrivers_connect::sqlite::SqliteConnection::open(&path).unwrap();
+    let docs = Arc::new(SqliteDocuments::new(connection, scope))
+        as Arc<dyn tinyagents_storage_kit::DocumentStore>;
+    let store = Arc::new(DriverCompletionStore::new(docs).unwrap());
+    let router = CompletionRouter::new(store.clone());
+    let pending = router.pending_for("p");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].task_id, "live");
+    assert_eq!(pending[0].result.text, "result of live");
+    for (task, state) in [
+        ("delivered", CompletionState::Delivered),
+        ("gave-up", CompletionState::GaveUp),
+        ("waited", CompletionState::Tombstoned),
+    ] {
+        let settled = store.get(task).unwrap();
+        assert_eq!(settled.state, state, "{task}");
+        assert_eq!(settled.result, CompletionResult::default(), "{task}");
+        assert_eq!(
+            settled.attempts,
+            u32::from(state != CompletionState::Tombstoned),
+            "{task}"
+        );
+        let outcome = router.record(record(task, "p")).await.unwrap();
+        let expected = if state == CompletionState::Tombstoned {
+            RecordOutcome::Suppressed
+        } else {
+            RecordOutcome::Duplicate
+        };
+        assert_eq!(outcome, expected, "{task}");
+    }
+    assert_eq!(router.claim_pending("p", 10).unwrap().len(), 1);
+    assert_eq!(router.cancel_parent("p").unwrap(), 1);
+    drop(router);
+    let router = open_router(&path);
+    assert!(router.pending_for("p").is_empty());
+    assert_eq!(
+        router.record(record("live", "p")).await.unwrap(),
+        RecordOutcome::Suppressed,
+        "a withdrawn record stays tombstoned across a reopen"
+    );
 }
 
 #[tokio::test]

@@ -131,6 +131,54 @@ async fn admit_call_reports_approval_and_refusals() {
     );
 }
 
+struct ArgumentPermission;
+
+#[async_trait::async_trait]
+impl Tool for ArgumentPermission {
+    fn name(&self) -> &str {
+        "packed"
+    }
+    fn description(&self) -> &str {
+        "argument-sensitive permission fixture"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
+    }
+    fn permission_level(&self) -> tinytools::PermissionLevel {
+        tinytools::PermissionLevel::ReadOnly
+    }
+    fn permission_level_with_args(&self, args: &serde_json::Value) -> tinytools::PermissionLevel {
+        if args.get("tool").and_then(serde_json::Value::as_str) == Some("delete_source") {
+            tinytools::PermissionLevel::Dangerous
+        } else {
+            tinytools::PermissionLevel::ReadOnly
+        }
+    }
+    async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<tinytools::ToolResult> {
+        Ok(tinytools::ToolResult::success("ok"))
+    }
+}
+
+#[tokio::test]
+async fn permission_ceiling_checks_argument_aware_dispatch_permissions() {
+    let policy =
+        ToolRulePolicy::default().with_permission_ceiling(tinytools::PermissionLevel::ReadOnly);
+    assert!(!policy.is_permissive());
+    let gate = ToolGate::new(None, &policy, None);
+    let tool = ArgumentPermission;
+
+    assert_eq!(
+        gate.admit_call_async(&tool, &json!({"tool": "read_source"}))
+            .await,
+        CallGate::Admit(ApprovalDirective::Default)
+    );
+    assert!(matches!(
+        gate.admit_call_async(&tool, &json!({"tool": "delete_source"}))
+            .await,
+        CallGate::Refuse(message) if message.contains("session limit")
+    ));
+}
+
 struct AsyncTargetFailure;
 
 #[async_trait::async_trait]

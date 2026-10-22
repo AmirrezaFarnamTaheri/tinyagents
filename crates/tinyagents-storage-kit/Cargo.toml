@@ -17,7 +17,7 @@ tinystoragedrivers-api = { workspace = true }
 tinystoragedrivers-types = { workspace = true }
 
 [dev-dependencies]
-tinystoragedrivers-busproxy = { version = "2.0.1", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
+tinystoragedrivers-busproxy = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }
 tinystoragedrivers-testkit = { workspace = true }
 
 [lints]

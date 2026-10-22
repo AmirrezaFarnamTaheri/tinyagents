@@ -181,7 +181,8 @@ pub use verify_before_finish::{
 };
 pub use wind_down::{WindDownCallback, WindDownMiddleware, install as install_wind_down};
 pub use workload::{
-    FallbackObserverMiddleware, RequiredCapabilitiesMiddleware, UsageCarryMiddleware,
+    CostEstimator, FallbackObserverMiddleware, RequiredCapabilitiesMiddleware,
+    ResolvedRouteMiddleware, UsageCarryMiddleware,
 };
 pub use wrap_up::{
     CapturedOutcomes, DEFAULT_CLEARED_PLACEHOLDER, FinalCallWrapUpMiddleware, OutcomesUnavailable,
@@ -232,6 +233,10 @@ mod test;
 #[cfg(test)]
 #[path = "wrap_up_tests.rs"]
 mod wrap_up_test;
+
+#[cfg(test)]
+#[path = "workload_tests.rs"]
+mod workload_test;
 
 mod ephemeral_instructions;
 pub use ephemeral_instructions::{EphemeralInstructionMiddleware, EphemeralInstructionQueue};
