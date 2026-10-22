@@ -9,6 +9,8 @@ pub struct SubprocessProviderContext {
     pub workspace_dir: std::path::PathBuf,
     /// Action/project directory used by Claude Code.
     pub action_dir: std::path::PathBuf,
+    /// Host-owned document port for provider session/settings state.
+    pub documents: Arc<dyn tinyagents_storage_kit::DocumentStore>,
     /// Host-owned Claude Agent SDK settings.
     pub claude_agent_sdk: crate::providers::claude_agent_sdk::ClaudeAgentSdkConfig,
     /// Optional host-owned MCP endpoint provider.
@@ -28,6 +30,7 @@ pub fn build_claude_subprocess_model(
 ) -> anyhow::Result<Option<Arc<dyn ChatModel<()>>>> {
     use crate::providers::claude_code::ClaudeCodeProvider;
 
+    let documents = Arc::clone(&context.documents);
     build_claude_subprocess_model_with(route, context, |model, workspace_dir, action_dir, mcp| {
         // Keep the host's existing environment-based CLI discovery and auth
         // resolution. This constructor probes the installed CLI and resolves
@@ -36,6 +39,7 @@ pub fn build_claude_subprocess_model(
             model,
             workspace_dir.to_path_buf(),
             action_dir.to_path_buf(),
+            documents,
         )?;
         if let Some(mcp) = mcp {
             provider = provider.with_mcp_provider(mcp);

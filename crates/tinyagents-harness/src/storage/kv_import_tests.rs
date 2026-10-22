@@ -1,11 +1,13 @@
 use super::*;
+use crate::store::namespaced::{DriverNamespacedStore, Namespace, NamespacedStore};
 use serde_json::json;
-use tinystoragedrivers_core::{
-    Kv, MemoryStorage, Migrations, Precondition, Scope, ScopedStorage, StorageBackend,
-};
+use tinyagents_storage_kit::{Kv, Migrations, Precondition, Scope, ScopedStorage, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn scoped() -> ScopedStorage {
-    MemoryStorage::new().for_scope(&Scope::local()).unwrap()
+    MemoryBackend::new()
+        .for_scope(&Scope::new("local").unwrap())
+        .unwrap()
 }
 
 async fn seed(storage: &ScopedStorage, collection: &str, id: &str, body: serde_json::Value) {
@@ -51,7 +53,7 @@ async fn a_flat_v1_store_moves_into_tsd_kv_with_the_value_unwrapped() {
     );
     let left = storage
         .documents()
-        .count("harness_store", &tinystoragedrivers_core::Filter::default())
+        .count("harness_store", &tinyagents_storage_kit::Filter::default())
         .await
         .unwrap();
     assert_eq!(left, 0, "the v1 rows are removed once copied");
@@ -148,10 +150,19 @@ async fn namespaced_items_keep_their_segments_creation_time_and_expiry() {
         json!({
             "owner": "harness", "ns": "namespaced:memories.alice",
             "key": "likes", "value": {"food": "tea"},
+            "created_at_ms": 1_700_000_000_000_i64,
         })
     );
-    assert_eq!(row.meta.created_ms, 1_700_000_000_000);
+    assert_eq!(row.doc["created_at_ms"], 1_700_000_000_000_i64);
+    assert_ne!(row.meta.created_ms, 1_700_000_000_000_i64);
     assert_eq!(row.meta.expires_ms, Some(far));
+    let namespaced = DriverNamespacedStore::new(storage.documents().clone());
+    let item = namespaced
+        .get(&Namespace::new(["memories", "alice"]).unwrap(), "likes")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(item.created_at_ms, 1_700_000_000_000);
 }
 
 #[tokio::test]

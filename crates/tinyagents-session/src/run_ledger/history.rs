@@ -71,9 +71,32 @@ pub struct NewSessionToolCall {
     pub duration_ms: Option<i64>,
 }
 
+/// Fully decoded history rows supplied by a host-owned migration.
+#[derive(Debug, Clone, Default)]
+pub struct SessionHistoryImport {
+    pub sessions: Vec<SessionRecord>,
+    pub messages: Vec<SessionMessage>,
+    pub tool_calls: Vec<SessionToolCall>,
+}
+
+/// Per-family counts from an idempotent history import.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SessionHistoryImportReport {
+    pub sessions: super::import::ImportCounts,
+    pub messages: super::import::ImportCounts,
+    pub tool_calls: super::import::ImportCounts,
+}
+
 /// Bound storage for the classic session history.
 #[async_trait]
 pub trait SessionHistoryStore: Send + Sync {
+    /// Imports full history records while preserving explicit IDs and times.
+    /// Existing rows are left untouched; a retry can safely complete a pass.
+    async fn import_session_history(
+        &self,
+        import: SessionHistoryImport,
+    ) -> Result<SessionHistoryImportReport>;
+
     /// Create a `running` session and index it. A duplicate id is a conflict.
     async fn record_session_start(&self, start: SessionStart) -> Result<SessionRecord>;
 

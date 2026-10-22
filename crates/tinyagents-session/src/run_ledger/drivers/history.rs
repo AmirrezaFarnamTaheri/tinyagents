@@ -10,13 +10,13 @@ use super::dto::Stored;
 use super::dto_history::FtsRow;
 use super::storage::{
     CAS_ATTEMPTS, HIST_FTS, HIST_MESSAGES, HIST_SESSIONS, HIST_TOOL_CALLS, HISTORY_OWNER, decode,
-    key, now, put_op,
+    encode, key, now, put_op,
 };
 use super::*;
 use crate::fts::{fts_snippet_bytes, snippet};
 use crate::run_ledger::history::{
-    MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryStore,
-    SessionStart,
+    MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryImport,
+    SessionHistoryImportReport, SessionHistoryStore, SessionStart,
 };
 use crate::types::{
     SessionMessage, SessionRecord, SessionSearchParams, SessionSearchResult, SessionStatus,
@@ -24,7 +24,7 @@ use crate::types::{
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     Counters, DocumentStoreExt, ErrorKind, ExpectedDocument, ID_FIELD, Precondition, ReadCheck,
     Versioned, WriteOp,
 };
@@ -159,6 +159,23 @@ impl DriverRunLedger {
         Err(StorageError::conflict("history id allocation contention budget exhausted").into())
     }
 
+    async fn import_if_absent(&self, collection: &str, id: &str, doc: Value) -> Result<bool> {
+        match self
+            .scoped
+            .documents()
+            .put(collection, id, doc, Precondition::Absent)
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(error)
+                if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Page `filter` over `collection` ordered by `sort`, returning rows and the total.
     async fn page_sorted<T: Stored + Send>(
         &self,
@@ -220,7 +237,7 @@ impl DriverRunLedger {
         }
         let wanted: Vec<Vec<String>> = terms
             .iter()
-            .map(|term| tinystoragedrivers_core::value::tokens(&Value::String((*term).into())))
+            .map(|term| tinystoragedrivers_types::value::tokens(&Value::String((*term).into())))
             .collect();
         let mut sessions = HashSet::new();
         for id in candidates.unwrap_or_default() {
@@ -230,7 +247,7 @@ impl DriverRunLedger {
             let row: FtsRow = decode(found.doc)?;
             let have: HashSet<String> = [&row.agent_name, &row.content, &row.tool_name]
                 .into_iter()
-                .flat_map(|field| tinystoragedrivers_core::value::tokens(&json!(field)))
+                .flat_map(|field| tinystoragedrivers_types::value::tokens(&json!(field)))
                 .collect();
             // The driver ranks by any-token overlap; a quoted multi-token term
             // must still match on every token within the one row.
@@ -262,6 +279,78 @@ const FTS_HIT_LIMIT: usize = 100_000;
 
 #[async_trait::async_trait]
 impl SessionHistoryStore for DriverRunLedger {
+    async fn import_session_history(
+        &self,
+        import: SessionHistoryImport,
+    ) -> Result<SessionHistoryImportReport> {
+        self.declare().await?;
+        let mut report = SessionHistoryImportReport::default();
+
+        let mut imported = 0;
+        let mut compatible_sessions = HashSet::new();
+        for session in &import.sessions {
+            imported += usize::from(
+                self.import_if_absent(HIST_SESSIONS, &key(&[&session.id])?, encode(session)?)
+                    .await?,
+            );
+            if self
+                .read_session(&session.id)
+                .await?
+                .is_some_and(|stored| stored.doc == *session)
+            {
+                compatible_sessions.insert(session.id.as_str());
+            }
+        }
+        report.sessions = super::super::import::ImportCounts::new(import.sessions.len(), imported);
+
+        let mut imported = 0;
+        let mut highest = 0_u64;
+        for message in &import.messages {
+            if !compatible_sessions.contains(message.session_id.as_str()) {
+                continue;
+            }
+            if message.id <= 0 {
+                return Err(
+                    StorageError::invalid_input("legacy message ids must be positive").into(),
+                );
+            }
+            highest = highest.max(message.id as u64);
+            imported += usize::from(
+                self.import_if_absent(HIST_MESSAGES, &message_id(message.id)?, encode(message)?)
+                    .await?,
+            );
+        }
+        Counters::new(self.scoped.documents())
+            .set_at_least(HISTORY_OWNER, MESSAGE_COUNTER, highest)
+            .await?;
+        report.messages = super::super::import::ImportCounts::new(import.messages.len(), imported);
+
+        let mut imported = 0;
+        let mut highest = 0_u64;
+        for call in &import.tool_calls {
+            if !compatible_sessions.contains(call.session_id.as_str()) {
+                continue;
+            }
+            if call.id <= 0 {
+                return Err(
+                    StorageError::invalid_input("legacy tool-call ids must be positive").into(),
+                );
+            }
+            highest = highest.max(call.id as u64);
+            imported += usize::from(
+                self.import_if_absent(HIST_TOOL_CALLS, &tool_call_id(call.id)?, encode(call)?)
+                    .await?,
+            );
+        }
+        Counters::new(self.scoped.documents())
+            .set_at_least(HISTORY_OWNER, TOOL_CALL_COUNTER, highest)
+            .await?;
+        report.tool_calls =
+            super::super::import::ImportCounts::new(import.tool_calls.len(), imported);
+        self.history_reindex().await?;
+        Ok(report)
+    }
+
     async fn record_session_start(&self, start: SessionStart) -> Result<SessionRecord> {
         tracing::debug!(
             "{LOG_PREFIX} record_session_start id={} agent={}",

@@ -35,12 +35,15 @@ tempfile = "3"
 rustix = { version = "1.1", features = ["fs"] }
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
-# Storage ports from tinystoragedrivers, taken by git tag: the same source every
-# module (tinyflows, tinybox, tinychannels, ...) and tinyinference names, so a
-# host's graph holds one set of port types with no [patch] to reconcile them.
-tinystoragedrivers-core = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
-tinystoragedrivers-file = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
-tinystoragedrivers-sqlite = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
+# Storage ports use one canonical TinyStorageDrivers revision across TinyAgents
+# and TinyInference, so a host's graph holds one set of port types without a
+# [patch] to reconcile them.
+tinystoragedrivers-types = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }
+tinystoragedrivers-api = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }
+tinystoragedrivers-testkit = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }
+tinystoragedrivers-document = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456", features = ["sqlite", "file"] }
+tinystoragedrivers-connect = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456", features = ["sqlite"] }
+tinyagents-storage-kit = { path = "crates/tinyagents-storage-kit" }
 uuid = { version = "1", features = ["v4"] }
 
 [workspace.lints.rust]

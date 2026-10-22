@@ -43,8 +43,9 @@ hosts with stable task ids without exposing executor handles such as
   host-defined scope key to a lazily-opened `Arc<dyn TaskStore>`, so a
   multi-tenant host keeps exactly one store per scope. `get_or_open` /
   `get` / `values` / `len` / `is_empty` / `clear`.
-  `open_jsonl_task_store_or_memory(path)` is the standard opener: it degrades
-  to an `InMemoryTaskStore` if the durable log can't be created or read.
+  `open_driver_task_store(storage)` applies the tasks-owned migrations to a
+  host-bound storage handle before returning the durable store. In-memory
+  storage remains an explicit choice for tests or hosts that request it.
 
 ### Process-local runtime (`runtime.rs`)
 
@@ -170,7 +171,7 @@ README.
 | `types.rs` | `NoEquivalentStatus`, task kind/status/spec/result/record/filter types, `OrchestrationControlOutcome`, and the `DetachedTaskRegistry` snapshot/error types. |
 | `steering_registry.rs` | The process-local `SteeringRegistry` of live handles. |
 | `store.rs` | `TaskStore` trait, `InMemoryTaskStore`, and the shared transition rules. |
-| `store_registry.rs` | `TaskStoreRegistry<K>`, `open_driver_task_store_or_memory`. |
+| `store_registry.rs` | `TaskStoreRegistry<K>`, `open_driver_task_store`. |
 | `runtime.rs` | `DetachedTaskRegistry<Metadata, Status>` — process-local executor handles keyed by task id. |
 | `reconcile.rs` | `reconcile_orphaned_tasks` and its report types, for settling orphans left by a dead executor. |
 | `completions/` | `types.rs`, `store.rs`, `driver.rs`, `router.rs`, `format.rs`: the completion router (tests in `router_tests.rs`, `driver_tests.rs`). |
@@ -182,7 +183,7 @@ README.
   orchestration layer uses live handles for running children and delegates
   steering of finished children to a host-owned fallback.
 - `TaskStore` is a synchronous trait, so `DriverTaskStore` bridges the async
-  driver ports with `tinystoragedrivers_core::Blocking`; build it from a
+  driver ports with `tinyagents_storage_kit::Blocking`; build it from a
   multi-thread runtime or outside one. History snapshots grow one per
   transition, so prune old records through the backend if that matters.
 - `OrchestrationTaskFilter::matches` is evaluated in-process against loaded

@@ -28,7 +28,7 @@ pub use completions::{
 pub use completions::{
     CompletionDelivery, CompletionDeliveryConfig, CompletionRouterPool, CompletionRouterPoolError,
     CompletionRouterReplaceOutcome, DeliveryFence, DeliveryOutcome, DeliveryTarget, ParentBusyGate,
-    ParentBusyLease, ThreadDeliveryLeases, open_driver_completion_store_or_memory,
+    ParentBusyLease, ThreadDeliveryLeases, open_driver_completion_store,
 };
 pub use driver_store::DriverTaskStore;
 pub use reconcile::{
@@ -36,10 +36,11 @@ pub use reconcile::{
 };
 pub use runtime::{DetachedAbortEvent, DetachedTaskRegistry};
 pub use steering_registry::SteeringRegistry;
-pub use storage::storage_schema;
+pub use storage::{collections, open_storage, storage_schema};
 pub use store::{InMemoryTaskStore, TaskStore};
 pub use store_registry::{
-    TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store_or_memory,
+    TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store,
+    open_driver_task_store_or_memory,
 };
 pub use types::*;
 
