@@ -257,7 +257,11 @@ async fn taking_rebuilt_queue_requests_restores_the_owner_thread_id() {
             cancel: crate::CancellationToken::new(),
             generation: 7,
             queue,
-            payload: serde_json::json!({"access": "full", "locale": "fr"}),
+            payload: serde_json::json!({
+                "access": "full",
+                "locale": "fr",
+                "attachments": ["prior-turn-file"],
+            }),
         },
     );
 
@@ -270,6 +274,7 @@ async fn taking_rebuilt_queue_requests_restores_the_owner_thread_id() {
     assert_eq!(recovered[0].payload["locale"], "fr");
     assert_eq!(recovered[0].payload["thread_id"], "thread-a");
     assert_eq!(recovered[0].payload["queued_at_ms"], 42);
+    assert!(recovered[0].payload["attachments"].is_null());
 }
 
 #[tokio::test]
