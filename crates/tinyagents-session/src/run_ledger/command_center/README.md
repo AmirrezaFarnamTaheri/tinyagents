@@ -47,6 +47,12 @@ event in one checked batch. Reusing the root/submission id for different content
 returns a conflict. Receipts survive process restart and list in event-sequence
 order. A backend without checked atomic batches returns its native error.
 
+`pending_inputs(root, recipient, after_sequence, limit)` returns at most 500
+records in ascending sequence order. Start with `None`, then pass the last
+receipt's sequence as `Some(sequence)` to read the next page. The cursor is
+exclusive; paging never consumes or acknowledges input. Each page validates
+the recipient's persisted root lineage, including empty pages.
+
 This is an admission draft, not a complete delivery implementation. No operation
 marks input delivered, changes a run to running, or launches a worker. Recipient
 integration must atomically commit admitted input into the durable session and

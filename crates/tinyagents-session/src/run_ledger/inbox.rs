@@ -53,11 +53,13 @@ pub trait RunInboxStore: Send + Sync {
     async fn enqueue_input(&self, input: AddressedInput) -> super::LedgerResult<QueuedInput>;
 
     /// Read queued input in admission order after validating root ownership.
+    /// A cursor excludes sequences at or below its value, allowing bounded paging.
     /// Limit is clamped to 1..=500; this never consumes or acknowledges input.
     async fn pending_inputs(
         &self,
         root_thread_id: &str,
         recipient_run_id: &str,
+        after_sequence: Option<u64>,
         limit: u32,
     ) -> super::LedgerResult<Vec<QueuedInput>>;
 }

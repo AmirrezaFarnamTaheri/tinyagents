@@ -28,6 +28,7 @@ pub(super) struct EventCommit {
 }
 
 impl DriverRunLedger {
+    /// Prepare an event and head update for the caller's atomic document batch.
     pub(super) async fn event_commit(&self, input: &RunEventAppend) -> Result<EventCommit> {
         let head = self.read::<EventHead>(EVENT_HEADS, &input.run_id).await?;
         let sequence = match &head {

@@ -2,6 +2,54 @@ use super::*;
 use crate::run_ledger::inbox::InputMode;
 use crate::testkit::MemoryStorage;
 
+/// Read every admitted input across the maximum page boundary without consuming it.
+#[tokio::test]
+async fn pending_inputs_pages_past_five_hundred_with_exclusive_cursor() {
+    let ledger = ledger();
+    prepare(&ledger).await;
+    let mut receipts = Vec::new();
+    for index in 0..503 {
+        receipts.push(
+            ledger
+                .enqueue_input(input(&format!("page-{index}")))
+                .await
+                .unwrap(),
+        );
+    }
+    let first = ledger
+        .pending_inputs("root", "child", None, u32::MAX)
+        .await
+        .unwrap();
+    assert_eq!(first, receipts[..500]);
+    let cursor = first.last().unwrap().sequence;
+    let rest = ledger
+        .pending_inputs("root", "child", Some(cursor), 500)
+        .await
+        .unwrap();
+    assert_eq!(rest, receipts[500..]);
+    assert_eq!(
+        ledger
+            .pending_inputs("root", "child", Some(cursor), 0)
+            .await
+            .unwrap(),
+        receipts[500..501]
+    );
+    assert!(
+        ledger
+            .pending_inputs("root", "child", Some(u64::MAX), 500)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        ledger
+            .pending_inputs("other", "child", Some(u64::MAX), 500)
+            .await
+            .is_err()
+    );
+}
+
+/// Create an isolated in-memory ledger for admission tests.
 fn ledger() -> DriverRunLedger {
     DriverRunLedger::new(
         MemoryStorage::new()
@@ -10,6 +58,7 @@ fn ledger() -> DriverRunLedger {
     )
 }
 
+/// Construct an awaiting run with explicit persisted ancestry.
 fn run(id: &str, parent: Option<&str>, thread: Option<&str>) -> AgentRunUpsert {
     AgentRunUpsert {
         id: id.into(),
@@ -30,6 +79,7 @@ fn run(id: &str, parent: Option<&str>, thread: Option<&str>) -> AgentRunUpsert {
     }
 }
 
+/// Address an exact text payload to the prepared child run.
 fn input(id: &str) -> AddressedInput {
     AddressedInput {
         submission_id: id.into(),
@@ -40,6 +90,7 @@ fn input(id: &str) -> AddressedInput {
     }
 }
 
+/// Persist the root-to-parent-to-child lineage used by admission tests.
 async fn prepare(ledger: &DriverRunLedger) {
     ledger
         .upsert_agent_run(run("parent", None, Some("root")))
@@ -52,6 +103,7 @@ async fn prepare(ledger: &DriverRunLedger) {
 }
 
 #[tokio::test]
+/// Reopening a ledger preserves the original receipt and rejects id reuse.
 async fn duplicate_admission_survives_handle_recreation_and_records_one_event() {
     let ledger = ledger();
     prepare(&ledger).await;
@@ -63,7 +115,10 @@ async fn duplicate_admission_survives_handle_recreation_and_records_one_event() 
         first
     );
     assert_eq!(
-        reopened.pending_inputs("root", "child", 20).await.unwrap(),
+        reopened
+            .pending_inputs("root", "child", None, 20)
+            .await
+            .unwrap(),
         vec![first]
     );
     let events = reopened
@@ -82,6 +137,7 @@ async fn duplicate_admission_survives_handle_recreation_and_records_one_event() 
 }
 
 #[tokio::test]
+/// Concurrent retries commit once and later admissions remain ordered.
 async fn concurrent_duplicate_admissions_share_one_receipt_and_preserve_order() {
     let ledger = ledger();
     prepare(&ledger).await;
@@ -91,7 +147,10 @@ async fn concurrent_duplicate_admissions_share_one_receipt_and_preserve_order() 
     );
     assert_eq!(left.unwrap(), right.unwrap());
     ledger.enqueue_input(input("second")).await.unwrap();
-    let queued = ledger.pending_inputs("root", "child", 20).await.unwrap();
+    let queued = ledger
+        .pending_inputs("root", "child", None, 20)
+        .await
+        .unwrap();
     assert_eq!(queued.len(), 2);
     assert!(queued[0].sequence < queued[1].sequence);
     assert_eq!(queued[0].input.submission_id, "same");
@@ -99,13 +158,19 @@ async fn concurrent_duplicate_admissions_share_one_receipt_and_preserve_order() 
 }
 
 #[tokio::test]
+/// Malformed payloads and invalid ancestry cannot enter the durable inbox.
 async fn cross_root_cyclic_missing_and_blank_inputs_are_rejected() {
     let ledger = ledger();
     prepare(&ledger).await;
     let mut wrong_root = input("wrong");
     wrong_root.root_thread_id = "other".into();
     assert!(ledger.enqueue_input(wrong_root).await.is_err());
-    assert!(ledger.pending_inputs("other", "child", 20).await.is_err());
+    assert!(
+        ledger
+            .pending_inputs("other", "child", None, 20)
+            .await
+            .is_err()
+    );
     let mut missing = input("missing");
     missing.recipient_run_id = "absent".into();
     assert!(ledger.enqueue_input(missing).await.is_err());

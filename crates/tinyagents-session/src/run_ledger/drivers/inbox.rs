@@ -18,6 +18,7 @@ struct StoredInput {
 stored_as_is!(StoredInput);
 
 impl StoredInput {
+    /// Convert the persisted admission into its stable public receipt.
     fn receipt(self) -> Result<QueuedInput> {
         Ok(QueuedInput {
             input: self.input,
@@ -27,6 +28,7 @@ impl StoredInput {
     }
 }
 
+/// Reject invalid identities and empty or oversized input before storage access.
 fn validate(input: &AddressedInput) -> Result<()> {
     for id in [
         &input.submission_id,
@@ -47,8 +49,8 @@ fn validate(input: &AddressedInput) -> Result<()> {
 }
 
 impl DriverRunLedger {
-    // Walk exact persisted run links, never infer ownership from a display name
-    // or an in-memory worker. Every observed link is fenced in the admission.
+    /// Walk exact persisted run links and fence every observed lineage version.
+    /// Display names and the live worker registry cannot establish ownership.
     async fn input_lineage(&self, root: &str, recipient: &str) -> Result<Vec<ReadCheck>> {
         let mut current = recipient.to_owned();
         let mut visited = HashSet::new();
@@ -83,6 +85,7 @@ impl DriverRunLedger {
 
 #[async_trait::async_trait]
 impl RunInboxStore for DriverRunLedger {
+    /// Atomically admit an input and event, or return its original dedup receipt.
     async fn enqueue_input(&self, input: AddressedInput) -> Result<QueuedInput> {
         validate(&input)?;
         self.declare().await?;
@@ -142,10 +145,12 @@ impl RunInboxStore for DriverRunLedger {
         Err(StorageError::conflict("input admission contention budget exhausted").into())
     }
 
+    /// Read an exclusive sequence page while rechecking persisted root ownership.
     async fn pending_inputs(
         &self,
         root: &str,
         recipient: &str,
+        after_sequence: Option<u64>,
         limit: u32,
     ) -> Result<Vec<QueuedInput>> {
         if root.trim().is_empty() || recipient.trim().is_empty() {
@@ -155,17 +160,19 @@ impl RunInboxStore for DriverRunLedger {
         }
         for _ in 0..CAS_ATTEMPTS {
             let checks = self.input_lineage(root, recipient).await?;
+            let mut filter =
+                Filter::eq("root_thread_id", root).and(Filter::eq("recipient_run_id", recipient));
+            if let Some(cursor) = after_sequence {
+                filter = filter.and(Filter::gt("sequence", cursor));
+            }
             let page = self
                 .scoped
                 .documents()
                 .query(
                     INPUTS,
-                    &Query::filter(
-                        Filter::eq("root_thread_id", root)
-                            .and(Filter::eq("recipient_run_id", recipient)),
-                    )
-                    .sort(Sort::asc("sequence"))
-                    .limit(limit.clamp(1, 500) as usize),
+                    &Query::filter(filter)
+                        .sort(Sort::asc("sequence"))
+                        .limit(limit.clamp(1, 500) as usize),
                 )
                 .await?;
             let inputs = page
