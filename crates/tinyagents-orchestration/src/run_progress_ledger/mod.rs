@@ -15,10 +15,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use tinyagents_harness::progress::AgentProgress;
 use tinyagents_session::run_ledger::{
-    AgentRunKind, AgentRunStatus, AgentRunUpsert, RunEventAppend, RunLedgerStore,
+    AgentRunKind, AgentRunStatus, AgentRunUpsert, RunEventAppend, RunLedgerStore, RunTransition,
 };
 use tokio::sync::Mutex;
-use types::LedgerState;
+use types::{LedgerState, PendingTerminal};
 
 impl RunProgressLedger {
     /// Creates a progress observer for one turn.
@@ -41,11 +41,6 @@ impl RunProgressLedger {
             return context;
         };
 
-        if let Err(error) = self.ensure_run(store.as_ref()).await {
-            tracing::warn!(run_id = %self.identity.request_id, %error, "could not create progress ledger run");
-            return context;
-        }
-
         let completed = match event {
             AgentProgress::TurnCompleted {
                 stop: Some(stop), ..
@@ -55,16 +50,40 @@ impl RunProgressLedger {
             AgentProgress::TurnCompleted { .. } => Some(AgentRunStatus::Completed),
             _ => None,
         };
+        if let Some(status) = completed
+            && let Some((event_type, payload)) = serialize_event(event)
+        {
+            let intent = PendingTerminal {
+                status,
+                event: RunEventAppend {
+                    run_id: self.identity.request_id.clone(),
+                    event_type,
+                    payload,
+                },
+            };
+            state.pending_terminal = Some(intent.clone());
+            if let Err(error) = self.ensure_run(store.as_ref()).await {
+                tracing::warn!(run_id = %self.identity.request_id, %error, "could not create progress ledger run");
+                return context;
+            }
+            if self.transition_if_open(store.as_ref(), &intent).await {
+                state.pending_terminal = None;
+            }
+            return context;
+        }
+
+        if let Err(error) = self.ensure_run(store.as_ref()).await {
+            tracing::warn!(run_id = %self.identity.request_id, %error, "could not create progress ledger run");
+            return context;
+        }
+
         if let Some((event_type, payload)) = serialize_event(event) {
             let event = RunEventAppend {
                 run_id: self.identity.request_id.clone(),
                 event_type,
                 payload,
             };
-            if let Some(status) = completed {
-                self.transition_if_open(store.as_ref(), status, None, event)
-                    .await;
-            } else if let Err(error) = store.append_run_event(event).await {
+            if let Err(error) = store.append_run_event(event).await {
                 tracing::warn!(run_id = %self.identity.request_id, %error, "could not append progress ledger event");
             }
         } else {
@@ -78,7 +97,18 @@ impl RunProgressLedger {
         let Some(store) = self.store.as_ref() else {
             return;
         };
-        let _state = self.state.lock().await;
+        let mut state = self.state.lock().await;
+        if let Some(intent) = state.pending_terminal.clone() {
+            if let Err(error) = self.ensure_run(store.as_ref()).await {
+                tracing::warn!(run_id = %self.identity.request_id, %error, "could not create progress ledger run during terminal retry");
+                return;
+            }
+            if self.transition_if_open(store.as_ref(), &intent).await {
+                state.pending_terminal = None;
+            } else {
+                return;
+            }
+        }
         let run = match store.get_agent_run(&self.identity.request_id).await {
             Ok(Some(run)) => run,
             Ok(None) => return,
@@ -157,29 +187,35 @@ impl RunProgressLedger {
     async fn transition_if_open(
         &self,
         store: &dyn RunLedgerStore,
-        status: AgentRunStatus,
-        error: Option<&str>,
-        event: RunEventAppend,
-    ) {
+        intent: &PendingTerminal,
+    ) -> bool {
         match store.get_agent_run(&self.identity.request_id).await {
             Ok(Some(run)) if !is_terminal(run.status) => {
-                if let Err(error) = store
+                match store
                     .transition_agent_run_status_from(
                         &self.identity.request_id,
                         run.status,
-                        status,
-                        error,
+                        intent.status,
+                        None,
                         Some(chrono::Utc::now()),
-                        Some(event),
+                        Some(intent.event.clone()),
                     )
                     .await
                 {
-                    tracing::warn!(run_id = %self.identity.request_id, %error, "could not transition progress ledger run");
+                    Ok(RunTransition::Applied(_)) => true,
+                    Ok(RunTransition::StatusChanged(run)) => is_terminal(run.status),
+                    Ok(RunTransition::NotFound) => false,
+                    Err(error) => {
+                        tracing::warn!(run_id = %self.identity.request_id, %error, "could not transition progress ledger run");
+                        false
+                    }
                 }
             }
-            Ok(_) => {}
+            Ok(Some(_)) => true,
+            Ok(None) => false,
             Err(error) => {
-                tracing::warn!(run_id = %self.identity.request_id, %error, "could not read progress ledger run for transition")
+                tracing::warn!(run_id = %self.identity.request_id, %error, "could not read progress ledger run for transition");
+                false
             }
         }
     }

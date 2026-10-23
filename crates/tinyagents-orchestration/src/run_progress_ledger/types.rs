@@ -4,6 +4,7 @@ use std::{
 };
 
 use tinyagents_session::run_ledger::RunLedgerStore;
+use tinyagents_session::run_ledger::{AgentRunStatus, RunEventAppend};
 use tokio::sync::Mutex;
 
 /// Stable identity assigned by the host to one observed turn.
@@ -31,6 +32,13 @@ pub struct ProgressLedgerContext {
 #[derive(Default)]
 pub(super) struct LedgerState {
     pub(super) subagent_parent_calls: HashMap<String, Option<String>>,
+    pub(super) pending_terminal: Option<PendingTerminal>,
+}
+
+#[derive(Clone)]
+pub(super) struct PendingTerminal {
+    pub(super) status: AgentRunStatus,
+    pub(super) event: RunEventAppend,
 }
 
 /// Records progress for one foreground turn in the shared TinyAgents run ledger.

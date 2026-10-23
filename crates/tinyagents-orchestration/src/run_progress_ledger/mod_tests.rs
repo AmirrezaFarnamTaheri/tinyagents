@@ -159,10 +159,9 @@ async fn terminal_progress_event_and_status_share_one_atomic_write() {
     let ledger = RunProgressLedger::new(Some(store.clone()), identity());
     ledger.observe(&AgentProgress::TurnStarted).await;
 
-    // The atomic completion path commits the status and event together before
-    // reaching this injected failure. Split event/status writes would cross
-    // the failure point and leave a terminal event on a still-running row.
-    faults.fail_operation_nth("documents.atomic_batch_checked", 4, ErrorKind::Unavailable);
+    // The two ledger reads pass, then the terminal status/event transaction
+    // fails as one unit. The pending terminal intent must survive for finish().
+    faults.fail_operation_nth("documents.atomic_batch_checked", 3, ErrorKind::Unavailable);
     ledger.observe(&AgentProgress::turn_completed(1)).await;
     faults.clear();
 
@@ -171,6 +170,13 @@ async fn terminal_progress_event_and_status_share_one_atomic_write() {
         .await
         .expect("read run")
         .expect("run exists");
+    assert_eq!(run.status, AgentRunStatus::Running);
+    ledger.finish().await;
+    let run = store
+        .get_agent_run("request-1")
+        .await
+        .expect("read run after finalization")
+        .expect("run exists after finalization");
     assert_eq!(run.status, AgentRunStatus::Completed);
     let events = store
         .list_recent_run_events(&RunEventListRequest {
