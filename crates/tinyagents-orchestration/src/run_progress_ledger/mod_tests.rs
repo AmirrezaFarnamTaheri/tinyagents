@@ -5,7 +5,7 @@ use tinyagents_session::run_ledger::{
     AgentRunKind, AgentRunStatus, DriverRunLedger, RunEventListRequest, RunLedgerStore,
 };
 use tinyagents_storage_kit::{
-    DocumentStore, ErrorKind, Scope, ScopedStorage, Storage, StorageBackend,
+    ErrorKind, Scope, ScopedStorage, Storage, StorageBackend,
 };
 use tinystoragedrivers_testkit::{Failing, FaultPlan, MemoryBackend};
 
