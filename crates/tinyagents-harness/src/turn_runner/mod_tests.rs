@@ -385,9 +385,11 @@ async fn retiring_rebuilt_queue_requests_restores_the_active_scope() {
     let retired = runner.retire_generation(&owner, Some(7)).await;
 
     assert_eq!(retired.len(), 3);
-    assert!(retired.iter().all(|request| {
-        request.scope == scope && request.thread_id == "thread-a"
-    }));
+    assert!(
+        retired
+            .iter()
+            .all(|request| { request.scope == scope && request.thread_id == "thread-a" })
+    );
 }
 
 #[tokio::test]

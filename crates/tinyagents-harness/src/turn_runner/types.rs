@@ -78,9 +78,7 @@ impl RequeuePayload for serde_json::Value {
     fn adopt(&mut self, running: &Self) {
         if let (Self::Object(requeued), Self::Object(active)) = (self, running) {
             for (key, value) in active {
-                requeued
-                    .entry(key.clone())
-                    .or_insert_with(|| value.clone());
+                requeued.entry(key.clone()).or_insert_with(|| value.clone());
             }
         }
     }
