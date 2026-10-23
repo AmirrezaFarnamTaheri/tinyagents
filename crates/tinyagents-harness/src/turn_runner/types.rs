@@ -947,7 +947,8 @@ where
         } else {
             next
         };
-        if let Some(request) = next {
+        if let Some(mut request) = next {
+            request.scope.clone_from(scope);
             let reserved = ActiveTurn {
                 request_id: request.request_id.clone(),
                 cancel: crate::CancellationToken::new(),
@@ -976,7 +977,13 @@ where
         let key = (scope.clone(), thread_id.to_owned());
         let active = self.active.lock().await;
         match active.get(&key) {
-            Some(turn) => turn.queue.take(lane, mode).await,
+            Some(turn) => {
+                let mut requests = turn.queue.take(lane, mode).await;
+                for request in &mut requests {
+                    request.scope.clone_from(scope);
+                }
+                requests
+            }
             None => Vec::new(),
         }
     }
