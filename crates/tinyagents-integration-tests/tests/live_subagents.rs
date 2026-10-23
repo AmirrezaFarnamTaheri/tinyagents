@@ -26,9 +26,7 @@ async fn live_openai_parent_composes_child_subagent() {
     use tinyagents_harness::runtime::AgentHarness;
     use tinyagents_harness::testkit::{EventRecorder, Trajectory};
     use tinyagents_harness::tool::ToolSnapshot;
-    use tinyagents_harness_tools::subagents::{
-        DriverSubAgentTool, SubAgentJobsTool,
-    };
+    use tinyagents_harness_tools::subagents::{DriverSubAgentTool, SubAgentJobsTool};
     use tinyagents_orchestration::subagent::*;
     use tinyinference_llm::message::Message;
     use tinyinference_llm::model::ChatModel;
@@ -57,12 +55,15 @@ async fn live_openai_parent_composes_child_subagent() {
             &self,
             key: &SubagentTaskKey,
         ) -> Result<Option<SubagentResume>, SubagentError> {
-            Ok(self.pauses.lock().unwrap().get(key).and_then(|outcome| {
-                match &outcome.status {
+            Ok(self
+                .pauses
+                .lock()
+                .unwrap()
+                .get(key)
+                .and_then(|outcome| match &outcome.status {
                     SubagentOutcomeKind::AwaitingInput(pause) => Some(pause.resume.clone()),
                     _ => None,
-                }
-            }))
+                }))
         }
 
         async fn load_pause(
@@ -168,7 +169,10 @@ async fn live_openai_parent_composes_child_subagent() {
         "spawn_subagent",
         "Start a named expert agent on a task and return its task id.",
         driver,
-        move |_: &(), parent: &RunContext<()>, args: &Value, call_id: &tinyagents_harness::ids::CallId| {
+        move |_: &(),
+              parent: &RunContext<()>,
+              args: &Value,
+              call_id: &tinyagents_harness::ids::CallId| {
             let child = parent
                 .child(
                     RunConfig::new(format!("live-child-{}", call_id.as_str())),
@@ -205,8 +209,7 @@ async fn live_openai_parent_composes_child_subagent() {
     parent.with_model(model);
 
     let recorder = EventRecorder::new();
-    let ctx = RunContext::new(RunConfig::new("live-parent-run"), ())
-        .with_events(recorder.sink());
+    let ctx = RunContext::new(RunConfig::new("live-parent-run"), ()).with_events(recorder.sink());
     let run = parent
         .invoke_in_context(
             &(),
@@ -223,7 +226,10 @@ async fn live_openai_parent_composes_child_subagent() {
         !final_text.trim().is_empty(),
         "parent should produce a non-empty composed answer"
     );
-    assert!(run.model_calls >= 1, "parent should make at least one model call");
+    assert!(
+        run.model_calls >= 1,
+        "parent should make at least one model call"
+    );
 
     let trajectory = Trajectory::from_events(recorder.events());
     trajectory.assert_completed();
