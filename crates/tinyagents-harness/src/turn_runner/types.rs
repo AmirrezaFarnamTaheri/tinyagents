@@ -65,6 +65,22 @@ where
             idle_timeout: None,
         }
     }
+
+    fn requeued_in_lane(
+        id: String,
+        text: String,
+        thread_label: &str,
+        lane: QueueLane,
+        queued_at_ms: u64,
+    ) -> Self {
+        let mut request = Self::requeued(id, text, thread_label, queued_at_ms);
+        request.disposition = match lane {
+            QueueLane::Steer => QueueDisposition::Steer,
+            QueueLane::Followup => QueueDisposition::Followup,
+            QueueLane::Collect => QueueDisposition::Collect,
+        };
+        request
+    }
 }
 
 impl RequeuePayload for serde_json::Value {
@@ -80,6 +96,15 @@ impl RequeuePayload for serde_json::Value {
             for (key, value) in active {
                 requeued.entry(key.clone()).or_insert_with(|| value.clone());
             }
+        }
+    }
+
+    fn restore_thread_id(&mut self, thread_id: &str) {
+        if let Self::Object(payload) = self {
+            payload.insert(
+                "thread_id".into(),
+                serde_json::Value::String(thread_id.into()),
+            );
         }
     }
 }
@@ -178,6 +203,11 @@ pub trait RequeuePayload: Sized {
 
     /// Copy any safe, turn-scoped host metadata from the running payload.
     fn adopt(&mut self, running: &Self);
+
+    /// Replace a thread identity embedded in the payload with the queue owner's
+    /// routing identity. Payloads without their own thread field may leave this
+    /// as the default no-op.
+    fn restore_thread_id(&mut self, _thread_id: &str) {}
 }
 
 /// Folds progress events into balanced work-liveness signals for the runner.
@@ -389,6 +419,7 @@ fn restore_queue_context<P: RequeuePayload>(
         request.scope.clone_from(scope);
         request.thread_id = thread_id.to_owned();
         request.payload.adopt(running_payload);
+        request.payload.restore_thread_id(thread_id);
     }
 }
 

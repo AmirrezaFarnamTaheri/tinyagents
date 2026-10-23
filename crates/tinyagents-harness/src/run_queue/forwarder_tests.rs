@@ -11,6 +11,7 @@ struct Item {
     id: String,
     text: String,
     thread: String,
+    lane: Option<QueueLane>,
 }
 
 impl QueuedMessage for Item {
@@ -25,7 +26,20 @@ impl QueuedMessage for Item {
             id,
             text,
             thread: thread_label.to_string(),
+            lane: None,
         }
+    }
+
+    fn requeued_in_lane(
+        id: String,
+        text: String,
+        thread_label: &str,
+        lane: QueueLane,
+        queued_at_ms: u64,
+    ) -> Self {
+        let mut item = Self::requeued(id, text, thread_label, queued_at_ms);
+        item.lane = Some(lane);
+        item
     }
 }
 
@@ -34,6 +48,7 @@ fn item(id: &str, text: &str) -> Item {
         id: id.into(),
         text: text.into(),
         thread: "thread-test".into(),
+        lane: None,
     }
 }
 
@@ -75,6 +90,7 @@ async fn residual_collect_requeues_to_its_original_lane() {
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].text, "recovered context");
     assert_eq!(recovered[0].thread, "thread-test");
+    assert_eq!(recovered[0].lane, Some(QueueLane::Collect));
     let events = events.lock().unwrap();
     assert!(matches!(
         events.as_slice(),
