@@ -211,6 +211,44 @@ async fn collided_native_session_does_not_receive_legacy_child_rows() {
     );
 }
 
+#[tokio::test]
+async fn a_failed_history_import_never_leaves_ids_above_the_counter() {
+    let backend = MemoryStorage::new();
+    let ledger = ledger_on(&backend, "history-import-counter");
+    let session = ledger
+        .record_session_start(start("s", "agent", "Agent"))
+        .await
+        .unwrap();
+    let message = |id| SessionMessage {
+        id,
+        session_id: "s".into(),
+        role: "user".into(),
+        content: format!("legacy {id}"),
+        reasoning_content: None,
+        model: None,
+        input_tokens: None,
+        output_tokens: None,
+        cost_usd: None,
+        created_at: Utc::now(),
+    };
+    // The second row is invalid, so the import fails part-way.
+    let failed = ledger
+        .import_session_history(SessionHistoryImport {
+            sessions: vec![session],
+            messages: vec![message(50), message(0)],
+            tool_calls: vec![],
+        })
+        .await;
+    assert!(failed.is_err());
+    let stored = ledger.list_messages("s", None).await.unwrap();
+    let next = say(&ledger, "s", "new").await;
+    assert!(
+        stored.iter().all(|row| row.id < next),
+        "new id {next} is not above the imported ids {:?}",
+        stored.iter().map(|row| row.id).collect::<Vec<_>>()
+    );
+}
+
 async fn say(ledger: &DriverRunLedger, session: &str, content: &str) -> i64 {
     ledger
         .record_message(NewSessionMessage {

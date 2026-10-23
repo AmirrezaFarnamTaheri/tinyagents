@@ -307,56 +307,66 @@ impl SessionHistoryStore for DriverRunLedger {
             import.sessions.len() - compatible_sessions.len(),
         );
 
-        let mut imported = 0;
-        let mut skipped = 0;
+        // Validate every id and raise the id counter before writing any row,
+        // so a failure part-way never leaves imported ids above the counter.
+        let messages: Vec<_> = import
+            .messages
+            .iter()
+            .filter(|row| compatible_sessions.contains(row.session_id.as_str()))
+            .collect();
+        let skipped = import.messages.len() - messages.len();
         let mut highest = 0_u64;
-        for message in &import.messages {
-            if !compatible_sessions.contains(message.session_id.as_str()) {
-                skipped += 1;
-                continue;
-            }
+        for message in &messages {
             if message.id <= 0 {
                 return Err(
                     StorageError::invalid_input("legacy message ids must be positive").into(),
                 );
             }
             highest = highest.max(message.id as u64);
+        }
+        Counters::new(self.scoped.documents())
+            .set_at_least(HISTORY_OWNER, MESSAGE_COUNTER, highest)
+            .await?;
+        let mut imported = 0;
+        for message in messages {
             imported += usize::from(
                 self.import_if_absent(HIST_MESSAGES, &message_id(message.id)?, encode(message)?)
                     .await?,
             );
         }
-        Counters::new(self.scoped.documents())
-            .set_at_least(HISTORY_OWNER, MESSAGE_COUNTER, highest)
-            .await?;
         report.messages = super::super::import::ImportCounts::with_skipped(
             import.messages.len(),
             imported,
             skipped,
         );
 
-        let mut imported = 0;
-        let mut skipped = 0;
+        // Validate every id and raise the id counter before writing any row,
+        // so a failure part-way never leaves imported ids above the counter.
+        let tool_calls: Vec<_> = import
+            .tool_calls
+            .iter()
+            .filter(|row| compatible_sessions.contains(row.session_id.as_str()))
+            .collect();
+        let skipped = import.tool_calls.len() - tool_calls.len();
         let mut highest = 0_u64;
-        for call in &import.tool_calls {
-            if !compatible_sessions.contains(call.session_id.as_str()) {
-                skipped += 1;
-                continue;
-            }
+        for call in &tool_calls {
             if call.id <= 0 {
                 return Err(
                     StorageError::invalid_input("legacy tool-call ids must be positive").into(),
                 );
             }
             highest = highest.max(call.id as u64);
+        }
+        Counters::new(self.scoped.documents())
+            .set_at_least(HISTORY_OWNER, TOOL_CALL_COUNTER, highest)
+            .await?;
+        let mut imported = 0;
+        for call in tool_calls {
             imported += usize::from(
                 self.import_if_absent(HIST_TOOL_CALLS, &tool_call_id(call.id)?, encode(call)?)
                     .await?,
             );
         }
-        Counters::new(self.scoped.documents())
-            .set_at_least(HISTORY_OWNER, TOOL_CALL_COUNTER, highest)
-            .await?;
         report.tool_calls = super::super::import::ImportCounts::with_skipped(
             import.tool_calls.len(),
             imported,
