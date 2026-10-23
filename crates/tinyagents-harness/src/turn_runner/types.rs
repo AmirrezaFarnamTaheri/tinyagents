@@ -100,13 +100,13 @@ impl RequeuePayload for serde_json::Value {
     }
 
     fn restore_thread_id(&mut self, thread_id: &str) {
-        if let Self::Object(payload) = self {
-            if payload.contains_key("thread_id") {
-                payload.insert(
-                    "thread_id".into(),
-                    serde_json::Value::String(thread_id.into()),
-                );
-            }
+        if let Self::Object(payload) = self
+            && payload.contains_key("thread_id")
+        {
+            payload.insert(
+                "thread_id".into(),
+                serde_json::Value::String(thread_id.into()),
+            );
         }
     }
 }
