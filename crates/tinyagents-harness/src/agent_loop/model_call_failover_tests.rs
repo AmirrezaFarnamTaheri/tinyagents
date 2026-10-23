@@ -515,12 +515,12 @@ async fn a_cancel_during_a_retry_backoff_stops_without_waiting_it_out() {
     for middleware in [false, true] {
         let token = crate::cancel::CancellationToken::new();
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.register_model(
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
             "flaky",
             Arc::new(CancelThenFail {
                 token: token.clone(),
             }),
-        );
+        )));
         if middleware {
             harness.push_model_middleware(Arc::new(
                 crate::middleware::library::RetryMiddleware::new(backoff.clone()),
