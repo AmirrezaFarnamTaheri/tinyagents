@@ -45,7 +45,7 @@ fn sqlite_storage(
             as Arc<dyn DocumentStore>,
     };
     let streams = Arc::new(SqliteStreams::new(connection, scope.clone())) as Arc<dyn StreamStore>;
-    let memory = MemoryBackend::new().for_scope(&scope).unwrap();
+    let memory = MemoryBackend::new().for_scope(scope).unwrap();
     let storage = Storage::new(
         documents,
         streams,
