@@ -212,14 +212,17 @@ fn a_reserved_stem_reports_nothing_adopted() {
     // A concurrent writer holds the session's stem.
     let stem = session_stem(&session);
     let docs = Arc::clone(locator.documents());
-    let tables = Arc::clone(&locator.tables);
-    let declared = Arc::clone(&locator.declared);
-    run_on(&locator.bridge, async move {
-        declared.ensure(&docs).await?;
-        Ok(reservation::reserve(&docs, &tables.leases, &stem).await)
-    })
-    .unwrap()
-    .unwrap();
+    Blocking::new()
+        .unwrap()
+        .run(async move {
+            docs.ensure_collection(&leases_spec()).await?;
+            Leases::new(&docs)
+                .acquire("session", &stem, "concurrent-adopter", RESERVATION_TTL_MS)
+                .await
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap();
     assert!(
         locator
             .adopt_legacy(&session, THREAD, &meta(THREAD))
@@ -282,7 +285,7 @@ fn a_root_missing_from_the_index_is_still_folded() {
         &["two"],
     );
     // The second write was durable but every index refresh after it failed.
-    let docs = Arc::clone(&locator.docs);
+    let docs = Arc::clone(locator.documents());
     Blocking::new()
         .unwrap()
         .run(async move {
