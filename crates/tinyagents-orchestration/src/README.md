@@ -11,7 +11,8 @@ this crate only under its `subagents` feature.
   `RunLedgerStore`; `ProgressLedgerContext` carries parent-call correlation to
   the host's projection. Storage failures do not interrupt the live turn, and
   terminal transitions are retried during `finish()` before interruption
-  fallback.
+  fallback. See the [module guide](run_progress_ledger/README.md) for its
+  design and operational constraints.
 
 - `subagent::SubAgent` runs an `AgentHarness` as a child with inherited
   lineage, cancellation, events, host authority, and recursion limits.
