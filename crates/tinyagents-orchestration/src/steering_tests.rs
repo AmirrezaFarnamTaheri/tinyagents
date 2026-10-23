@@ -410,3 +410,17 @@ async fn owner_steer_over_the_cap_is_refused_but_trusted_is_not() {
         Some(("researcher".to_string(), QueueLane::Steer, long))
     );
 }
+
+/// A poisoned registry lock is an internal failure, not "no such subagent":
+/// a caller told `Unknown` would treat a live child as gone.
+#[test]
+fn a_poisoned_registry_is_not_reported_as_unknown() {
+    assert_ne!(
+        SteerError::from(DetachedTaskRegistryError::LockPoisoned),
+        SteerError::Unknown
+    );
+    assert_eq!(
+        SteerError::from(DetachedTaskRegistryError::LockPoisoned),
+        SteerError::Internal
+    );
+}
