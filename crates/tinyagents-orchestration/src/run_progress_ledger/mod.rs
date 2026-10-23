@@ -5,7 +5,11 @@
 //! completion. It also preserves subagent task-to-parent-call correlation for
 //! host projections whose later lifecycle events omit the parent call id.
 
-use std::{collections::HashMap, sync::Arc, sync::atomic::{AtomicUsize, Ordering}};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use serde_json::{Map, Value};
 use tinyagents_harness::progress::AgentProgress;
@@ -55,10 +59,7 @@ pub struct RunProgressLedger {
 
 impl RunProgressLedger {
     /// Creates a progress observer for one turn.
-    pub fn new(
-        store: Option<Arc<dyn RunLedgerStore>>,
-        identity: RunProgressIdentity,
-    ) -> Self {
+    pub fn new(store: Option<Arc<dyn RunLedgerStore>>, identity: RunProgressIdentity) -> Self {
         Self {
             store,
             identity,
@@ -150,8 +151,15 @@ impl RunProgressLedger {
         self.events_seen.load(Ordering::Relaxed)
     }
 
-    async fn ensure_run(&self, store: &dyn RunLedgerStore) -> Result<(), tinyagents_session::run_ledger::LedgerError> {
-        if store.get_agent_run(&self.identity.request_id).await?.is_some() {
+    async fn ensure_run(
+        &self,
+        store: &dyn RunLedgerStore,
+    ) -> Result<(), tinyagents_session::run_ledger::LedgerError> {
+        if store
+            .get_agent_run(&self.identity.request_id)
+            .await?
+            .is_some()
+        {
             return Ok(());
         }
         store
@@ -203,7 +211,9 @@ impl RunProgressLedger {
                 }
             }
             Ok(_) => {}
-            Err(error) => tracing::warn!(run_id = %self.identity.request_id, %error, "could not read progress ledger run for transition"),
+            Err(error) => {
+                tracing::warn!(run_id = %self.identity.request_id, %error, "could not read progress ledger run for transition")
+            }
         }
     }
 }
@@ -230,9 +240,17 @@ fn serialize_event(event: &AgentProgress) -> Option<(String, Value)> {
 
 fn correlation_for(event: &AgentProgress, state: &mut LedgerState) -> ProgressLedgerContext {
     match event {
-        AgentProgress::SubagentSpawned { task_id, parent_call_id, .. } => {
-            state.subagent_parent_calls.insert(task_id.clone(), parent_call_id.clone());
-            ProgressLedgerContext { parent_call_id: parent_call_id.clone() }
+        AgentProgress::SubagentSpawned {
+            task_id,
+            parent_call_id,
+            ..
+        } => {
+            state
+                .subagent_parent_calls
+                .insert(task_id.clone(), parent_call_id.clone());
+            ProgressLedgerContext {
+                parent_call_id: parent_call_id.clone(),
+            }
         }
         AgentProgress::SubagentCompleted { task_id, .. }
         | AgentProgress::SubagentFailed { task_id, .. } => {

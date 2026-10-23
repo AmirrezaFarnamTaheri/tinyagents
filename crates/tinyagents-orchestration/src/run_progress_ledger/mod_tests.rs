@@ -86,7 +86,10 @@ async fn records_progress_with_stable_run_identity_and_terminal_status() {
         .expect("read events")
         .events;
     assert_eq!(
-        events.iter().map(|event| event.event_type.as_str()).collect::<Vec<_>>(),
+        events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
         ["turn_started", "tool_call_started", "turn_completed"]
     );
     assert_eq!(events[1].payload["call_id"], "call-1");
@@ -125,9 +128,7 @@ async fn finish_interrupts_only_an_open_run_and_is_idempotent() {
     let completed_store = make_store(&completed_backend);
     let completed = RunProgressLedger::new(Some(completed_store.clone()), identity());
     completed.observe(&AgentProgress::TurnStarted).await;
-    completed
-        .observe(&AgentProgress::turn_completed(1))
-        .await;
+    completed.observe(&AgentProgress::turn_completed(1)).await;
     completed.finish().await;
     let run = completed_store
         .get_agent_run("request-1")
