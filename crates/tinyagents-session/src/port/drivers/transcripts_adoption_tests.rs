@@ -116,8 +116,12 @@ fn empty_import_does_not_reserve_a_session() {
 #[test]
 fn competing_imports_commit_one_complete_history() {
     let storage = MemoryStorage::new();
-    let docs: Arc<dyn DocumentStore> =
-        Arc::clone(storage.for_scope(&Scope::local()).unwrap().documents());
+    let docs: Arc<dyn DocumentStore> = Arc::clone(
+        storage
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap()
+            .documents(),
+    );
     let locators = [
         Arc::new(DriverTranscriptLocator::new(
             Arc::clone(&docs),

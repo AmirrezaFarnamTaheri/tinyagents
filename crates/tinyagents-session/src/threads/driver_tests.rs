@@ -324,13 +324,15 @@ async fn concurrent_message_metadata_merges_retry_against_latest_row() {
         barrier: tokio::sync::Barrier::new(2),
         refuse_get: false,
     });
-    let store = DriverConversationStore::new(ScopedStorage::new(
-        scope,
-        "test",
+    let storage = tinystoragedrivers_api::Storage::new(
         docs.clone(),
         ports.streams().clone(),
+        ports.kv().clone(),
         ports.blobs().clone(),
-    ));
+        ports.queues().clone(),
+        ports.secrets().clone(),
+    );
+    let store = DriverConversationStore::new(ScopedStorage::new(storage, scope));
     let (reaction, receipt) = tokio::join!(
         store.update_message(
             "one",

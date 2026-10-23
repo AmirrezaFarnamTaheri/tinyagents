@@ -72,20 +72,7 @@ async fn memory_store_preserves_deterministic_append_and_missing_thread_behavior
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn concurrent_user_request_id_appends_are_idempotent() {
-    let dir = tempfile::tempdir().unwrap();
-    let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("concurrent.db")).unwrap();
-    backend.prepare_schema().await.unwrap();
-    let scoped = backend
-        .for_scope(&tinystoragedrivers_core::Scope::new("alice").unwrap())
-        .unwrap();
-    DriverConversationStore::prepare_schema(scoped.documents().as_ref())
-        .await
-        .unwrap();
-    DriverConversationStore::prepare_append_schema(scoped.documents().as_ref())
-        .await
-        .unwrap();
-    let store = DriverConversationStore::new_validate_only(scoped);
+    let store = memory_store().await;
     for round in 0..32 {
         let thread_id = format!("thread-{round}");
         store.ensure_thread(thread(&thread_id)).await.unwrap();
@@ -185,7 +172,7 @@ async fn memory_store_preserves_title_labels_and_metadata_patch() {
 
 #[tokio::test]
 async fn concurrent_metadata_merge_patches_preserve_each_other_and_existing_metadata() {
-    let store = DriverConversationStore::in_memory().await;
+    let store = memory_store().await;
     store.ensure_thread(thread("one")).await.unwrap();
     store
         .append_message(
@@ -238,7 +225,7 @@ async fn concurrent_metadata_merge_patches_preserve_each_other_and_existing_meta
 
 #[tokio::test]
 async fn metadata_merge_patch_null_removes_only_the_named_member() {
-    let store = DriverConversationStore::in_memory().await;
+    let store = memory_store().await;
     store.ensure_thread(thread("one")).await.unwrap();
     store
         .append_message(
