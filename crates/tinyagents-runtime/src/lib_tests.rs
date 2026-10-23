@@ -31,7 +31,7 @@ use crate::{
 };
 
 struct FixedIdentityResolver {
-    provider: Arc<tinyagents_session::port::DriverSessionStores>,
+    provider: Arc<dyn tinyagents_session::port::SessionStoreProvider>,
     calls: Arc<Mutex<usize>>,
     agent_id: Arc<Mutex<String>>,
 }
@@ -2776,7 +2776,7 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
 #[tokio::test]
 async fn a_restart_after_a_compaction_resumes_the_head_generation() {
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
-    let locator = memory();
+    let locator = crate::test_store::in_memory();
     locator
         .open_session(&session_ref, meta())
         .unwrap()
@@ -3536,7 +3536,7 @@ async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_ge
 /// regains the turns newest-wins lookup had stranded.
 #[tokio::test]
 async fn a_first_session_resume_adopts_a_pre_identity_conversation() {
-    let store = crate::test_store::driver();
+    let store = crate::test_store::in_memory();
     let mut legacy = meta();
     legacy.thread_id = Some("thread-9fa08".into());
     legacy.created = "2026-09-22T07:30:47Z".into();
@@ -4908,9 +4908,7 @@ async fn explicit_session_override_cannot_change_resolved_identity() {
 
 #[tokio::test]
 async fn admitted_identity_keeps_compacted_head_on_following_never_resume_turn() {
-    let provider = crate::test_store::driver_session_stores(
-        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
-    );
+    let provider = Arc::new(tinyagents_session::port::InMemorySessionStores::new());
     let session_ref = SessionRef::scoped("thread-identity-compact", "agent-resolved");
     let resolver = Arc::new(FixedIdentityResolver {
         provider: provider.clone(),

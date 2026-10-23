@@ -13,8 +13,7 @@ use tinyagents_session::transcript::{
 };
 use tinyagents_storage_kit::{Scope, ScopedStorage};
 use tinystoragedrivers_api::{Storage, StorageBackend};
-use tinystoragedrivers_testkit::MemoryBackend;
-use tinystoragedrivers_types::{Capabilities, Result, StorageError};
+use tinystoragedrivers_types::{Capabilities, Result};
 
 /// A driver-backed session provider bound to `scope`, for identity-admission tests.
 pub(crate) fn driver_session_stores(scope: Scope) -> Arc<DriverSessionStores> {
@@ -246,6 +245,14 @@ pub(crate) fn driver() -> Arc<dyn TranscriptLocator> {
         locator: stores.for_agent("runtime-tests").transcripts,
         _backend: backend,
     })
+}
+
+/// An empty in-memory session locator for behavior tests that do not certify
+/// the driver's storage adapter.
+pub(crate) fn in_memory() -> Arc<dyn TranscriptLocator> {
+    tinyagents_session::port::InMemorySessionStores::new()
+        .for_agent("runtime-tests")
+        .transcripts
 }
 
 /// A transcript handle plus its backend, which retains the fixture directory.
