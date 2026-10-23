@@ -229,6 +229,43 @@ async fn taking_rebuilt_queue_requests_restores_the_active_scope() {
 }
 
 #[tokio::test]
+async fn taking_rebuilt_queue_requests_restores_the_owner_thread_id() {
+    let runner = runner(
+        Arc::new(Host::default()),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    );
+    let scope = ScopeKey {
+        agent_id: "agent-a".into(),
+        profile_id: Some("profile-a".into()),
+    };
+    let queue = Arc::new(RunQueue::new());
+    let mut recovered = request(QueueDisposition::Steer, false);
+    recovered.scope = ScopeKey {
+        agent_id: String::new(),
+        profile_id: None,
+    };
+    recovered.thread_id = "subagent-task-label".into();
+    queue.push_now(QueueLane::Steer, recovered);
+    runner.active.lock().await.insert(
+        (scope.clone(), "thread-a".into()),
+        ActiveTurn {
+            request_id: "active".into(),
+            cancel: crate::CancellationToken::new(),
+            generation: 7,
+            queue,
+        },
+    );
+
+    let recovered = runner
+        .take_queued(&scope, "thread-a", QueueLane::Steer, QueueMode::OneAtATime)
+        .await;
+
+    assert_eq!(recovered[0].thread_id, "thread-a");
+}
+
+#[tokio::test]
 async fn finalizing_a_rebuilt_queue_request_restores_the_active_scope() {
     let runner = runner(
         Arc::new(Host::default()),
