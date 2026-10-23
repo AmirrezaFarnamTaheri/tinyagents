@@ -908,7 +908,7 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
         let subagent_run_id = child.run_id().as_str().to_owned();
         let tool_call_id = call_id.map(|id| id.as_str().to_owned());
         let run_queue = Arc::new(tinyagents_harness::run_queue::RunQueue::new());
-        let (job_id, steering) = self.jobs.create_with_cancellation_and_queue(
+        let (job_id, steering) = match self.jobs.create_with_cancellation_and_queue(
             &self.tool_name,
             parent.instance_id(),
             child.cancellation.clone(),
@@ -917,7 +917,15 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
                 parent_tool_call_id: tool_call_id.clone(),
             },
             Some(run_queue.clone()),
-        );
+        ) {
+            Ok(created) => created,
+            Err(error) => {
+                return Ok(tinytools::ToolResult::error(format!(
+                    "Sub-agent `{}` was not started: its job could not be registered ({error}).",
+                    self.tool_name
+                )));
+            }
+        };
         tracing::debug!(
             "{LOG_PREFIX} spawn job_id={job_id} subagent_run_id={subagent_run_id} tool_call_id={tool_call_id:?}"
         );

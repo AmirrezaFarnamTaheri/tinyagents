@@ -78,6 +78,7 @@ impl SubAgentJobRegistry {
     #[allow(dead_code)]
     pub(crate) fn create(&self, agent: &str, owner: u64) -> (SubAgentJobId, SteeringHandle) {
         self.create_with_cancellation(agent, owner, CancellationToken::new(), JobLink::default())
+            .expect("a fresh job id registers")
     }
 
     /// Registers a job whose child run observes `cancellation`, so
@@ -88,12 +89,14 @@ impl SubAgentJobRegistry {
         owner: u64,
         cancellation: CancellationToken,
         link: JobLink,
-    ) -> (SubAgentJobId, SteeringHandle) {
+    ) -> Result<(SubAgentJobId, SteeringHandle), SubAgentJobError> {
         self.create_with_cancellation_and_queue(agent, owner, cancellation, link, None)
     }
 
     /// Registers a job with an optional loop-consumed queue for content
-    /// messages routed to a specific lane.
+    /// messages routed to a specific lane. A job the registry could not record
+    /// is an error: its handle would be untracked, so it could be neither
+    /// listed, steered nor cancelled.
     pub(crate) fn create_with_cancellation_and_queue(
         &self,
         agent: &str,
@@ -101,7 +104,7 @@ impl SubAgentJobRegistry {
         cancellation: CancellationToken,
         link: JobLink,
         run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
-    ) -> (SubAgentJobId, SteeringHandle) {
+    ) -> Result<(SubAgentJobId, SteeringHandle), SubAgentJobError> {
         let id = SubAgentJobId(format!("subagent-job-{}", next_seq()));
         let steering =
             SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage));
@@ -117,8 +120,9 @@ impl SubAgentJobRegistry {
             },
         ) {
             tracing::error!("{LOG_PREFIX} register.failed job_id={id} error={error}");
+            return Err(error);
         }
-        (id, steering)
+        Ok((id, steering))
     }
 
     fn insert_job(
