@@ -8,7 +8,7 @@
 
 mod types;
 
-pub(super) use types::ActiveTurn;
+pub(crate) use types::ActiveTurn;
 
 pub use types::{
     EventSink, FailureClassification, FailureClassifier, IngressDecision, IngressPolicy,
