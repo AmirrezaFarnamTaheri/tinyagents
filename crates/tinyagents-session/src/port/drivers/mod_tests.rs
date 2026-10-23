@@ -163,7 +163,10 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
                 .doc["value"],
             "retained"
         );
-        let provider = DriverSessionStores::new(storage_factory(Arc::clone(&backend))).unwrap();
+        let (factory, conditioned) = conditioned_factories();
+        let provider = DriverSessionStores::new(factory)
+            .unwrap()
+            .with_conditioned_storage_factory(conditioned);
         session_store_conformance(&provider).await;
         session_store_isolation_conformance(&provider).await;
     }
@@ -835,8 +838,8 @@ async fn native_provider_returns_stable_bound_ledger_and_rebinds_actor_independe
     );
 }
 
-async fn prepared_restricted_actor_contract(backend: Arc<dyn StorageBackend>) {
-    let factory = storage_factory(Arc::clone(&backend));
+async fn prepared_restricted_actor_contract() {
+    let (factory, conditioned) = conditioned_factories();
     let bootstrap = factory("prepared-actor").unwrap();
     DriverSessionStores::prepare_schema(bootstrap.documents().as_ref())
         .await
@@ -844,6 +847,7 @@ async fn prepared_restricted_actor_contract(backend: Arc<dyn StorageBackend>) {
     let actor =
         DriverSessionStores::new_with_schema_admission(factory, SchemaAdmission::ValidateOnly)
             .unwrap()
+            .with_conditioned_storage_factory(conditioned)
             .recover_on_open(true);
     let opened = actor.try_for_agent("prepared-actor");
     assert!(
@@ -856,8 +860,8 @@ async fn prepared_restricted_actor_contract(backend: Arc<dyn StorageBackend>) {
 }
 
 #[tokio::test]
-async fn prepared_restricted_actor_recovers_and_uses_memory_stores() {
-    prepared_restricted_actor_contract(Arc::new(MemoryStorage::new())).await;
+async fn prepared_restricted_actor_recovers_and_uses_conditioned_stores() {
+    prepared_restricted_actor_contract().await;
 }
 
 #[tokio::test]
