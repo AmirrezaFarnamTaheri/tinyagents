@@ -340,19 +340,20 @@ impl SubAgentJobRegistry {
         applied: Option<AppliedResult>,
     ) {
         let settled = self.settle(id, |job, cancellation_requested| match result {
+            // An owner cancel wins over whatever the run ended with, as in
+            // `mark_budget_overrun`.
+            _ if cancellation_requested => {
+                job.status = SubAgentJobStatus::Cancelled;
+                job.error = Some(TinyAgentsError::Cancelled.to_string());
+            }
             Ok(run) => {
-                if cancellation_requested {
-                    job.status = SubAgentJobStatus::Cancelled;
-                    job.error = Some(TinyAgentsError::Cancelled.to_string());
-                } else {
-                    job.status = SubAgentJobStatus::Completed;
-                    job.output = run.text();
-                    if let Some(applied) = applied {
-                        job.output = Some(applied.text);
-                        job.artifacts.extend(applied.artifact);
-                        job.schema_error = applied.schema_error;
-                        job.artifact_error = applied.artifact_error;
-                    }
+                job.status = SubAgentJobStatus::Completed;
+                job.output = run.text();
+                if let Some(applied) = applied {
+                    job.output = Some(applied.text);
+                    job.artifacts.extend(applied.artifact);
+                    job.schema_error = applied.schema_error;
+                    job.artifact_error = applied.artifact_error;
                 }
             }
             Err(TinyAgentsError::Cancelled) => {
