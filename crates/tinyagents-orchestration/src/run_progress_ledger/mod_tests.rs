@@ -121,8 +121,9 @@ async fn terminal_progress_event_and_status_share_one_atomic_write() {
     let ledger = RunProgressLedger::new(Some(store.clone()), identity());
     ledger.observe(&AgentProgress::TurnStarted).await;
 
-    // With split appends, the completion event is write one and the status
-    // update is write two. The atomic transition should need only one write.
+    // The atomic completion path commits the status and event together before
+    // reaching this injected failure. Split event/status writes would cross
+    // the failure point and leave a terminal event on a still-running row.
     faults.fail_operation_nth("documents.atomic_batch_checked", 4, ErrorKind::Unavailable);
     ledger.observe(&AgentProgress::turn_completed(1)).await;
     faults.clear();
