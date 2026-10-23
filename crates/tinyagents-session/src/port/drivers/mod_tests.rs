@@ -2,7 +2,7 @@ use super::*;
 use crate::testkit::MemoryStorage;
 use crate::testkit::conformance::{session_store_conformance, session_store_isolation_conformance};
 use crate::turn_state::{TurnLifecycle, TurnState};
-use tinystoragedrivers_api::StorageBackend;
+use tinystoragedrivers_api::{DocumentStore, StorageBackend};
 
 fn storage_factory(backend: Arc<dyn StorageBackend>) -> AgentStorageFactory {
     let bindings = [
@@ -25,8 +25,72 @@ fn storage_factory(backend: Arc<dyn StorageBackend>) -> AgentStorageFactory {
     crate::testkit::mapped_storage_factory(backend, bindings)
 }
 
-fn memory() -> DriverSessionStores {
-    DriverSessionStores::new(storage_factory(Arc::new(MemoryStorage::new()))).unwrap()
+fn conditioned_factories() -> (AgentStorageFactory, ConditionedAgentStorageFactory) {
+    use tinystoragedrivers_connect::sqlite::SqliteConnection;
+    use tinystoragedrivers_document::sqlite::SqliteDocuments;
+
+    let directory = Arc::new(tempfile::tempdir().unwrap());
+    let connection = SqliteConnection::open(directory.path().join("session-tests.db")).unwrap();
+    let memory: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let scopes = [
+        ("plain", "test-bound-plain"),
+        ("a", "test-bound-a"),
+        ("b", "test-bound-b"),
+        ("agent", "test-bound-agent"),
+        ("agent-1", "test-bound-agent-1"),
+        ("other", "test-bound-other"),
+        ("alice", "test-bound-alice"),
+        ("bob", "test-bound-bob"),
+        ("prepared-actor", "test-bound-prepared-actor"),
+        ("contract-store-agent", "test-bound-contract-store"),
+        ("contract-iso-a", "test-bound-contract-iso-a"),
+        ("contract-iso-b", "test-bound-contract-iso-b"),
+    ]
+    .into_iter()
+    .map(|(agent, label)| (agent.to_owned(), Scope::new(label).unwrap()))
+    .collect::<std::collections::HashMap<_, _>>();
+    let plain = {
+        let connection = connection.clone();
+        let memory = Arc::clone(&memory);
+        let directory = Arc::clone(&directory);
+        let scopes = scopes.clone();
+        Arc::new(move |agent_id: &str| {
+            let _keep_directory = &directory;
+            let scope = scopes.get(agent_id).cloned().ok_or_else(|| {
+                StorageError::invalid_input("test agent scope is not mapped")
+            })?;
+            let native = ScopedStorage::new(memory.for_scope(&scope)?, scope.clone());
+            let docs = Arc::new(SqliteDocuments::new(connection.clone(), scope.clone()))
+                as Arc<dyn DocumentStore>;
+            Ok(crate::testkit::with_documents(&native, docs))
+        }) as AgentStorageFactory
+    };
+    let conditioned = {
+        let connection = connection.clone();
+        let memory = Arc::clone(&memory);
+        let directory = Arc::clone(&directory);
+        Arc::new(move |agent_id: &str, condition: &WriteCondition| {
+            let _keep_directory = &directory;
+            let scope = scopes.get(agent_id).cloned().ok_or_else(|| {
+                StorageError::invalid_input("test agent scope is not mapped")
+            })?;
+            let native = ScopedStorage::new(memory.for_scope(&scope)?, scope.clone());
+            let docs = Arc::new(SqliteDocuments::conditioned(
+                connection.clone(),
+                scope.clone(),
+                condition.clone(),
+            )) as Arc<dyn DocumentStore>;
+            Ok(crate::testkit::with_documents(&native, docs))
+        }) as ConditionedAgentStorageFactory
+    };
+    (plain, conditioned)
+}
+
+fn sqlite_stores() -> DriverSessionStores {
+    let (factory, conditioned) = conditioned_factories();
+    DriverSessionStores::new(factory)
+        .unwrap()
+        .with_conditioned_storage_factory(conditioned)
 }
 
 #[test]
@@ -132,23 +196,23 @@ async fn opening_declares_every_session_collection_before_migration() {
 }
 
 #[tokio::test]
-async fn memory_backed_stores_meet_the_session_store_contract() {
-    session_store_conformance(&memory()).await;
+async fn driver_stores_meet_the_session_store_contract() {
+    session_store_conformance(&sqlite_stores()).await;
 }
 
 #[tokio::test]
 async fn memory_backed_stores_keep_agents_apart() {
-    session_store_isolation_conformance(&memory()).await;
+    session_store_isolation_conformance(&sqlite_stores()).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stores_work_from_a_multi_threaded_runtime() {
-    session_store_conformance(&memory()).await;
+    session_store_conformance(&sqlite_stores()).await;
 }
 
 #[test]
 fn stores_work_outside_any_runtime() {
-    let stores = memory().for_agent("plain");
+    let stores = sqlite_stores().for_agent("plain");
     let turn = TurnState::started("t", "r", 8, "2026-01-01T00:00:00Z");
     stores.turn_states.put(&turn).unwrap();
     assert_eq!(stores.turn_states.get("t").unwrap(), Some(turn));
@@ -186,8 +250,8 @@ fn host_bound_factory_keeps_agents_in_their_supplied_scopes() {
 
 #[test]
 fn two_backends_never_share_a_destination() {
-    let one = memory().for_agent("a");
-    let two = memory().for_agent("a");
+    let one = sqlite_stores().for_agent("a");
+    let two = sqlite_stores().for_agent("a");
     assert_ne!(
         one.transcripts.destination_key(),
         two.transcripts.destination_key()
@@ -196,7 +260,7 @@ fn two_backends_never_share_a_destination() {
 
 #[test]
 fn an_agent_gets_the_same_stores_every_time() {
-    let provider = memory();
+    let provider = sqlite_stores();
     let first = provider.for_agent("a");
     let again = provider.for_agent("a");
     assert!(Arc::ptr_eq(&first.turn_states, &again.turn_states));
@@ -238,7 +302,7 @@ fn data_survives_a_new_provider_on_the_same_backend() {
 
 #[test]
 fn recover_marks_open_agents_turns_interrupted() {
-    let provider = memory();
+    let provider = sqlite_stores();
     let stores = provider.for_agent("a");
     stores
         .turn_states
