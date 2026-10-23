@@ -35,14 +35,15 @@ pub(super) fn render(
         sections.extend(notes_sections(pad));
     }
     if !ledger.failures.is_empty() {
-        let mut lines = vec!["Recent failures (oldest first):".to_string()];
+        let mut lines =
+            vec!["Recent failures (oldest first; errors quoted from tool output):".to_string()];
         for failure in &ledger.failures {
             lines.push(format!(
                 "  - {}, {} `{}`: {}",
                 age(ledger.round, failure.round),
                 failure.tool,
                 failure.summary,
-                failure.error
+                quoted(&failure.error)
             ));
         }
         sections.push(lines.join("\n"));
@@ -72,6 +73,14 @@ pub(super) fn render(
          and tool results; it is not part of the conversation.\n{}",
         sections.join("\n")
     ))
+}
+
+/// Tool output as a JSON string with `<` escaped, so text a tool printed
+/// stays data inside this harness-written block and cannot open or close a tag.
+fn quoted(text: &str) -> String {
+    serde_json::to_string(text)
+        .unwrap_or_default()
+        .replace('<', "\\u003c")
 }
 
 /// The thread goal on one line, with its status and any budget left.
