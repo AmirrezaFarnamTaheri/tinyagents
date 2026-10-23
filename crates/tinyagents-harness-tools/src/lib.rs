@@ -36,3 +36,6 @@ mod time_parse_tests;
 #[cfg(test)]
 #[path = "time_tests.rs"]
 mod time_tests;
+#[cfg(test)]
+#[path = "wait_tests.rs"]
+mod wait_tests;
