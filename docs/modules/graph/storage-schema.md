@@ -21,9 +21,10 @@ the steps chain `1 -> 2 -> 3 -> 4` (declared version 4). A migrated row carries
 the version its step ends at (`graph` 2, `delegation` 3, `flows` 4); the body
 shape is the same.
 
-`tsd.leases` and `tsd.kv` belong to `tsd`, so the host calls
-`import_legacy_leases(storage)` and `import_legacy_task_cache(storage)` once per
-scope after `Registry::migrate`. Both record completion in `tsd.migrations`.
+`tsd.leases` and `tsd.kv` belong to `tsd`, so `open_storage(scoped)` calls
+`import_legacy_leases` and `import_legacy_task_cache` after `Registry::migrate`.
+Both record completion in `tsd.migrations`. `DriverCheckpointer::open(scoped, ns)`
+runs `open_storage` first; the sync `new`/`with_namespace` do not.
 
 Breaking: `DriverCheckpointer::with_prefix` is now `with_namespace`, and
 `DriverTaskCache::with_collection` is `with_namespace`. A task cache needs a

@@ -38,8 +38,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_storage_kit::{
-    DocumentStore, DocumentStoreExt, ErrorKind, Filter, Leases, Query, Repo, Sort, StorageError,
-    Versioned, WriteOptions,
+    DocumentStore, DocumentStoreExt, ErrorKind, Filter, Leases, Query, Repo, ScopedStorage, Sort,
+    StorageError, Versioned, WriteOptions,
 };
 use tokio::sync::OnceCell;
 
@@ -100,8 +100,32 @@ impl<State> std::fmt::Debug for DriverCheckpointer<State> {
 }
 
 impl<State> DriverCheckpointer<State> {
+    /// Open the scope's graph storage (running the graph's migrations once per
+    /// scope, see [`crate::storage::open_storage`]) and store checkpoints in it
+    /// under the namespace `ns`. Prefer this over [`Self::with_namespace`].
+    ///
+    /// # Errors
+    ///
+    /// [`TinyAgentsError::Checkpoint`] when the migration fails.
+    pub async fn open(storage: ScopedStorage, ns: impl Into<String>) -> Result<Self> {
+        let storage = crate::storage::open_storage(storage)
+            .await
+            .map_err(map_error)?;
+        Ok(Self::with_namespace(Arc::clone(storage.documents()), ns))
+    }
+
+    /// [`Self::open`] under the namespace [`DEFAULT_NAMESPACE`] (`graph`).
+    ///
+    /// # Errors
+    ///
+    /// [`TinyAgentsError::Checkpoint`] when the migration fails.
+    pub async fn open_default(storage: ScopedStorage) -> Result<Self> {
+        Self::open(storage, DEFAULT_NAMESPACE).await
+    }
+
     /// Store checkpoints in the `graph.*` collections of `docs`, under the
-    /// namespace [`DEFAULT_NAMESPACE`] (`graph`).
+    /// namespace [`DEFAULT_NAMESPACE`] (`graph`). The caller must have opened
+    /// the scope's graph storage first; prefer [`Self::open_default`].
     pub fn new(docs: Arc<dyn DocumentStore>) -> Self {
         Self::with_namespace(docs, DEFAULT_NAMESPACE)
     }
@@ -109,7 +133,8 @@ impl<State> DriverCheckpointer<State> {
     /// Store checkpoints in the `graph.*` collections of `docs` under the
     /// namespace `ns`, so several independent users of the checkpointer (the
     /// delegation graph as `delegation`, workflows as `flows`) can share one
-    /// backend without meeting.
+    /// backend without meeting. The caller must have opened the scope's graph
+    /// storage first; prefer [`Self::open`].
     ///
     /// # Panics
     ///
