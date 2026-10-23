@@ -72,11 +72,16 @@ fn registering_over_an_existing_alias_name_is_diagnosed_as_shadowing() {
     // A healthy registry so far: no diagnostics.
     assert!(reg.diagnostics().is_empty());
 
-    // Now register a *distinct* model under the name `fast`. `ensure_absent`
-    // only checks canonical component metadata (not the alias table), so this
-    // is allowed — but it leaves the `fast` alias shadowed and unreachable.
-    reg.register_model("fast", Arc::new(MockModel::constant("distinct")))
-        .expect("registering over an alias name is permitted");
+    // `register_*` refuses a name that is already an alias, so it can never
+    // shadow one silently.
+    assert!(
+        reg.register_model("fast", Arc::new(MockModel::constant("distinct")))
+            .is_err(),
+        "registering over an alias name is refused"
+    );
+    // An explicit `replace_*` still can (it never checks for an existing
+    // name), and that leaves the `fast` alias shadowed and unreachable.
+    reg.replace_model("fast", Arc::new(MockModel::constant("distinct")));
 
     // The component now takes precedence for `fast`.
     assert!(reg.has(ComponentKind::Model, "fast"));
