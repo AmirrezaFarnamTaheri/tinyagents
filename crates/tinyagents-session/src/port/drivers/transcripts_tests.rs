@@ -2,7 +2,7 @@ use super::*;
 use crate::testkit::MemoryStorage;
 use crate::testkit::conformance::transcript_history_conformance;
 use tinyagents_storage_kit::{Precondition, Scope, WriteCondition, WriteOptions};
-use tinystoragedrivers_types::{CollectionSpec, Filter, Query, Sort};
+use tinystoragedrivers_types::{Filter, Query, Sort};
 
 pub(in crate::port::drivers) fn meta(thread_id: &str) -> TranscriptMeta {
     let mut meta = discovered_seed("planner");
