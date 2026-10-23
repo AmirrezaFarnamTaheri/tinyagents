@@ -27,6 +27,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 tinyagents-storage-kit = { workspace = true }
+tinyagents-session = { path = "../tinyagents-session", version = "3.0.0", features = ["testkit"] }
 tinystoragedrivers-api = { workspace = true }
 tinystoragedrivers = { workspace = true }
 tinystoragedrivers-testkit = { workspace = true }
