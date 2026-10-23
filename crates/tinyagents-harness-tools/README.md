@@ -11,7 +11,8 @@ feature enables the generic job and message tools and brings in
 `tinyagents-orchestration` and its task registry dependencies. Time,
 clarification, plan-exit, per-call binding, and thread-lock support are
 available without optional features. The `state-block` feature enables the
-run-state middleware and its required `goals` and `todos` modules.
+run-state middleware and its required `goals` and `todos` modules. The
+`json-schema` feature enables schema derives on tool-owned data types.
 
 ## Public modules and tools
 
