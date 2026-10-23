@@ -4,8 +4,10 @@ use tinyagents_harness::progress::{AgentProgress, SubagentUsage};
 use tinyagents_session::run_ledger::{
     AgentRunKind, AgentRunStatus, DriverRunLedger, RunEventListRequest, RunLedgerStore,
 };
-use tinyagents_storage_kit::{Scope, StorageBackend};
-use tinystoragedrivers_testkit::MemoryBackend;
+use tinyagents_storage_kit::{
+    DocumentStore, ErrorKind, Scope, ScopedStorage, Storage, StorageBackend,
+};
+use tinystoragedrivers_testkit::{Failing, FaultPlan, MemoryBackend};
 
 fn identity() -> RunProgressIdentity {
     RunProgressIdentity {
@@ -94,6 +96,67 @@ async fn records_progress_with_stable_run_identity_and_terminal_status() {
     );
     assert_eq!(events[1].payload["call_id"], "call-1");
     assert_eq!(events[1].payload["arguments"]["path"], "notes.md");
+}
+
+#[tokio::test]
+async fn terminal_progress_event_and_status_share_one_atomic_write() {
+    let backend = MemoryBackend::new();
+    let scope = Scope::new("local").expect("scope");
+    let scoped = backend.for_scope(&scope).expect("scoped storage");
+    let faults = FaultPlan::new();
+    let documents = Arc::new(Failing::with_plan(
+        Arc::clone(scoped.documents()),
+        faults.clone(),
+    ));
+    let scoped = ScopedStorage::new(
+        Storage::new(
+            documents,
+            Arc::clone(scoped.streams()),
+            Arc::clone(scoped.kv()),
+            Arc::clone(scoped.blobs()),
+            Arc::clone(scoped.queues()),
+            Arc::clone(scoped.secrets()),
+        ),
+        scope,
+    );
+    let store = Arc::new(DriverRunLedger::new(scoped));
+    let ledger = RunProgressLedger::new(Some(store.clone()), identity());
+    ledger.observe(&AgentProgress::TurnStarted).await;
+
+    // With split appends, the completion event is write one and the status
+    // update is write two. The atomic transition should need only one write.
+    faults.fail_operation_nth(
+        "documents.atomic_batch_checked",
+        2,
+        ErrorKind::Unavailable,
+    );
+    ledger
+        .observe(&AgentProgress::turn_completed(1))
+        .await;
+    faults.clear();
+
+    let run = store
+        .get_agent_run("request-1")
+        .await
+        .expect("read run")
+        .expect("run exists");
+    assert_eq!(run.status, AgentRunStatus::Completed);
+    let events = store
+        .list_recent_run_events(&RunEventListRequest {
+            run_id: "request-1".into(),
+            after_sequence: None,
+            limit: None,
+        })
+        .await
+        .expect("read events")
+        .events;
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        ["turn_started", "turn_completed"]
+    );
 }
 
 #[tokio::test]
@@ -199,4 +262,41 @@ async fn subagent_context_correlates_each_task_until_its_terminal_event() {
         .await;
     assert_eq!(after_finish.parent_call_id, None);
     assert_eq!(ledger.events_seen(), 4);
+}
+
+#[tokio::test]
+async fn child_model_completion_keeps_its_parent_call_context() {
+    let ledger = RunProgressLedger::new(None, identity());
+    ledger
+        .observe(&AgentProgress::SubagentSpawned {
+            agent_id: "researcher".into(),
+            task_id: "task-1".into(),
+            mode: "typed".into(),
+            dedicated_thread: false,
+            prompt_chars: 10,
+            worker_thread_id: None,
+            display_name: None,
+            prompt: "find a source".into(),
+            parent_call_id: Some("parent-call".into()),
+        })
+        .await;
+
+    let completion = ledger
+        .observe(&AgentProgress::ModelCallCompleted {
+            model: "model-1".into(),
+            provider_id: "provider-1".into(),
+            subagent_task_id: Some("task-1".into()),
+            input: None,
+            output: None,
+            iteration: 1,
+            input_tokens: 10,
+            output_tokens: 4,
+            cached_input_tokens: 0,
+            cache_creation_tokens: 0,
+            reasoning_tokens: 0,
+            cost_usd: None,
+        })
+        .await;
+
+    assert_eq!(completion.parent_call_id.as_deref(), Some("parent-call"));
 }
