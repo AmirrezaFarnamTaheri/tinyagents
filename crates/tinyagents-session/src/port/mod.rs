@@ -75,6 +75,25 @@ pub type AgentStorageFactory = Arc<
         + Sync,
 >;
 
+/// Host-owned opener for storage conditioned on an exact durable lease.
+///
+/// The session driver uses this only for the first entry written to a
+/// reserved transcript generation. The returned scope must be the same
+/// agent scope supplied by [`AgentStorageFactory`], and the backend must
+/// enforce the condition atomically on every mutation. Backends that cannot
+/// provide that guarantee must return an error.
+pub type ConditionedAgentStorageFactory = Arc<
+    dyn Fn(
+            &str,
+            &tinyagents_storage_kit::WriteCondition,
+        ) -> Result<
+            tinyagents_storage_kit::ScopedStorage,
+            tinystoragedrivers_types::StorageError,
+        >
+        + Send
+        + Sync,
+>;
+
 use crate::turn_state::{TurnLifecycle, TurnState};
 
 /// Hands out each agent's stores. Installed once per runtime by the host.

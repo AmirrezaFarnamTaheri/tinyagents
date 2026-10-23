@@ -40,8 +40,8 @@ use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::{CollectionSpec, StorageError};
 
 use super::{
-    AgentStorageFactory, AgentStores, SessionStoreLease, SessionStoreLeaseError,
-    SessionStoreProvider,
+    AgentStorageFactory, AgentStores, ConditionedAgentStorageFactory, SessionStoreLease,
+    SessionStoreLeaseError, SessionStoreProvider,
 };
 
 pub use rebound::{RebindableSessionStores, SessionStoreRegistry};
@@ -56,6 +56,7 @@ const KV_OWNER: &str = "session";
 /// A [`SessionStoreProvider`] that obtains already-bound storage from its host.
 pub struct DriverSessionStores {
     factory: AgentStorageFactory,
+    conditioned_factory: Option<ConditionedAgentStorageFactory>,
     bridge: Blocking,
     agents: Mutex<HashMap<String, AgentStores>>,
     recover_on_open: bool,
@@ -117,6 +118,7 @@ impl DriverSessionStores {
     ) -> Self {
         Self {
             factory,
+            conditioned_factory: None,
             bridge,
             agents: Mutex::new(HashMap::new()),
             recover_on_open: false,
@@ -125,6 +127,18 @@ impl DriverSessionStores {
             recovered: Mutex::new(HashSet::new()),
             id: uuid::Uuid::new_v4(),
         }
+    }
+
+    /// Enables native lease-conditioned writes for the first entry in a
+    /// reserved transcript generation. The factory must open the same agent
+    /// scope as `factory`, with the supplied condition enforced atomically.
+    /// Without this adapter, generation writes fail closed.
+    pub fn with_conditioned_storage_factory(
+        mut self,
+        factory: ConditionedAgentStorageFactory,
+    ) -> Self {
+        self.conditioned_factory = Some(factory);
+        self
     }
 
     /// Marks an agent's in-flight turns interrupted the first time this
@@ -238,7 +252,7 @@ impl DriverSessionStores {
                 Ok::<_, StorageError>(())
             })??;
         }
-        let (stores, turn_states) = self.build(&scoped);
+        let (stores, turn_states) = self.build(agent_id, &scoped);
         if self.recover_on_open {
             // Fail closed: stores whose recovery did not run must not start
             // turns a retried sweep would then mistake for crash residue.
@@ -300,7 +314,11 @@ impl DriverSessionStores {
     }
 
     /// Builds public stores and retains their exact typed recovery handle.
-    fn build(&self, scoped: &ScopedStorage) -> (AgentStores, Arc<DriverTurnStates>) {
+    fn build(
+        &self,
+        agent_id: &str,
+        scoped: &ScopedStorage,
+    ) -> (AgentStores, Arc<DriverTurnStates>) {
         let docs = Arc::clone(scoped.documents());
         // The provider's own id keeps two providers with the same driver and
         // scope from claiming one destination; unlike an address, it is
@@ -311,13 +329,38 @@ impl DriverSessionStores {
             self.bridge.clone(),
             self.schema_admission,
         ));
-        let stores = AgentStores {
-            transcripts: Arc::new(DriverTranscriptLocator::new_with_schema_admission(
+        let transcripts = match self.conditioned_factory.as_ref() {
+            Some(factory) => {
+                let factory = Arc::clone(factory);
+                let agent_id = agent_id.to_owned();
+                let expected_scope = scoped.scope().clone();
+                let opener: transcripts::ConditionedEntryOpener = Arc::new(move |condition| {
+                    let conditioned = factory(&agent_id, condition)?;
+                    if conditioned.scope().as_str() != expected_scope.as_str() {
+                        return Err(StorageError::invalid_input(
+                            "conditioned transcript storage changed the agent scope",
+                        ));
+                    }
+                    Ok(Arc::clone(conditioned.documents()))
+                });
+                Arc::new(DriverTranscriptLocator::new_with_conditioned_entry_opener(
+                    Arc::clone(&docs),
+                    self.bridge.clone(),
+                    label,
+                    self.schema_admission,
+                    scoped.scope().clone(),
+                    opener,
+                ))
+            }
+            None => Arc::new(DriverTranscriptLocator::new_with_schema_admission(
                 Arc::clone(&docs),
                 self.bridge.clone(),
                 label,
                 self.schema_admission,
             )),
+        };
+        let stores = AgentStores {
+            transcripts,
             turn_states: turn_states.clone(),
             kv: Arc::new(DriverStore::with_owner_and_schema_admission(
                 docs,
