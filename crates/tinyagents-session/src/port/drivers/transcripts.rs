@@ -811,6 +811,7 @@ impl std::fmt::Debug for DriverTranscriptLocator {
 }
 
 impl DriverTranscriptLocator {
+    #[cfg(test)]
     pub(crate) fn documents(&self) -> &Arc<dyn DocumentStore> {
         &self.docs
     }
