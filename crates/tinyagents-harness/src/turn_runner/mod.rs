@@ -8,6 +8,8 @@
 
 mod types;
 
+pub(super) use types::ActiveTurn;
+
 pub use types::{
     EventSink, FailureClassification, FailureClassifier, IngressDecision, IngressPolicy,
     IngressStage, QueueDisposition, ReplyStore, RequeuePayload, ScopeKey, Summarizer,

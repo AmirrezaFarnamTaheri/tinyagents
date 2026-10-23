@@ -340,11 +340,11 @@ pub enum TurnRunnerError {
 }
 
 #[derive(Clone)]
-struct ActiveTurn<P> {
-    request_id: String,
-    cancel: crate::CancellationToken,
-    generation: u64,
-    queue: Arc<RunQueue<TurnRequest<P>>>,
+pub(super) struct ActiveTurn<P> {
+    pub(super) request_id: String,
+    pub(super) cancel: crate::CancellationToken,
+    pub(super) generation: u64,
+    pub(super) queue: Arc<RunQueue<TurnRequest<P>>>,
 }
 
 type ThreadLockKey = (ScopeKey, String);
@@ -372,7 +372,7 @@ pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value> {
     config: TurnRunnerConfig,
     locks: ThreadLocks,
     parallel_queues: ParallelQueueMap<P>,
-    active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<P>>>,
+    pub(super) active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<P>>>,
     parallel_active: Mutex<HashMap<(ScopeKey, String, String), crate::CancellationToken>>,
     next_generation: std::sync::atomic::AtomicU64,
 }
@@ -913,7 +913,7 @@ where
         Err(TurnRunnerError::Failed(message))
     }
 
-    async fn finalize_generation(
+    pub(super) async fn finalize_generation(
         &self,
         scope: &ScopeKey,
         thread_id: &str,
