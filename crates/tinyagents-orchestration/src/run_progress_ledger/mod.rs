@@ -12,10 +12,12 @@ pub use types::{ProgressLedgerContext, RunProgressIdentity, RunProgressLedger};
 
 use serde_json::{Map, Value};
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use tinyagents_harness::progress::AgentProgress;
 use tinyagents_session::run_ledger::{
     AgentRunKind, AgentRunStatus, AgentRunUpsert, RunEventAppend, RunLedgerStore,
 };
+use tokio::sync::Mutex;
 use types::LedgerState;
 
 impl RunProgressLedger {
