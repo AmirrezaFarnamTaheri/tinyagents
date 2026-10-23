@@ -498,19 +498,22 @@ async fn trim_keeps_the_newest_messages_and_their_index_rows() {
         .record_session_start(start("other", "agent", "Agent"))
         .await
         .unwrap();
-    for n in 1..=5 {
+    // More than nine rows, so "newest" must follow the numeric id, not the
+    // text order of an id or of the content (`message9` > `message12`).
+    for n in 1..=12 {
         say(&ledger, "s", &format!("message{n}")).await;
     }
     say(&ledger, "other", "bystander").await;
-    assert_eq!(ledger.trim_session_messages("s", 2).await.unwrap(), 3);
+    assert_eq!(ledger.trim_session_messages("s", 2).await.unwrap(), 10);
     let kept = ledger.list_messages("s", None).await.unwrap();
     assert_eq!(
         kept.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(),
-        ["message4", "message5"]
+        ["message11", "message12"]
     );
     // Trimmed text is no longer findable; kept text and other sessions are.
-    assert!(search(&ledger, "message1").await.is_empty());
-    assert_eq!(search(&ledger, "message5").await, ["s"]);
+    assert!(search(&ledger, "message10").await.is_empty());
+    assert!(search(&ledger, "message9").await.is_empty());
+    assert_eq!(search(&ledger, "message12").await, ["s"]);
     assert_eq!(search(&ledger, "bystander").await, ["other"]);
     assert_eq!(ledger.list_messages("other", None).await.unwrap().len(), 1);
     assert_eq!(ledger.trim_session_messages("s", 10).await.unwrap(), 0);
