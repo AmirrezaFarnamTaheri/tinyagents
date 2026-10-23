@@ -18,18 +18,58 @@ fn message(role: &str, content: &str) -> TranscriptMessage {
     serde_json::from_value(json!({ "role": role, "content": content })).unwrap()
 }
 
-fn docs() -> Arc<dyn DocumentStore> {
-    let storage = MemoryStorage::new();
-    Arc::clone(
-        storage
-            .for_scope(&Scope::new("local").unwrap())
-            .unwrap()
-            .documents(),
-    )
+struct TestDocs {
+    docs: Arc<dyn DocumentStore>,
+    connection: tinystoragedrivers_connect::sqlite::SqliteConnection,
+    scope: Scope,
+    _directory: tempfile::TempDir,
 }
 
-fn locator(docs: &Arc<dyn DocumentStore>) -> DriverTranscriptLocator {
-    DriverTranscriptLocator::new(Arc::clone(docs), Blocking::new().unwrap(), "memory://test")
+impl std::ops::Deref for TestDocs {
+    type Target = Arc<dyn DocumentStore>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.docs
+    }
+}
+
+fn docs() -> TestDocs {
+    use tinystoragedrivers_connect::sqlite::SqliteConnection;
+    use tinystoragedrivers_document::sqlite::SqliteDocuments;
+
+    let directory = tempfile::tempdir().unwrap();
+    let connection = SqliteConnection::open(directory.path().join("transcripts.db")).unwrap();
+    let scope = Scope::new("local").unwrap();
+    let docs = Arc::new(SqliteDocuments::new(connection.clone(), scope.clone()))
+        as Arc<dyn DocumentStore>;
+    TestDocs {
+        docs,
+        connection,
+        scope,
+        _directory: directory,
+    }
+}
+
+fn locator(docs: &TestDocs) -> DriverTranscriptLocator {
+    use tinystoragedrivers_document::sqlite::SqliteDocuments;
+
+    let connection = docs.connection.clone();
+    let scope = docs.scope.clone();
+    let opener: ConditionedEntryOpener = Arc::new(move |condition| {
+        Ok(Arc::new(SqliteDocuments::conditioned(
+            connection.clone(),
+            scope.clone(),
+            condition.clone(),
+        )) as Arc<dyn DocumentStore>)
+    });
+    DriverTranscriptLocator::new_with_conditioned_entry_opener(
+        Arc::clone(&docs.docs),
+        Blocking::new().unwrap(),
+        "sqlite://test",
+        tinyagents_harness::store::SchemaAdmission::Declare,
+        docs.scope.clone(),
+        opener,
+    )
 }
 
 /// Lets the reservation of `stem` lapse, as if its owner stopped long ago.
