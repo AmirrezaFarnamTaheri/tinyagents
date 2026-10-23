@@ -1,22 +1,14 @@
 use super::*;
-use crate::testkit::MemoryStorage;
 use std::sync::Arc;
 
 use crate::port::drivers::transcripts::tests::meta;
 use crate::transcript::TranscriptMessage;
-use tinyagents_storage_kit::{Blocking, DocumentStore, Scope};
+use crate::transcript::test_locator::driver_locator;
 
 const THREAD: &str = "t";
 
-fn locator() -> DriverTranscriptLocator {
-    let storage = MemoryStorage::new();
-    let docs: Arc<dyn DocumentStore> = Arc::clone(
-        storage
-            .for_scope(&Scope::new("local").unwrap())
-            .unwrap()
-            .documents(),
-    );
-    DriverTranscriptLocator::new(docs, Blocking::new().unwrap(), "memory://adoption")
+fn locator() -> Arc<dyn TranscriptLocator> {
+    driver_locator()
 }
 
 /// A root of `THREAD` under `stem`, written with `meta` (as an import does).

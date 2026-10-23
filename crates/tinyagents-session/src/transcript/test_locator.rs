@@ -14,9 +14,37 @@ use super::{
 };
 use crate::port::SessionStoreProvider;
 
-/// An empty driver-backed locator (the production store, over memory).
+/// An empty driver-backed locator with native conditional writes available.
 pub(crate) fn driver_locator() -> Arc<dyn TranscriptLocator> {
-    crate::testkit::in_memory_transcript()
+    use crate::port::drivers::DriverTranscriptLocator;
+    use tinyagents_harness::store::SchemaAdmission;
+    use tinyagents_storage_kit::{Blocking, Scope, WriteCondition};
+    use tinystoragedrivers_api::DocumentStore;
+    use tinystoragedrivers_connect::sqlite::SqliteConnection;
+    use tinystoragedrivers_document::sqlite::SqliteDocuments;
+
+    let directory = tempfile::tempdir().expect("create transcript fixture database");
+    let connection = SqliteConnection::open(directory.path().join("transcripts.db"))
+        .expect("open transcript fixture database");
+    let scope = Scope::new("transcript-tests").expect("valid test scope");
+    let docs = Arc::new(SqliteDocuments::new(connection.clone(), scope.clone()))
+        as Arc<dyn DocumentStore>;
+    let opener = Arc::new(move |condition: &WriteCondition| {
+        let _keep_directory = &directory;
+        Ok(Arc::new(SqliteDocuments::conditioned(
+            connection.clone(),
+            scope.clone(),
+            condition.clone(),
+        )) as Arc<dyn DocumentStore>)
+    });
+    Arc::new(DriverTranscriptLocator::new_with_conditioned_entry_opener(
+        docs,
+        Blocking::new().expect("start transcript test bridge"),
+        "sqlite://transcript-tests",
+        SchemaAdmission::Declare,
+        scope,
+        opener,
+    ))
 }
 
 /// A fixture locator holding parsed transcript rows from `<workspace>`.

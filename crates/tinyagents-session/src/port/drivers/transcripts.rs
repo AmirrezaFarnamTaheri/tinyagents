@@ -311,7 +311,7 @@ struct HistoryInner {
     replay: Mutex<Replay>,
 }
 
-pub(super) type ConditionedEntryOpener = Arc<
+pub(crate) type ConditionedEntryOpener = Arc<
     dyn Fn(&WriteCondition) -> Result<Arc<dyn DocumentStore>, StorageError> + Send + Sync,
 >;
 
@@ -840,7 +840,7 @@ impl DriverTranscriptLocator {
 
     /// Transcripts whose first entry in a reserved generation is opened with
     /// the lease's native atomic write condition.
-    pub(super) fn new_with_conditioned_entry_opener(
+    pub(crate) fn new_with_conditioned_entry_opener(
         docs: Arc<dyn DocumentStore>,
         bridge: Blocking,
         label: impl Into<String>,

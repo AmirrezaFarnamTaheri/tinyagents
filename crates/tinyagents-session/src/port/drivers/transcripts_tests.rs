@@ -65,7 +65,7 @@ fn locator(docs: &TestDocs) -> DriverTranscriptLocator {
     DriverTranscriptLocator::new_with_conditioned_entry_opener(
         Arc::clone(&docs.docs),
         Blocking::new().unwrap(),
-        "sqlite://test",
+        "memory://test",
         tinyagents_harness::store::SchemaAdmission::Declare,
         docs.scope.clone(),
         opener,
