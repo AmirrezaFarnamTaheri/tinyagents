@@ -153,27 +153,10 @@ pub enum TerminalEvent {
         request_id: String,
         message: String,
         class: String,
-        /// The raw host or runner error the failure was classified from, for
-        /// hosts that render richer copy than `class` and `message` carry.
-        error: String,
     },
     Cancelled {
         request_id: String,
     },
-}
-
-/// Neutral failure details passed from a host classifier to its event sink.
-/// Hosts may attach product-owned localized copy without putting channel or UI
-/// policy in the shared runner. The optional copy fields default when older
-/// serialized records omit them.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FailureClassification {
-    pub class: String,
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub copy_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub copy_params: Option<serde_json::Value>,
 }
 
 /// Activity updates sent by the host so the idle guard distinguishes silence
@@ -183,6 +166,21 @@ pub enum TurnSignal {
     Progress(Box<AgentProgress>),
     WorkStarted,
     WorkFinished,
+}
+
+/// Host-defined metadata for a classified turn failure.
+///
+/// The runner owns the stable class and user-facing message. Hosts can attach
+/// structured details for their own presentation layer without teaching the
+/// harness about host-specific localization or wire formats.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FailureClassification {
+    /// Stable machine-readable failure class.
+    pub class: String,
+    /// User-facing summary for the failed turn.
+    pub message: String,
+    /// Optional host-defined structured presentation details.
+    pub details: Option<serde_json::Value>,
 }
 
 #[async_trait]
@@ -266,7 +264,7 @@ pub trait FailureClassifier: Send + Sync {
         FailureClassification {
             class,
             message,
-            ..FailureClassification::default()
+            details: None,
         }
     }
 }
@@ -936,7 +934,6 @@ where
                         request_id: queued_request.request_id.clone(),
                         message: queued_message,
                         class: classification.class.clone(),
-                        error: error.clone(),
                     },
                     queued_classification,
                 )
@@ -949,7 +946,6 @@ where
                     request_id: request.request_id.clone(),
                     message: classification.message.clone(),
                     class: classification.class.clone(),
-                    error: error.clone(),
                 },
                 classification.clone(),
             )

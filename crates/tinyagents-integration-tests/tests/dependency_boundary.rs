@@ -46,23 +46,23 @@ const KNOWN_GENERIC_CLAUDE_CODE_CHAT_MESSAGE_DEBT: &[(&str, usize)] = &[
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/driver.rs",
-        314,
+        323,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/driver_tests.rs",
-        46,
+        64,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/driver_tests.rs",
-        457,
+        483,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/driver_tests.rs",
-        628,
+        672,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/driver_tests.rs",
-        696,
+        741,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
@@ -266,31 +266,31 @@ const KNOWN_GENERIC_CLAUDE_CODE_CHAT_MESSAGE_DEBT: &[(&str, usize)] = &[
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        221,
+        230,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        293,
+        303,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        360,
+        370,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        394,
+        404,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-        75,
+        93,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-        76,
+        94,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-        77,
+        95,
     ),
 ];
 
@@ -669,6 +669,36 @@ fn host_independent_crates_do_not_depend_on_or_name_openhuman_types() {
     {
         panic!("{diff}");
     }
+}
+
+#[test]
+fn harness_tools_dependencies_stay_within_the_harness_boundary() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("integration crate is nested under the TinyAgents workspace");
+    let manifest = fs::read_to_string(workspace.join("crates/tinyagents-harness-tools/Cargo.toml"))
+        .expect("harness-tools manifest is readable");
+    let dependencies = manifest
+        .split("[dependencies]")
+        .nth(1)
+        .and_then(|section| section.split("[features]").next())
+        .expect("harness-tools has a dependencies section");
+    assert!(dependencies.contains("tinyagents-harness ="));
+    assert!(dependencies.contains("tinytools ="));
+    assert!(!dependencies.contains("tinyagents-graph ="));
+    assert!(!dependencies.contains("tinyagents-runtime ="));
+    let inference_dep = dependencies
+        .lines()
+        .find(|line| line.trim_start().starts_with("tinyinference-llm ="))
+        .expect("subagent inference dependency is declared");
+    assert!(inference_dep.contains("optional = true"));
+    let tasks_dep = dependencies
+        .lines()
+        .find(|line| line.trim_start().starts_with("tinyagents-tasks ="))
+        .expect("subagent task dependency is declared");
+    assert!(tasks_dep.contains("optional = true"));
+    assert!(manifest.contains("subagents = [\"dep:tinyagents-orchestration\", \"dep:tinyagents-tasks\", \"dep:tinyinference-llm\"]"));
 }
 
 #[test]

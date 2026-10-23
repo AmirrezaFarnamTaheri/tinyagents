@@ -56,34 +56,15 @@ const CONTINUATION_USER_TURN: &str = "Continue with the task described above.";
 /// top-level argument — a fraction of the tokens of the raw JSON Schema, which
 /// used to be pasted here verbatim for every tool on every request.
 pub fn prompt_tool_instructions(tools: &[ToolSchema]) -> String {
-    let mut out = String::new();
-    out.push_str("## Tool Use Protocol\n\n");
-    out.push_str("To use a tool, wrap a JSON object in <tool_call></tool_call> tags:\n\n");
-    out.push_str(OPEN_TAG);
-    out.push('\n');
-    out.push_str(r#"{"name": "tool_name", "arguments": {"param": "value"}}"#);
-    out.push('\n');
-    out.push_str(CLOSE_TAG);
-    out.push_str("\n\n");
-    out.push_str("You may emit multiple tool calls in a single response. ");
-    out.push_str("After execution, results appear in <tool_result> tags. ");
-    out.push_str("Continue reasoning with the results until you can give a final answer.\n\n");
-    out.push_str("### Available Tools\n\n");
-    out.push_str("Arguments are shown as `{name: type, optional?: type}`.\n\n");
-    for tool in tools {
-        // Infallible: writing to a String never errors.
-        let _ = writeln!(out, "**{}**: {}", tool.name, tool.description);
-        let _ = writeln!(
-            out,
-            "Arguments: `{}`",
-            super::signature::type_signature(&tool.parameters)
-        );
-        for note in super::signature::argument_notes(&tool.parameters) {
-            let _ = writeln!(out, "  - {note}");
-        }
-        out.push('\n');
-    }
-    out
+    let tools = tools
+        .iter()
+        .map(|tool| tinytools_agent::tinytools::ToolSpec {
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            parameters: tool.parameters.clone(),
+        })
+        .collect::<Vec<_>>();
+    tinytools_agent::render::render_compact_tool_instructions(&tools)
 }
 
 /// Return `messages` with the tool-use protocol appended to the system prompt:

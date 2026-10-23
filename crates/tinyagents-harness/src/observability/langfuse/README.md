@@ -19,6 +19,9 @@ natural export boundary (end of run, end of turn, or on a timer).
   backend), or `::from_env` (reads `LANGFUSE_BASE_URL`/`LANGFUSE_PUBLIC_KEY`/
   `LANGFUSE_SECRET_KEY`, or `TINYHUMANS_LANGFUSE_PROXY_URL`/
   `TINYHUMANS_AUTH_TOKEN` when the proxy URL is set).
+- `LangfuseClient::proxy_with_transport` — retains proxy URL/auth behavior
+  while accepting a caller-provided `reqwest::Client` and extra headers for
+  transport policy owned by the host.
 - `LangfuseClient::send_observations` — builds and sends a trace's legacy
   ingestion batch (not accepted for traces by Langfuse v4); `build_ingestion_batch` does the same without sending, for callers
   that want to inspect or batch the payload themselves.

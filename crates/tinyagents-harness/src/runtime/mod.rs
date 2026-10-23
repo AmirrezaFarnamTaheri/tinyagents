@@ -48,6 +48,17 @@ use crate::tool::{ToolDispatch, ToolRegistry, ToolTimeoutSettings};
 use tinyinference_llm::model::ChatModel;
 use tinytools::Tool;
 
+/// Installs a host-selected recursion ceiling without widening the active
+/// [`RunPolicy`] limit.
+pub fn install_depth<State: Send + Sync, Ctx: Send + Sync>(
+    harness: &mut AgentHarness<State, Ctx>,
+    max_depth: usize,
+) {
+    let mut policy = harness.policy().clone();
+    policy.limits.max_depth = policy.limits.max_depth.min(max_depth);
+    harness.with_policy(policy);
+}
+
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Creates an empty harness with default policy and no models, tools, or
     /// middleware registered.
@@ -419,3 +430,7 @@ mod test;
 #[cfg(test)]
 #[path = "mod_authorization_context_tests.rs"]
 mod authorization_context_tests;
+
+#[cfg(test)]
+#[path = "mod_tool_gate_tests.rs"]
+mod tool_gate_tests;

@@ -20,3 +20,7 @@ pub use work_tracker::WorkTracker;
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "mod_api_tests.rs"]
+mod api_tests;

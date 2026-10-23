@@ -1,6 +1,7 @@
 //! Admission and shared-workspace arbitration for a batch of parallel tasks.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 
 use tinyagents_graph::parallel::{
@@ -35,7 +36,7 @@ pub enum AdmissionVerdict {
 
 /// Host policy: identity, allowlists, sandbox mode and whether a branch can
 /// write. Everything product-specific lives behind this trait.
-pub trait AdmissionPolicy<P> {
+pub trait AdmissionPolicy<P>: Send + Sync {
     fn admit(&self, index: usize, task: &Task<P>) -> AdmissionVerdict;
 }
 
@@ -165,6 +166,49 @@ impl<P> Plan<P> {
                 }
             })
             .collect()
+    }
+
+    /// Asynchronously prepares each task before admission and workspace
+    /// arbitration. Hosts can use this phase to create isolated workspaces or
+    /// attach prepared resources to the task payload. A failed preparation is
+    /// returned in its original position as a policy rejection, and the
+    /// admission policy still receives the original task index.
+    pub async fn stage_with_preflight<F, Fut>(
+        self,
+        policy: &dyn AdmissionPolicy<P>,
+        mut preflight: F,
+    ) -> Vec<Preflight<P>>
+    where
+        P: Clone,
+        F: FnMut(usize, Task<P>) -> Fut,
+        Fut: Future<Output = Result<Task<P>, String>>,
+    {
+        let mut tasks = Vec::with_capacity(self.tasks.len());
+        let mut failures = HashMap::new();
+        for (index, task) in self.tasks.into_iter().enumerate() {
+            match preflight(index, task.clone()).await {
+                Ok(prepared) => tasks.push(prepared),
+                Err(reason) => {
+                    failures.insert(index, reason);
+                    tasks.push(task);
+                }
+            }
+        }
+        Plan::new(tasks).stage(&PreflightAdmission { policy, failures })
+    }
+}
+
+struct PreflightAdmission<'a, P> {
+    policy: &'a dyn AdmissionPolicy<P>,
+    failures: HashMap<usize, String>,
+}
+
+impl<P> AdmissionPolicy<P> for PreflightAdmission<'_, P> {
+    fn admit(&self, index: usize, task: &Task<P>) -> AdmissionVerdict {
+        match self.failures.get(&index) {
+            Some(reason) => AdmissionVerdict::Reject(reason.clone()),
+            None => self.policy.admit(index, task),
+        }
     }
 }
 

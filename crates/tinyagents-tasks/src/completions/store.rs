@@ -28,6 +28,13 @@ pub trait CompletionStore: Send + Sync {
     /// Latest records, for one parent or (`None`) for all. Unordered.
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord>;
 
+    /// Fallible form used when copying state during a backing-store migration.
+    /// Legacy implementations remain source-compatible; stores that can fail
+    /// while enumerating should override this and return the actual error.
+    fn try_list(&self, parent_key: Option<&str>) -> Result<Vec<CompletionRecord>> {
+        Ok(self.list(parent_key))
+    }
+
     /// Drops settled records (anything but `Pending`) last updated more than
     /// `retain` ago, returning how many went. Dropping a settled record also
     /// drops its dedupe, so pick a window longer than any child can outlive its

@@ -16,6 +16,7 @@
 pub mod parallel;
 pub mod run_progress_ledger;
 pub mod status;
+pub mod steering;
 pub mod subagent;
 pub mod teams;
 pub mod topology;

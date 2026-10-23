@@ -26,9 +26,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
-use tinystoragedrivers_core::{
-    Blocking, DocumentStore, DocumentStoreExt, Filter, Precondition, Query, Repo, StorageError,
-    UPDATED_FIELD, Versioned, WriteOptions,
+use tinyagents_storage_kit::{
+    Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Precondition,
+    Query, Repo, StorageError, UPDATED_FIELD, Versioned, WriteOptions,
 };
 use tokio::sync::OnceCell;
 
@@ -54,6 +54,17 @@ fn decode(row: Versioned<serde_json::Value>) -> Option<CompletionRecord> {
             None
         }
     }
+}
+
+fn decode_strict(row: Versioned<serde_json::Value>) -> Result<CompletionRecord> {
+    let updated_ms = row.meta.updated_ms;
+    serde_json::from_value::<CompletionDoc>(row.doc)
+        .map(|doc| doc.into_record(updated_ms))
+        .map_err(|error| {
+            TinyAgentsError::Storage(format!(
+                "completion store contains unreadable record: {error}"
+            ))
+        })
 }
 
 /// A durable [`CompletionStore`] stored in a driver [`DocumentStore`].
@@ -91,6 +102,20 @@ impl DriverCompletionStore {
             bridge,
             declared: Arc::new(OnceCell::new()),
         }
+    }
+
+    /// The declaration a store using `collection` needs.
+    pub fn collection_spec(collection: impl Into<String>) -> CollectionSpec {
+        CollectionSpec::new(collection)
+            .index(IndexSpec::new("by_parent", ["parent_key"]))
+            .index(IndexSpec::new("by_state", ["state"]))
+    }
+
+    /// Declares the backing collection eagerly so an unavailable backend is
+    /// reported before the host accepts work.
+    pub fn declare_collections(&self) -> Result<()> {
+        let this = self.clone();
+        self.run(async move { this.declare().await })
     }
 
     fn run<T: Send + 'static>(
@@ -164,6 +189,24 @@ impl CompletionStore for DriverCompletionStore {
         .unwrap_or_default()
     }
 
+    fn try_list(&self, parent_key: Option<&str>) -> Result<Vec<CompletionRecord>> {
+        let this = self.clone();
+        let parent_key = parent_key.map(str::to_owned);
+        self.run(async move {
+            this.declare().await?;
+            let filter = match &parent_key {
+                Some(parent) => Filter::eq("parent_key", parent.as_str()),
+                None => Filter::default(),
+            };
+            let rows = this
+                .docs
+                .query_all(COMPLETIONS, &Query::filter(filter))
+                .await
+                .map_err(map_error)?;
+            rows.into_iter().map(decode_strict).collect()
+        })
+    }
+
     fn compact(&self, retain: Duration) -> Result<usize> {
         let this = self.clone();
         let cutoff = to_ms(SystemTime::now())
@@ -188,7 +231,7 @@ impl CompletionStore for DriverCompletionStore {
                     .await
                 {
                     Ok(removed) => dropped += usize::from(removed),
-                    Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {}
+                    Err(error) if error.kind() == tinyagents_storage_kit::ErrorKind::Conflict => {}
                     Err(error) => return Err(map_error(error)),
                 }
             }

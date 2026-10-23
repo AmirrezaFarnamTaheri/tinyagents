@@ -1,11 +1,12 @@
 //! Result policy: how much of a child's final output reaches its parent, and
 //! whether it is checked against a schema.
 //!
-//! The default policy changes nothing. A cap trims the visible text to its
-//! head and tail around an explicit omission marker; with
-//! [`ResultOverflow::Artifact`] the full output is first handed to a host
-//! [`ArtifactStore`] and the parent gets the preview plus a path-free
-//! [`ArtifactReference`]. An optional JSON schema is checked with the same
+//! The default policy changes nothing. A character cap trims the visible text
+//! to its head and tail around an explicit omission marker; a byte threshold
+//! can trigger artifact storage without changing the visible text. With
+//! [`ResultOverflow::Artifact`] the full output is handed to a host
+//! [`ArtifactStore`] when either limit is exceeded, and the parent gets a
+//! path-free [`ArtifactReference`]. An optional JSON schema is checked with the same
 //! structural validator the tool-call boundary uses (`type`, `properties`,
 //! `required`, `additionalProperties`, `items`, `enum`; no `$ref` or
 //! combinators) and a mismatch is *reported* in
@@ -20,15 +21,55 @@ use super::ArtifactReference;
 
 const LOG_PREFIX: &str = "[subagent-result-policy]";
 
-/// What to do with output longer than [`ResultPolicy::max_chars`].
+/// Whether `task_id` can be used as a single filename component.
+///
+/// The allow-list intentionally accepts only ids minted by this harness or
+/// short test labels, so path separators, dots and encoded traversal forms are
+/// rejected before a host joins the id to a storage directory.
+pub fn is_safe_task_id(task_id: &str) -> bool {
+    !task_id.is_empty()
+        && task_id.len() <= 128
+        && task_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+/// Renders a truthful failure envelope around delegated work that did not
+/// execute. The parent must not interpret partial text as a completed result.
+pub fn frame_unexecuted_outcome(tool_name: &str, error: &str) -> String {
+    format!(
+        "{tool_name} failed and did not complete — no work was performed and no results were produced. Do NOT treat this as success or fabricate an output; report the failure to the user. Error: {error}"
+    )
+}
+
+/// Detects a model response that consists of an unexecuted tool-call payload
+/// without usable prose. Such a stub is not a result that a parent can report.
+pub fn is_unexecuted_tool_call_stub(output: &str) -> bool {
+    use tinyagents_harness::tinytools_agent::dialect::{
+        contains_tool_call_payload, strip_tool_calls_from_response,
+    };
+    if !contains_tool_call_payload(output) {
+        return false;
+    }
+    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(output.trim())
+        && map.contains_key("tool_calls")
+    {
+        return true;
+    }
+    !strip_tool_calls_from_response(output)
+        .chars()
+        .any(char::is_alphanumeric)
+}
+
+/// What to do when a configured result limit is exceeded.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ResultOverflow {
     /// Keep the head and tail with an omission marker.
     #[default]
     Truncate,
-    /// Store the full output via the [`ArtifactStore`], keep a truncated
-    /// preview and the reference. Falls back to `Truncate` without a store.
+    /// Store the full output via the [`ArtifactStore`], keep any character-capped
+    /// preview and the reference. Falls back to the character cap without a store.
     Artifact,
 }
 
@@ -44,6 +85,8 @@ pub trait ArtifactStore: Send + Sync {
 pub struct ResultPolicy {
     /// Most characters of output kept visible; `None` is uncapped.
     pub max_chars: Option<usize>,
+    /// UTF-8 byte length above which artifact overflow is triggered; `None` is disabled.
+    pub max_bytes: Option<usize>,
     /// What happens to output beyond the cap.
     pub overflow: ResultOverflow,
     /// JSON schema the final output must satisfy, when set.
@@ -56,6 +99,7 @@ impl std::fmt::Debug for ResultPolicy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResultPolicy")
             .field("max_chars", &self.max_chars)
+            .field("max_bytes", &self.max_bytes)
             .field("overflow", &self.overflow)
             .field("schema", &self.schema)
             .field("artifact_store", &self.artifact_store.is_some())
@@ -91,6 +135,13 @@ impl ResultPolicy {
         self
     }
 
+    /// Triggers artifact overflow when the full output exceeds `max_bytes` UTF-8 bytes.
+    /// This threshold never truncates bytes; visible text is capped only by `max_chars`.
+    pub fn with_max_bytes(mut self, max_bytes: usize) -> Self {
+        self.max_bytes = Some(max_bytes);
+        self
+    }
+
     /// Chooses the overflow behaviour.
     pub fn with_overflow(mut self, overflow: ResultOverflow) -> Self {
         self.overflow = overflow;
@@ -111,7 +162,9 @@ impl ResultPolicy {
 
     /// Whether applying this policy can alter or annotate an output.
     pub fn is_active(&self) -> bool {
-        self.max_chars.is_some() || self.schema.is_some()
+        self.max_chars.is_some()
+            || (self.max_bytes.is_some() && self.overflow == ResultOverflow::Artifact)
+            || self.schema.is_some()
     }
 
     /// Applies the policy to `full`. `structured` is the run's already parsed
@@ -132,16 +185,18 @@ impl ResultPolicy {
                 tracing::debug!("{LOG_PREFIX} schema_error task_id={task_id} error={error}");
             }
         }
-        let Some(max) = self.max_chars else {
-            return applied;
+        let char_overflow = if let Some(max) = self.max_chars {
+            let (text, omitted) = truncate_head_tail(full, max);
+            if omitted > 0 {
+                applied.text = text;
+                applied.omitted_chars = omitted;
+            }
+            omitted > 0
+        } else {
+            false
         };
-        let (text, omitted) = truncate_head_tail(full, max);
-        if omitted == 0 {
-            return applied;
-        }
-        applied.text = text;
-        applied.omitted_chars = omitted;
-        if self.overflow == ResultOverflow::Artifact {
+        let byte_overflow = self.max_bytes.is_some_and(|max| full.len() > max);
+        if self.overflow == ResultOverflow::Artifact && (char_overflow || byte_overflow) {
             match &self.artifact_store {
                 Some(store) => match store.store(task_id, full).await {
                     Ok(reference) => applied.artifact = Some(reference),

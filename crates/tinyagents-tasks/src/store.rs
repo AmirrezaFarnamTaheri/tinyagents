@@ -1,7 +1,7 @@
 //! Task store implementations for graph orchestration.
 //!
 //! [`TaskStore`] is the durable bookkeeping trait behind every orchestration
-//! control in `tool.rs`: spawning a task inserts a record, and each lifecycle
+//! control: spawning a task inserts a record, and each lifecycle
 //! transition (`mark_running`, `complete`, `fail`, `request_cancel`, ...) goes
 //! through this trait so the record on disk always matches what a control
 //! reported to the model. [`InMemoryTaskStore`] is the reference state
@@ -390,7 +390,7 @@ pub(crate) mod transition {
 
 /// Builds the standard "task does not exist" error for an unknown task id.
 ///
-/// Shared across `store.rs` and `tool.rs` so lookups fail with a consistent
+/// Shared across store operations so lookups fail with a consistent
 /// message regardless of which control or store implementation raised it.
 pub(crate) fn orchestration_not_found(task_id: &TaskId) -> TinyAgentsError {
     TinyAgentsError::Graph(format!("orchestration task `{task_id}` does not exist"))

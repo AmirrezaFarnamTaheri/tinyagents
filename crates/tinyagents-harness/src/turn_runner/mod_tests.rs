@@ -478,6 +478,14 @@ async fn failed_generation_is_retired_before_a_slow_terminal_callback() {
             .any(|(id, event)| id == "accepted-before-failure"
                 && matches!(event, TerminalEvent::Failed { .. }))
     );
+    let classified = events.classified.lock().unwrap();
+    assert_eq!(
+        classified
+            .iter()
+            .find(|(id, _)| id == "accepted-before-failure")
+            .map(|(_, classification)| classification.message.as_str()),
+        Some("queued turn was not run: host run failed")
+    );
 }
 
 #[tokio::test]
@@ -585,6 +593,7 @@ struct BlockingFailureEvents {
     terminal_started: tokio::sync::Notify,
     release_terminal: tokio::sync::Notify,
     terminal: Mutex<Vec<(String, TerminalEvent)>>,
+    classified: Mutex<Vec<(String, FailureClassification)>>,
 }
 
 #[async_trait::async_trait]
@@ -599,6 +608,18 @@ impl EventSink for BlockingFailureEvents {
             self.terminal_started.notify_one();
             self.release_terminal.notified().await;
         }
+    }
+    async fn classified_failure(
+        &self,
+        request: &TurnRequest,
+        event: TerminalEvent,
+        classification: FailureClassification,
+    ) {
+        self.classified
+            .lock()
+            .unwrap()
+            .push((request.request_id.clone(), classification));
+        self.terminal(request, event).await;
     }
 }
 
@@ -2289,7 +2310,7 @@ async fn live_turns_snapshot_and_scoped_cancel_report_every_turn() {
 }
 
 #[tokio::test]
-async fn failed_terminal_event_carries_the_raw_error() {
+async fn failed_terminal_event_carries_the_classified_failure() {
     let events = Arc::new(Events::default());
     let host = Arc::new(Host {
         fail_run: true,
@@ -2310,8 +2331,8 @@ async fn failed_terminal_event_carries_the_raw_error() {
     let terminal = events.terminal.lock().unwrap();
     assert!(matches!(
         terminal.as_slice(),
-        [TerminalEvent::Failed { error, message, class, .. }]
-            if error == "host run failed" && message == "host run failed" && class == "internal"
+        [TerminalEvent::Failed { message, class, .. }]
+            if message == "host run failed" && class == "internal"
     ));
 }
 
@@ -2352,9 +2373,8 @@ async fn structured_failure_defaults_keep_legacy_event_sinks_compatible() {
 
     assert!(matches!(
         events.0.lock().unwrap().as_slice(),
-        [TerminalEvent::Failed { request_id, error, message, class }]
+        [TerminalEvent::Failed { request_id, message, class }]
             if request_id == "request-a"
-                && error == "host run failed"
                 && message == "host run failed"
                 && class == "internal"
     ));
@@ -2371,8 +2391,10 @@ impl FailureClassifier for StructuredFailures {
         FailureClassification {
             class: "rate_limited".into(),
             message: "safe fallback".into(),
-            copy_key: Some("chat_error.rate_limited".into()),
-            copy_params: Some(serde_json::json!({"retrySeconds": 12})),
+            details: Some(serde_json::json!({
+                "copy_key": "chat_error.rate_limited",
+                "copy_params": {"retrySeconds": 12},
+            })),
         }
     }
 }
@@ -2405,8 +2427,10 @@ async fn runner_preserves_structured_failure_copy_for_the_host_sink() {
         &[FailureClassification {
             class: "rate_limited".into(),
             message: "safe fallback".into(),
-            copy_key: Some("chat_error.rate_limited".into()),
-            copy_params: Some(serde_json::json!({"retrySeconds": 12})),
+            details: Some(serde_json::json!({
+                "copy_key": "chat_error.rate_limited",
+                "copy_params": {"retrySeconds": 12},
+            })),
         }]
     );
 }
@@ -2460,27 +2484,19 @@ async fn queued_failures_keep_structured_copy_and_queued_message_prefix() {
             FailureClassification {
                 class: "rate_limited".into(),
                 message: "queued turn was not run: safe fallback".into(),
-                copy_key: Some("chat_error.rate_limited".into()),
-                copy_params: Some(serde_json::json!({"retrySeconds": 12})),
+                details: Some(serde_json::json!({
+                    "copy_key": "chat_error.rate_limited",
+                    "copy_params": {"retrySeconds": 12},
+                })),
             },
             FailureClassification {
                 class: "rate_limited".into(),
                 message: "safe fallback".into(),
-                copy_key: Some("chat_error.rate_limited".into()),
-                copy_params: Some(serde_json::json!({"retrySeconds": 12})),
+                details: Some(serde_json::json!({
+                    "copy_key": "chat_error.rate_limited",
+                    "copy_params": {"retrySeconds": 12},
+                })),
             },
         ]
     );
-}
-
-#[test]
-fn failure_copy_fields_default_when_reading_legacy_serialized_classification() {
-    let classification: FailureClassification = serde_json::from_value(serde_json::json!({
-        "class": "internal",
-        "message": "safe fallback"
-    }))
-    .unwrap();
-
-    assert_eq!(classification.copy_key, None);
-    assert_eq!(classification.copy_params, None);
 }

@@ -4,7 +4,6 @@ use tinyagents_harness::run_queue::{QueueLane, RunQueue, RunQueueHandle};
 use tinyinference_llm::message::Message;
 
 use super::*;
-use crate::{RecoveryChild, build_restart_recovery_note};
 
 fn record(task: &str, parent: &str) -> CompletionRecord {
     CompletionRecord::new(
@@ -175,6 +174,110 @@ async fn mark_failed_on_a_settled_record_is_ignored() {
     assert!(router.mark_failed(&["t1", "unknown"]).unwrap().is_empty());
 }
 
+fn record_with_artifact(task: &str, parent: &str) -> CompletionRecord {
+    let mut record = record(task, parent).with_label("indexer");
+    record.result.omitted_chars = 42;
+    record.result.artifact = Some(CompletionArtifact {
+        id: "art-1".into(),
+        media_type: Some("text/plain".into()),
+        metadata: [("bytes".to_string(), "9000".to_string())].into(),
+    });
+    record
+}
+
+#[tokio::test]
+async fn a_delivered_record_keeps_its_bookkeeping_but_not_its_result() {
+    let store = Arc::new(InMemoryCompletionStore::new());
+    let router = CompletionRouter::new(store.clone());
+    let recorded = record_with_artifact("t1", "p");
+    router.record(recorded.clone()).await.unwrap();
+    router.claim_pending("p", 1).unwrap();
+    assert_eq!(store.get("t1").unwrap().result.text, "result of t1");
+    assert_eq!(router.mark_delivered(&["t1"]).unwrap(), 1);
+    let settled = store.get("t1").unwrap();
+    assert_eq!(settled.state, CompletionState::Delivered);
+    assert_eq!(settled.result, CompletionResult::default());
+    assert_eq!(settled.attempts, 1);
+    assert_eq!(settled.task_id, "t1");
+    assert_eq!(settled.parent_key, "p");
+    assert_eq!(settled.agent_id, "worker");
+    assert_eq!(settled.status, CompletionStatus::Success);
+    assert_eq!(settled.label.as_deref(), Some("indexer"));
+    assert_eq!(settled.finished_at, recorded.finished_at);
+    assert!(settled.updated_at >= recorded.updated_at);
+    // Dedupe and the tombstone guard still work on the emptied record.
+    assert_eq!(
+        router.record(record("t1", "p")).await.unwrap(),
+        RecordOutcome::Duplicate
+    );
+    assert_eq!(
+        router.tombstone("t1").unwrap(),
+        TombstoneOutcome::AlreadyFinal
+    );
+    assert!(router.pending_for("p").is_empty());
+}
+
+#[tokio::test]
+async fn tombstone_and_cancel_parent_drop_the_withdrawn_result() {
+    let store = Arc::new(InMemoryCompletionStore::new());
+    let router = CompletionRouter::new(store.clone());
+    router
+        .record(record_with_artifact("waited", "p"))
+        .await
+        .unwrap();
+    router
+        .record(record_with_artifact("orphaned", "p"))
+        .await
+        .unwrap();
+    router.record(record("other", "q")).await.unwrap();
+    assert_eq!(
+        router.tombstone("waited").unwrap(),
+        TombstoneOutcome::Suppressed
+    );
+    assert_eq!(router.cancel_parent("p").unwrap(), 1);
+    for task in ["waited", "orphaned"] {
+        let withdrawn = store.get(task).unwrap();
+        assert_eq!(withdrawn.state, CompletionState::Tombstoned, "{task}");
+        assert_eq!(withdrawn.result, CompletionResult::default(), "{task}");
+        assert_eq!(withdrawn.parent_key, "p", "{task}");
+        assert_eq!(
+            router.record(record(task, "p")).await.unwrap(),
+            RecordOutcome::Suppressed,
+            "{task}"
+        );
+    }
+    assert_eq!(
+        store.get("other").unwrap().result.text,
+        "result of other",
+        "another parent's pending record is untouched"
+    );
+}
+
+#[tokio::test]
+async fn the_give_up_writer_gets_the_full_result_and_the_store_does_not() {
+    let store = Arc::new(InMemoryCompletionStore::new());
+    let router = CompletionRouter::new(store.clone()).with_max_attempts(1);
+    let recorded = record_with_artifact("t1", "p");
+    router.record(recorded.clone()).await.unwrap();
+    router.claim_pending("p", 1).unwrap();
+    let gave_up = router.mark_failed(&["t1"]).unwrap();
+    assert_eq!(gave_up.len(), 1);
+    assert_eq!(gave_up[0].state, CompletionState::GaveUp);
+    assert_eq!(gave_up[0].attempts, 1);
+    assert_eq!(gave_up[0].result, recorded.result);
+    let stored = store.get("t1").unwrap();
+    assert_eq!(stored.state, CompletionState::GaveUp);
+    assert_eq!(stored.attempts, 1);
+    assert_eq!(stored.updated_at, gave_up[0].updated_at);
+    assert_eq!(stored.result, CompletionResult::default());
+    assert!(router.claim_pending("p", 1).unwrap().is_empty());
+    assert_eq!(
+        router.record(record("t1", "p")).await.unwrap(),
+        RecordOutcome::Duplicate
+    );
+    assert!(router.mark_failed(&["t1"]).unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn followup_mode_pushes_onto_the_followup_lane_of_a_live_parent() {
     let router = router();
@@ -321,53 +424,6 @@ async fn pending_for_lists_only_undelivered_records_of_the_parent() {
     assert_eq!(ids(&router.pending_for("p")), ["t2"]);
 }
 
-#[tokio::test]
-async fn recovery_note_lists_pending_completions_and_interrupted_children() {
-    let router = router();
-    router
-        .record(record("done", "p").with_label("indexer"))
-        .await
-        .unwrap();
-    let children = vec![RecoveryChild {
-        task_id: "lost".into(),
-        kind: "sub_agent".into(),
-        label: "crawler".into(),
-        last_status: "running".into(),
-        interrupted_reason: "restart".into(),
-    }];
-    let note = router.restart_recovery_note("p", &children);
-    assert!(note.contains("crawler"));
-    assert!(note.contains("<completed_child_tasks>"));
-    assert!(note.contains("result of done"));
-    assert!(note.contains(crate::RESTART_RECOVERY_INSTRUCTION));
-}
-
-#[tokio::test]
-async fn recovery_note_without_completions_matches_the_existing_note() {
-    let router = router();
-    let children = vec![RecoveryChild {
-        task_id: "lost".into(),
-        kind: "sub_agent".into(),
-        label: "crawler".into(),
-        last_status: "running".into(),
-        interrupted_reason: "restart".into(),
-    }];
-    assert_eq!(
-        router.restart_recovery_note("p", &children),
-        build_restart_recovery_note(&children)
-    );
-    assert_eq!(router.restart_recovery_note("p", &[]), "");
-}
-
-#[tokio::test]
-async fn completions_alone_produce_a_note() {
-    let router = router();
-    router.record(record("done", "p")).await.unwrap();
-    let note = router.restart_recovery_note("p", &[]);
-    assert!(note.contains("result of done"));
-    assert!(!note.contains("Interrupted child tasks"));
-}
-
 #[test]
 fn neutral_formatter_escapes_child_text() {
     let hostile = CompletionRecord::new(
@@ -424,19 +480,108 @@ async fn release_makes_an_abandoned_claim_claimable_again() {
 }
 
 #[tokio::test]
-async fn recovery_note_skips_pull_only_and_leased_records() {
-    let router = router();
-    router
-        .record(record("off", "p").with_notify_mode(NotifyMode::Off))
+async fn replacing_a_router_preserves_its_leases_and_claim_acknowledgements() {
+    let source_store = Arc::new(InMemoryCompletionStore::new());
+    let source_store_port: Arc<dyn CompletionStore> = source_store.clone();
+    let source_router = CompletionRouter::new(source_store_port.clone());
+    source_router
+        .record(record("leased", "p").with_notify_mode(NotifyMode::Off))
         .await
         .unwrap();
-    router.record(record("leased", "p")).await.unwrap();
-    router.claim_pending("p", 1).unwrap();
-    router.record(record("open", "p")).await.unwrap();
-    let note = router.restart_recovery_note("p", &[]);
-    assert!(note.contains("result of open"));
-    assert!(!note.contains("result of off"));
-    assert!(!note.contains("result of leased"));
+    let claimed = source_router.pull("p", 1).unwrap();
+    assert_eq!(ids(&claimed), ["leased"]);
+    assert_eq!(claimed[0].attempts, 1);
+
+    let replacement_store = Arc::new(InMemoryCompletionStore::new());
+    let replacement_port: Arc<dyn CompletionStore> = replacement_store.clone();
+    assert!(matches!(
+        source_router
+            .replace_store_if_current(&source_store_port, replacement_port)
+            .unwrap(),
+        CompletionStoreReplaceOutcome::Replaced(_)
+    ));
+
+    let duplicate_claim = source_router.pull("p", 1).unwrap();
+    let old_ack = source_router.mark_delivered(&["leased"]).unwrap();
+    let replacement_record = replacement_store.get("leased").unwrap();
+    assert!(
+        duplicate_claim.is_empty(),
+        "a lease made before migration must suppress another claim"
+    );
+    assert_eq!(old_ack, 1);
+    assert_eq!(
+        replacement_record.state,
+        CompletionState::Delivered,
+        "the outstanding claim's acknowledgement must update the new store"
+    );
+}
+
+#[test]
+fn store_migration_copies_all_states_and_keeps_router_policy() {
+    let source = Arc::new(InMemoryCompletionStore::new());
+    let source_port: Arc<dyn CompletionStore> = source.clone();
+    let router = CompletionRouter::new(source_port.clone()).with_max_attempts(2);
+    let formatter = Arc::clone(router.formatter());
+
+    source
+        .put(&record("pending", "p").with_notify_mode(NotifyMode::Off))
+        .unwrap();
+    router.pull("p", 1).unwrap();
+
+    source
+        .put(&record("delivered", "p").with_notify_mode(NotifyMode::Off))
+        .unwrap();
+    router.pull("p", 1).unwrap();
+    router.mark_delivered(&["delivered"]).unwrap();
+
+    source
+        .put(&record("tombstoned", "p").with_notify_mode(NotifyMode::Off))
+        .unwrap();
+    router.tombstone("tombstoned").unwrap();
+
+    source
+        .put(&record("gave-up", "p").with_notify_mode(NotifyMode::Off))
+        .unwrap();
+    router.pull("p", 1).unwrap();
+    router.release(&["gave-up"]);
+    router.pull("p", 1).unwrap();
+    router.mark_failed(&["gave-up"]).unwrap();
+    router.cancel_parent("q").unwrap();
+
+    let destination = Arc::new(InMemoryCompletionStore::new());
+    let destination_port: Arc<dyn CompletionStore> = destination.clone();
+    destination.put(&record("target-only", "p")).unwrap();
+    assert!(matches!(
+        router
+            .replace_store_if_current(&source_port, destination_port)
+            .unwrap(),
+        CompletionStoreReplaceOutcome::Replaced(_)
+    ));
+
+    assert_eq!(router.max_attempts(), 2);
+    assert!(Arc::ptr_eq(router.formatter(), &formatter));
+    assert_eq!(
+        destination.get("pending").unwrap().state,
+        CompletionState::Pending
+    );
+    assert_eq!(destination.get("pending").unwrap().attempts, 1);
+    assert_eq!(
+        destination.get("delivered").unwrap().state,
+        CompletionState::Delivered
+    );
+    assert_eq!(
+        destination.get("tombstoned").unwrap().state,
+        CompletionState::Tombstoned
+    );
+    assert_eq!(
+        destination.get("gave-up").unwrap().state,
+        CompletionState::GaveUp
+    );
+    assert!(destination.get("target-only").is_some());
+    assert_eq!(
+        destination.get("\u{1}parent-cancelled:q").unwrap().state,
+        CompletionState::Tombstoned
+    );
 }
 
 #[tokio::test]
@@ -472,6 +617,142 @@ impl CompletionStore for FailingSecondPut {
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)
     }
+}
+
+struct FailingList {
+    inner: InMemoryCompletionStore,
+}
+
+struct BlockingTryList {
+    inner: InMemoryCompletionStore,
+    entered: Arc<std::sync::Barrier>,
+    resume: Arc<std::sync::Barrier>,
+}
+
+impl CompletionStore for BlockingTryList {
+    fn get(&self, task_id: &str) -> Option<CompletionRecord> {
+        self.inner.get(task_id)
+    }
+    fn put(&self, record: &CompletionRecord) -> tinyagents_harness::error::Result<()> {
+        self.inner.put(record)
+    }
+    fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
+        self.inner.list(parent_key)
+    }
+    fn try_list(
+        &self,
+        parent_key: Option<&str>,
+    ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
+        self.entered.wait();
+        self.resume.wait();
+        Ok(self.inner.list(parent_key))
+    }
+}
+
+impl CompletionStore for FailingList {
+    fn get(&self, task_id: &str) -> Option<CompletionRecord> {
+        self.inner.get(task_id)
+    }
+    fn put(&self, record: &CompletionRecord) -> tinyagents_harness::error::Result<()> {
+        self.inner.put(record)
+    }
+    fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
+        self.inner.list(parent_key)
+    }
+    fn try_list(
+        &self,
+        _parent_key: Option<&str>,
+    ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
+        Err(tinyagents_harness::error::TinyAgentsError::Graph(
+            "source enumeration failed".into(),
+        ))
+    }
+}
+
+#[test]
+fn a_failed_store_migration_keeps_the_original_store_and_lease() {
+    let source = Arc::new(InMemoryCompletionStore::new());
+    let source_port: Arc<dyn CompletionStore> = source.clone();
+    let router = CompletionRouter::new(source_port.clone());
+    source.put(&record("leased", "p")).unwrap();
+    router.pull("p", 1).unwrap();
+    source.put(&record("second", "p")).unwrap();
+    router.pull("p", 1).unwrap();
+
+    let destination = Arc::new(FailingSecondPut {
+        inner: InMemoryCompletionStore::new(),
+        puts: Default::default(),
+        fail_from: std::sync::atomic::AtomicUsize::new(1),
+    });
+    let destination_port: Arc<dyn CompletionStore> = destination;
+    assert!(
+        router
+            .replace_store_if_current(&source_port, destination_port)
+            .is_err()
+    );
+    assert!(Arc::ptr_eq(&router.store(), &source_port));
+    assert!(router.pull("p", 1).unwrap().is_empty());
+}
+
+#[test]
+fn a_source_enumeration_error_does_not_replace_the_store() {
+    let source = Arc::new(FailingList {
+        inner: InMemoryCompletionStore::new(),
+    });
+    let source_port: Arc<dyn CompletionStore> = source;
+    let router = CompletionRouter::new(source_port.clone());
+    let destination_port: Arc<dyn CompletionStore> = Arc::new(InMemoryCompletionStore::new());
+    assert!(
+        router
+            .replace_store_if_current(&source_port, destination_port)
+            .is_err()
+    );
+    assert!(Arc::ptr_eq(&router.store(), &source_port));
+}
+
+#[test]
+fn a_record_racing_store_migration_is_not_lost() {
+    let source = Arc::new(BlockingTryList {
+        inner: InMemoryCompletionStore::new(),
+        entered: Arc::new(std::sync::Barrier::new(2)),
+        resume: Arc::new(std::sync::Barrier::new(2)),
+    });
+    let source_port: Arc<dyn CompletionStore> = source.clone();
+    let router = Arc::new(CompletionRouter::new(source_port.clone()));
+    source.put(&record("before", "p")).unwrap();
+    let destination = Arc::new(InMemoryCompletionStore::new());
+    let destination_port: Arc<dyn CompletionStore> = destination.clone();
+
+    let migrating_router = Arc::clone(&router);
+    let migrating_source = Arc::clone(&source_port);
+    let migrating_destination = Arc::clone(&destination_port);
+    let migration = std::thread::spawn(move || {
+        migrating_router
+            .replace_store_if_current(&migrating_source, migrating_destination)
+            .unwrap()
+    });
+    source.entered.wait();
+
+    let recording_router = Arc::clone(&router);
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let record_task = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        started_tx.send(()).unwrap();
+        runtime.block_on(recording_router.record(record("during", "p")))
+    });
+    started_rx.recv().unwrap();
+    source.resume.wait();
+
+    assert!(matches!(
+        migration.join().unwrap(),
+        CompletionStoreReplaceOutcome::Replaced(_)
+    ));
+    record_task.join().unwrap().unwrap();
+    assert!(destination.get("before").is_some());
+    assert!(destination.get("during").is_some());
 }
 
 #[tokio::test]

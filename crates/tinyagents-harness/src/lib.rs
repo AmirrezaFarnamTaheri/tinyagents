@@ -13,8 +13,6 @@
 //! # Cargo features
 //!
 //! - `sqlite` — retained as a no-op for compatibility; durable stores are the `Driver*` types over `tinystoragedrivers`.
-//! - `builtin-tools` — the bundled [`tools`] (currently the time tool). The
-//!   old name `tools` is kept as a deprecated alias.
 //! - `multimodal` — image/audio/binary content resolution ([`multimodal`]),
 //!   pulling in `reqwest` and `flate2`.
 //! - `claude-code` — the Claude Code CLI and Claude Agent SDK provider
@@ -66,6 +64,7 @@ pub mod cancel;
 mod canonical_json;
 pub mod capability;
 pub mod catalog;
+pub mod close;
 pub mod config;
 pub mod context;
 pub mod cost;
@@ -86,6 +85,7 @@ pub mod model_registry;
 pub mod multimodal;
 pub mod no_progress;
 pub mod observability;
+pub mod oneshot;
 pub mod progress;
 pub mod prompt;
 pub mod providers;
@@ -101,11 +101,11 @@ pub mod structured;
 pub mod summarization;
 pub mod terminal;
 pub mod testkit;
+pub mod thread_reasoning;
 pub mod title;
+
 pub mod token_estimation;
 pub mod tool;
-#[cfg(feature = "builtin-tools")]
-pub mod tools;
 pub mod turn_deadline;
 pub mod turn_outcome;
 pub mod turn_policy;
@@ -153,7 +153,9 @@ pub use observability::replay::{
 pub use observability::{
     AgentCallLatency, AgentLatencyMetrics, AgentObservation, FanOutSink, HarnessEventJournal,
     HarnessStatusStore, InMemoryEventJournal, InMemoryStatusStore, JournalSink, JsonlSink,
-    RedactingSink, StoreEventJournal,
+    ObservedChatModel, PhysicalDispatchGuard, PhysicalDispatchMetadata, PhysicalDispatchObserver,
+    PhysicalDispatchOutcome, PhysicalDispatchStatus, PhysicalDispatchTerminal,
+    PhysicalDispatchUsage, RedactingSink, StoreEventJournal,
 };
 pub use observability::{DriverStatusStore, mint_run_id, reap_orphaned_runs};
 #[cfg(feature = "langfuse")]
@@ -169,6 +171,7 @@ pub use steering::{
     RecentRequestIds, RequestIdError, SteeringCommand, SteeringCommandKind, SteeringHandle,
     SteeringOutcome, SteeringPolicy,
 };
-pub use storage::storage_schema;
+pub use storage::{collections, open_storage, storage_schema};
 pub use terminal::{TerminalClass, TerminalOutcome, TerminalReason, TimeoutPhase};
 pub use tool::ToolRegistry;
+pub use turn_stop::{TurnFailureClass, TurnStop, TurnStopKind};

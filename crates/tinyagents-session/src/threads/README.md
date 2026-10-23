@@ -103,6 +103,22 @@ after the swap. `delete_messages_from` returns `None` for an unknown cut point
 or thread. `purge_threads` deletes every thread document (live and tombstoned),
 stream and intent, and counts live threads and messages.
 
+Hosts that need to retain work for each removed thread can use
+`DriverConversationStore::purge_threads_with` or
+`DriverConversationStore::purge_threads_with_async`. Both callbacks receive the
+logical thread ID only after a successful document deletion, including for
+tombstones, and run before the next row is processed. The synchronous callback
+runs on the caller's executor and should only record the obligation; callbacks
+that need asynchronous follow-up work should use the async variant, which awaits
+each callback before continuing. Neither callback can report failure. If a later
+read or delete fails, earlier callback effects remain. Neither purge is
+crash-atomic: a process failure after deletion but before the callback completes
+can leave that obligation unreported. Cancelling either variant while a document
+delete is in flight can also leave a backend-completed deletion unreported;
+cancellation may additionally stop the async variant after deletion but before
+its callback completes. The existing `ConversationPersistence` purge uses the
+same loop with a no-op callback.
+
 Plain message append does not authorize distributed agent execution. No
 importer, provider selection or legacy source-ownership grant is added.
 
@@ -116,8 +132,9 @@ cache.
 
 - **Store:** `DriverConversationStore` (`new`, `new_validate_only`,
   `in_memory`, `collection_specs`, `append_collection_specs`,
-  `prepare_schema`, `prepare_append_schema`) implementing
-  `ConversationPersistence`, plus `ConversationPurgeStats`.
+  `prepare_schema`, `prepare_append_schema`, `purge_threads_with`,
+  `purge_threads_with_async`) implementing `ConversationPersistence`, plus
+  `ConversationPurgeStats`.
 - **Schema:** `conversations_storage_schema()` (owner `conversations`, scope
   class Tenant) for the host's `Registry::compose`.
 - **Types:** `ConversationThread`, `ThreadMessage`,

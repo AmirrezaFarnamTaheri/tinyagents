@@ -1,5 +1,6 @@
 use super::*;
 use crate::cost::CostSource;
+use crate::progress::AgentProgress;
 
 #[test]
 fn subagent_usage_cost_carries_the_known_spend_and_its_certainty() {
@@ -38,4 +39,15 @@ fn subagent_usage_omits_an_unknown_cost_source_on_the_wire() {
     // Absent on the wire reads back as an unknown cost, never a charged one.
     let round_trip: SubagentUsage = serde_json::from_value(json).unwrap();
     assert_eq!(round_trip, usage);
+}
+
+#[test]
+fn context_compacting_is_a_progress_event() {
+    let event = AgentProgress::ContextCompacting;
+
+    assert!(matches!(event, AgentProgress::ContextCompacting));
+    assert_ne!(
+        std::mem::discriminant(&AgentProgress::ContextCompacting),
+        std::mem::discriminant(&AgentProgress::TurnStarted),
+    );
 }

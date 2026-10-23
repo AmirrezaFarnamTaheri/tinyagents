@@ -11,15 +11,14 @@ use tinyagents_session::run_ledger::{
     AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask, AgentTeamTaskUpsert, AgentTeamUpsert,
     ClaimOutcome, CompletionOutcome, RunEvent, RunEventAppend, RunEventListRequest,
 };
+use tinystoragedrivers_testkit::MemoryBackend;
 
 use super::*;
 
-fn service(dir: &TempDir) -> TeamService<SessionTeamLedger> {
+fn service(_dir: &TempDir) -> TeamService<SessionTeamLedger> {
+    let ledger_backend = MemoryBackend::new();
     TeamService::new(
-        SessionTeamLedger::new(std::sync::Arc::new(crate::test_support::ledger_in(
-            dir.path(),
-        )))
-        .unwrap(),
+        SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(&ledger_backend))).unwrap(),
     )
 }
 
@@ -378,6 +377,40 @@ impl TeamLedger for FakeLedger {
         _: bool,
     ) -> anyhow::Result<CompletionOutcome> {
         unreachable!()
+    }
+    fn complete_task_if_claimed(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &[String],
+        _: bool,
+    ) -> anyhow::Result<CompletionOutcome> {
+        unreachable!()
+    }
+    fn release_task(&self, _: &str, _: &str, _: &str, _: &str) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+    fn mark_member_running(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> anyhow::Result<Option<AgentTeamMember>> {
+        Ok(None)
+    }
+    fn mark_member_idle(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> anyhow::Result<bool> {
+        Ok(false)
     }
     fn shutdown_member(
         &self,

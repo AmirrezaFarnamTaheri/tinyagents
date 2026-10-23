@@ -1,4 +1,24 @@
 use super::*;
+
+#[test]
+fn parse_str_stamps_host_provenance_without_requiring_a_prompt() {
+    let source = "id='embedded'\nwhen_to_use='embedded definition'\n";
+    let definition = parse_str::<Extensions>(source, DefinitionSource::Builtin).unwrap();
+
+    assert_eq!(definition.id, "embedded");
+    assert_eq!(definition.source, DefinitionSource::Builtin);
+    assert_eq!(
+        definition.system_prompt,
+        PromptSource::Inline(String::new())
+    );
+}
+
+#[test]
+fn parse_str_reports_malformed_toml() {
+    let error = parse_str::<Extensions>("id = [", DefinitionSource::Builtin).unwrap_err();
+
+    assert!(error.to_string().contains("parsing agent definition TOML"));
+}
 use crate::Extensions;
 
 #[test]

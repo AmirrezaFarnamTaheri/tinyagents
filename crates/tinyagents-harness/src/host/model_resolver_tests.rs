@@ -229,6 +229,57 @@ async fn clone_resolves_to_the_same_model() {
 }
 
 #[tokio::test]
+async fn prebuilt_resolver_prefers_lead_then_pin_then_hint_and_falls_back() {
+    let resolver = PrebuiltModelResolver::new(
+        Arc::new(EchoModel("primary")),
+        [
+            (
+                "pinned".to_string(),
+                Arc::new(EchoModel("pinned")) as Arc<dyn ChatModel<()>>,
+            ),
+            (
+                "hint:fast".to_string(),
+                Arc::new(EchoModel("hint")) as Arc<dyn ChatModel<()>>,
+            ),
+        ],
+    )
+    .with_lead_model(Arc::new(EchoModel("lead")));
+
+    let cases = [
+        (
+            ModelResolveRequest::new("lead")
+                .as_team_lead()
+                .with_model_pin("pinned"),
+            "lead",
+        ),
+        (
+            ModelResolveRequest::new("worker")
+                .with_model_pin("pinned")
+                .with_model_hint("fast"),
+            "pinned",
+        ),
+        (
+            ModelResolveRequest::new("worker").with_model_hint("fast"),
+            "hint",
+        ),
+        (
+            ModelResolveRequest::new("worker").with_model_pin("missing"),
+            "primary",
+        ),
+    ];
+    for (request, expected) in cases {
+        let response = resolver
+            .resolve(&request)
+            .await
+            .expect("resolve")
+            .invoke(&(), ModelRequest::default())
+            .await
+            .expect("invoke");
+        assert_eq!(response.text(), expected);
+    }
+}
+
+#[tokio::test]
 async fn usable_behind_a_trait_object() {
     // The runtime holds `Arc<dyn ModelResolver<State>>`, so object safety is
     // part of the contract, not an implementation detail.

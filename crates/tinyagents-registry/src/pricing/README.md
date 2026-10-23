@@ -8,6 +8,9 @@ estimate; consumers must not interpret that as a billed-free response.
 `flat_catalog_entry` projects rates, windows and the existing vision allowlist into
 a `ModelCatalogEntry`, using the source label supplied by the consumer. Runtime
 capability overlays, configuration and billing authority stay with consumers.
+`lookup_pricing` returns this flat estimate projection and treats an explicit
+case-insensitive `:free` suffix as zero list price. Call accounting still uses a
+provider-reported charge when one exists.
 This module performs no I/O and does not refresh prices. The seed catalog and
 its validation remain independent; this additive API preserves the migrated
 consumer snapshot without silently changing existing seed lookups.

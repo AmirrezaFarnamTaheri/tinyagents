@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use tinyagents_harness::tool::{ToolSnapshot, ToolSnapshotError};
+
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
@@ -23,8 +25,8 @@ use tinytools::{Tool, ToolResult, ToolSpec};
 use crate::{
     CommitReceipt, DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, PrefixSnapshot,
     ResumeMode, ResumePreparation, RuntimeError, SessionBuilder, SessionDriver, SessionHooks,
-    SessionStateView, SessionTerminal, SessionTurnOutcome, SessionTurnRequest, ToolSnapshot,
-    TranscriptCodec, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
+    SessionStateView, SessionTerminal, SessionTurnOutcome, SessionTurnRequest, TranscriptCodec,
+    TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 
 struct Driver {
@@ -601,7 +603,7 @@ async fn trailing_input_is_deduplicated_and_tool_collisions_fail_closed() {
                 parameters: serde_json::json!({})
             },
         ]),
-        Err(RuntimeError::ToolNameCollision(_))
+        Err(ToolSnapshotError::NameCollision(_))
     ));
 }
 
@@ -2050,6 +2052,8 @@ async fn after_commit_receipt_observes_durable_append_and_terminal_follows_it() 
         transcript.delta,
         crate::TranscriptDelta::Append { .. }
     ));
+    assert_eq!(transcript.rows.len(), 1);
+    assert_eq!(transcript.rows[0].content, "ok");
     assert!(matches!(
         events.terminal.lock().unwrap().as_slice(),
         [SessionTerminal::Completed(_)]
@@ -2096,6 +2100,10 @@ async fn receipt_reports_a_compaction_as_replacement_not_an_append_range() {
         receipts[1].transcript.as_ref().unwrap().delta,
         crate::TranscriptDelta::Replace { .. }
     ));
+    assert_eq!(
+        receipts[1].transcript.as_ref().unwrap().rows[0].content,
+        "compacted"
+    );
 }
 
 #[tokio::test]

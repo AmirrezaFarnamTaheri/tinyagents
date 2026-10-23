@@ -10,7 +10,6 @@ use tinyagents_harness::run_queue::{QueueLane, RunQueueHandle};
 use super::format::{CompletionFormatter, NeutralCompletionFormatter};
 use super::store::CompletionStore;
 use super::types::{CompletionRecord, CompletionState, NotifyMode};
-use crate::recovery::{RecoveryChild, build_restart_recovery_note};
 
 const LOG_PREFIX: &str = "[completion-router]";
 
@@ -49,8 +48,19 @@ pub enum TombstoneOutcome {
     AlreadyFinal,
 }
 
-#[derive(Default)]
+/// Result of an identity-guarded backing-store migration.
+#[derive(Clone)]
+pub enum CompletionStoreReplaceOutcome {
+    /// The replacement was copied and installed on this router.
+    Replaced(Arc<dyn CompletionStore>),
+    /// The expected store was stale; this is the router's current store.
+    Current(Arc<dyn CompletionStore>),
+}
+
 struct RouterState {
+    /// Store operations and in-process leases share this lock so a migration
+    /// cannot detach a claim from the state that owns its acknowledgement.
+    store: Arc<dyn CompletionStore>,
     /// Task ids handed out by a claim and not yet resolved. Process-local on
     /// purpose: after a restart nobody holds a lease, so everything still
     /// pending is claimable again.
@@ -65,7 +75,6 @@ struct RouterState {
 /// router serves one process: its read-modify-write sequences are serialised
 /// by an in-process lock, so two processes must not share a store.
 pub struct CompletionRouter {
-    store: Arc<dyn CompletionStore>,
     formatter: Arc<dyn CompletionFormatter>,
     max_attempts: u32,
     state: Mutex<RouterState>,
@@ -76,11 +85,52 @@ impl CompletionRouter {
     /// [`DEFAULT_MAX_ATTEMPTS`].
     pub fn new(store: Arc<dyn CompletionStore>) -> Self {
         Self {
-            store,
             formatter: Arc::new(NeutralCompletionFormatter),
             max_attempts: DEFAULT_MAX_ATTEMPTS,
-            state: Mutex::new(RouterState::default()),
+            state: Mutex::new(RouterState {
+                store,
+                leased: HashSet::new(),
+                parents: HashMap::new(),
+            }),
         }
+    }
+
+    /// Returns the persistence store backing this router.
+    pub fn store(&self) -> Arc<dyn CompletionStore> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .store
+            .clone()
+    }
+
+    /// Atomically migrates this router to `replacement`, preserving its
+    /// in-flight leases, parent queues, formatter, and attempt policy. The
+    /// current store is enumerated and copied before publication; on any
+    /// source-read or target-write error the old store remains canonical. The
+    /// replacement must be private to this router while the copy is made.
+    pub fn replace_store_if_current(
+        &self,
+        expected: &Arc<dyn CompletionStore>,
+        replacement: Arc<dyn CompletionStore>,
+    ) -> Result<CompletionStoreReplaceOutcome> {
+        let mut state = self.lock()?;
+        if !Arc::ptr_eq(&state.store, expected) {
+            return Ok(CompletionStoreReplaceOutcome::Current(Arc::clone(
+                &state.store,
+            )));
+        }
+        if Arc::ptr_eq(&state.store, &replacement) {
+            return Ok(CompletionStoreReplaceOutcome::Current(Arc::clone(
+                &state.store,
+            )));
+        }
+        let records = state.store.try_list(None)?;
+        for record in records {
+            replacement.put(&record)?;
+        }
+        state.store = Arc::clone(&replacement);
+        Ok(CompletionStoreReplaceOutcome::Replaced(replacement))
     }
 
     /// Replaces the formatter (the host's own wording).
@@ -135,7 +185,7 @@ impl CompletionRouter {
     }
 
     fn release_parent_locked(&self, state: &mut RouterState, parent_key: &str) {
-        for record in self.store.list(Some(parent_key)) {
+        for record in state.store.list(Some(parent_key)) {
             state.leased.remove(&record.task_id);
         }
     }
@@ -157,7 +207,7 @@ impl CompletionRouter {
         let Ok(state) = self.lock() else {
             return Vec::new();
         };
-        let mut records: Vec<_> = self
+        let mut records: Vec<_> = state
             .store
             .list(Some(parent_key))
             .into_iter()
@@ -179,7 +229,7 @@ impl CompletionRouter {
     pub async fn record(&self, mut record: CompletionRecord) -> Result<RecordOutcome> {
         let push = {
             let mut state = self.lock()?;
-            if self.parent_cancelled(&record.parent_key) {
+            if Self::parent_cancelled(&state, &record.parent_key) {
                 tracing::debug!(
                     task_id = %record.task_id,
                     parent_key = %record.parent_key,
@@ -187,7 +237,7 @@ impl CompletionRouter {
                 );
                 return Ok(RecordOutcome::Suppressed);
             }
-            match self.store.get(&record.task_id) {
+            match state.store.get(&record.task_id) {
                 Some(existing) if existing.state == CompletionState::Tombstoned => {
                     tracing::debug!(
                         task_id = %record.task_id,
@@ -218,7 +268,7 @@ impl CompletionRouter {
             record.state = CompletionState::Pending;
             record.attempts = 0;
             record.updated_at = SystemTime::now();
-            self.store.put(&record)?;
+            state.store.put(&record)?;
             tracing::debug!(
                 task_id = %record.task_id,
                 parent_key = %record.parent_key,
@@ -244,7 +294,7 @@ impl CompletionRouter {
                 Some((lane, queue)) => {
                     record.attempts = 1;
                     record.updated_at = SystemTime::now();
-                    self.store.put(&record)?;
+                    state.store.put(&record)?;
                     state.leased.insert(record.task_id.clone());
                     Some((lane, queue))
                 }
@@ -296,20 +346,22 @@ impl CompletionRouter {
     /// Withdraws a child's completion because the parent collected it itself
     /// (waited on it, or read its result). Suppresses routing from now on; a
     /// message already pushed onto a live queue is not retracted. A completion that has not arrived
-    /// yet is dropped when it does.
+    /// yet is dropped when it does. A withdrawn record keeps its id and state
+    /// but not its result.
     pub fn tombstone(&self, task_id: &str) -> Result<TombstoneOutcome> {
         let mut state = self.lock()?;
-        let outcome = match self.store.get(task_id) {
+        let outcome = match state.store.get(task_id) {
             Some(mut existing) if existing.state == CompletionState::Pending => {
-                existing.state = CompletionState::Tombstoned;
-                existing.updated_at = SystemTime::now();
-                self.store.put(&existing)?;
+                existing.settle(CompletionState::Tombstoned);
+                state.store.put(&existing)?;
                 state.leased.remove(task_id);
                 TombstoneOutcome::Suppressed
             }
             Some(_) => TombstoneOutcome::AlreadyFinal,
             None => {
-                self.store.put(&CompletionRecord::tombstone_stub(task_id))?;
+                state
+                    .store
+                    .put(&CompletionRecord::tombstone_stub(task_id))?;
                 TombstoneOutcome::Reserved
             }
         };
@@ -322,16 +374,17 @@ impl CompletionRouter {
     /// stopped parent. A message already pushed onto the parent's queue is not
     /// retracted (the host clears that queue when it stops the parent). The flag is stored durably, so it holds across a restart
     /// (until [`Self::compact`] drops it after its retention window). Returns how many pending records were withdrawn.
+    /// Withdrawn records lose their result at once, so a deleted parent's
+    /// content does not wait for compaction.
     pub fn cancel_parent(&self, parent_key: &str) -> Result<usize> {
         let mut state = self.lock()?;
-        self.set_parent_marker(parent_key, CompletionState::Tombstoned)?;
+        Self::set_parent_marker(&state, parent_key, CompletionState::Tombstoned)?;
         state.parents.remove(parent_key);
         let mut withdrawn = 0;
-        for mut record in self.store.list(Some(parent_key)) {
+        for mut record in state.store.list(Some(parent_key)) {
             if record.state == CompletionState::Pending {
-                record.state = CompletionState::Tombstoned;
-                record.updated_at = SystemTime::now();
-                self.store.put(&record)?;
+                record.settle(CompletionState::Tombstoned);
+                state.store.put(&record)?;
                 state.leased.remove(&record.task_id);
                 withdrawn += 1;
             }
@@ -343,7 +396,10 @@ impl CompletionRouter {
     /// Lets completions for `parent_key` through again after
     /// [`Self::cancel_parent`] (a stopped thread that the user reopened).
     pub fn resume_parent(&self, parent_key: &str) {
-        if let Err(error) = self.set_parent_marker(parent_key, CompletionState::Delivered) {
+        let result = self.lock().and_then(|state| {
+            Self::set_parent_marker(&state, parent_key, CompletionState::Delivered)
+        });
+        if let Err(error) = result {
             tracing::warn!(parent_key = %parent_key, error = %error, "{LOG_PREFIX} could not resume parent");
         }
     }
@@ -355,23 +411,31 @@ impl CompletionRouter {
         format!("\u{1}parent-cancelled:{parent_key}")
     }
 
-    fn parent_cancelled(&self, parent_key: &str) -> bool {
-        self.store
+    fn parent_cancelled(state: &RouterState, parent_key: &str) -> bool {
+        state
+            .store
             .get(&Self::parent_marker_id(parent_key))
             .is_some_and(|m| m.state == CompletionState::Tombstoned)
     }
 
-    fn set_parent_marker(&self, parent_key: &str, state: CompletionState) -> Result<()> {
+    fn set_parent_marker(
+        router: &RouterState,
+        parent_key: &str,
+        state: CompletionState,
+    ) -> Result<()> {
         let mut marker = CompletionRecord::tombstone_stub(&Self::parent_marker_id(parent_key));
         marker.state = state;
-        self.store.put(&marker)
+        router.store.put(&marker)
     }
 
     /// Every undelivered completion for `parent_key`, oldest first, in every
     /// [`NotifyMode`] and whether or not a claim currently holds it. Read-only:
     /// this is what surfaces after a restart.
     pub fn pending_for(&self, parent_key: &str) -> Vec<CompletionRecord> {
-        let mut pending: Vec<_> = self
+        let Ok(state) = self.lock() else {
+            return Vec::new();
+        };
+        let mut pending: Vec<_> = state
             .store
             .list(Some(parent_key))
             .into_iter()
@@ -409,7 +473,7 @@ impl CompletionRouter {
         eligible: impl Fn(NotifyMode) -> bool,
     ) -> Result<Vec<CompletionRecord>> {
         let mut state = self.lock()?;
-        let mut candidates: Vec<_> = self
+        let mut candidates: Vec<_> = state
             .store
             .list(Some(parent_key))
             .into_iter()
@@ -425,7 +489,7 @@ impl CompletionRouter {
         for mut record in candidates {
             record.attempts = record.attempts.saturating_add(1);
             record.updated_at = SystemTime::now();
-            if let Err(error) = self.store.put(&record) {
+            if let Err(error) = state.store.put(&record) {
                 // The caller gets no ids on error, so none may stay leased.
                 for done in &claimed {
                     state.leased.remove(&done.task_id);
@@ -446,19 +510,19 @@ impl CompletionRouter {
     }
 
     /// Settles claimed (or pulled) records as delivered. Returns how many
-    /// changed; records that are not pending are left alone.
+    /// changed; records that are not pending are left alone. A delivered
+    /// record keeps its id, state and attempts for dedupe but drops its result.
     pub fn mark_delivered<S: AsRef<str>>(&self, task_ids: &[S]) -> Result<usize> {
         let mut state = self.lock()?;
         let mut changed = 0;
         for id in task_ids {
             let id = id.as_ref();
             state.leased.remove(id);
-            if let Some(mut record) = self.store.get(id)
+            if let Some(mut record) = state.store.get(id)
                 && record.state == CompletionState::Pending
             {
-                record.state = CompletionState::Delivered;
-                record.updated_at = SystemTime::now();
-                self.store.put(&record)?;
+                record.settle(CompletionState::Delivered);
+                state.store.put(&record)?;
                 changed += 1;
             }
         }
@@ -470,21 +534,24 @@ impl CompletionRouter {
     /// claimed again, unless its attempts have reached [`Self::max_attempts`]:
     /// then it becomes [`CompletionState::GaveUp`] and is returned so the host
     /// can apply its own give-up policy (the router never delivers it again).
+    /// The returned record carries the full result; the stored one does not,
+    /// so the host's give-up writer is the result's last reader.
     pub fn mark_failed<S: AsRef<str>>(&self, task_ids: &[S]) -> Result<Vec<CompletionRecord>> {
         let mut state = self.lock()?;
         let mut gave_up = Vec::new();
         for id in task_ids {
             let id = id.as_ref();
             state.leased.remove(id);
-            let Some(mut record) = self.store.get(id) else {
+            let Some(mut record) = state.store.get(id) else {
                 continue;
             };
             if record.state != CompletionState::Pending || record.attempts < self.max_attempts {
                 continue;
             }
-            record.state = CompletionState::GaveUp;
-            record.updated_at = SystemTime::now();
-            self.store.put(&record)?;
+            let result = std::mem::take(&mut record.result);
+            record.settle(CompletionState::GaveUp);
+            state.store.put(&record)?;
+            record.result = result;
             tracing::warn!(
                 task_id = %record.task_id,
                 parent_key = %record.parent_key,
@@ -496,38 +563,15 @@ impl CompletionRouter {
         Ok(gave_up)
     }
 
-    /// Drops settled records older than `retain` from the store (and, for the
-    /// JSONL store, the log). See [`CompletionStore::compact`].
+    /// Drops settled records older than `retain` from the store. Their results
+    /// went when they settled; this frees the dedupe entries too, so pick a
+    /// window longer than any child can outlive its parent's interest. See
+    /// [`CompletionStore::compact`].
     pub fn compact(&self, retain: Duration) -> Result<usize> {
-        let dropped = self.store.compact(retain)?;
+        let state = self.lock()?;
+        let dropped = state.store.compact(retain)?;
         tracing::debug!(dropped, "{LOG_PREFIX} compacted");
         Ok(dropped)
-    }
-
-    /// The restart recovery note for `parent_key`: the interrupted `children`
-    /// (see [`recovery_children`](crate::recovery_children)) plus every
-    /// completion that finished but was never delivered, framed by the
-    /// formatter. Empty when there is nothing to say. Read-only; the host
-    /// settles the completions with [`Self::mark_delivered`] once it has
-    /// injected the note. `Off` (pull-only) records and ones a claim currently
-    /// holds are left out. Nothing is relaunched.
-    pub fn restart_recovery_note(&self, parent_key: &str, children: &[RecoveryChild]) -> String {
-        let interrupted = build_restart_recovery_note(children);
-        let leased = self.lock().map(|s| s.leased.clone()).unwrap_or_default();
-        let pending: Vec<_> = self
-            .pending_for(parent_key)
-            .into_iter()
-            .filter(|r| r.notify_mode != NotifyMode::Off && !leased.contains(&r.task_id))
-            .collect();
-        if pending.is_empty() {
-            return interrupted;
-        }
-        let finished = self.formatter.format_batch(&pending);
-        if interrupted.is_empty() {
-            finished
-        } else {
-            format!("{finished}\n\n{interrupted}")
-        }
     }
 }
 

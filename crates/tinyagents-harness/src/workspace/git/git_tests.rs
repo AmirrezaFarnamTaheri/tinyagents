@@ -30,6 +30,32 @@ impl TempDir {
     fn path(&self) -> &Path {
         &self.path
     }
+
+    fn outside_git_repo() -> Self {
+        let mut parent = std::env::temp_dir();
+        while Command::new("git")
+            .current_dir(&parent)
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            let Some(next) = parent.parent() else {
+                break;
+            };
+            parent = next.to_path_buf();
+        }
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let counter = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = parent.join(format!(
+            "tinyagents-nonrepo-test-{}-{nanos}-{counter}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).expect("create non-repository temp dir");
+        Self { path }
+    }
 }
 
 impl Drop for TempDir {
@@ -77,7 +103,7 @@ fn validate_repo_root_rejects_non_repo() {
     if !git_available() {
         return;
     }
-    let tmp = TempDir::new();
+    let tmp = TempDir::outside_git_repo();
     let err = create_git_worktree(tmp.path(), "run-1", GitWorktreeBaseRef::Head).unwrap_err();
     assert!(matches!(err, GitWorktreeError::NotAGitRepo(_)));
 }
@@ -95,6 +121,37 @@ fn create_then_status_reports_clean_worktree() {
     assert!(!status.is_dirty);
     assert!(status.changed_files.is_empty());
     assert!(status.path.ends_with(Path::new(".claude/worktrees/run-1")));
+}
+
+#[tokio::test]
+async fn isolation_applies_policy_prefix_and_calls_lifecycle_hook() {
+    if !git_available() {
+        return;
+    }
+    #[derive(Debug, Default)]
+    struct Hook(std::sync::Mutex<Vec<&'static str>>);
+    #[async_trait]
+    impl GitWorktreeLifecycleHook for Hook {
+        async fn prepared(&self, _: &WorkspaceDescriptor) -> crate::Result<()> {
+            self.0.lock().unwrap().push("prepared");
+            Ok(())
+        }
+        async fn cleaned(&self, _: &WorkspaceDescriptor, error: Option<&str>) -> crate::Result<()> {
+            assert!(error.is_none());
+            self.0.lock().unwrap().push("cleaned");
+            Ok(())
+        }
+    }
+
+    let (_tmp, root) = init_repo();
+    let hook = Arc::new(Hook::default());
+    let isolation = GitWorktreeIsolation::new(&root)
+        .with_policy_id_prefix("openhuman.worktree:")
+        .with_lifecycle_hook(hook.clone());
+    let descriptor = isolation.prepare("run-1", Some("agent-a")).await.unwrap();
+    assert_eq!(descriptor.policy_id, "openhuman.worktree:agent-a:run-1");
+    isolation.cleanup(&descriptor).await.unwrap();
+    assert_eq!(*hook.0.lock().unwrap(), ["prepared", "cleaned"]);
 }
 
 #[test]

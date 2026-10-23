@@ -42,7 +42,9 @@ already had.
   [`render_artifact_pointer`], [`extract_artifact_paths`],
   [`note_artifact_handoff`] (`ops.rs`) — the supporting free functions:
   threshold decision, cap-aware threshold, abstract truncation, pointer
-  rendering, pointer parsing, and handoff logging.
+  rendering, pointer parsing, handoff logging, and safe filesystem
+  materialization. The filesystem variant checks the host policy against its
+  resolved target before storing the blob.
 - [`resolve_artifact_key`], [`sanitize_component`] (`paths.rs`) — fail-closed
   key resolution under the two convention namespaces and the helper it builds on.
 - [`policy`] module (`policy.rs`) — the two host-supplied gates:
@@ -65,7 +67,7 @@ already had.
 | `types.rs`   | `ArtifactKind`, `OffloadedArtifact`, `OffloadError`, constants.        |
 | `paths.rs`   | Fail-closed key resolution (`resolve_artifact_key`, `sanitize_component`). |
 | `policy.rs`  | `ArtifactPathPolicy`, `ArtifactRedactor` traits and their defaults.    |
-| `tool_results.rs` | Per-tool-result persistence: `ToolResultArtifactStore` (over a tinystoragedrivers `BlobStore`: `new(blobs, ...)` or `in_memory(...)`; pointers are `tool-results/<session>/<tool>/<call>.txt` blob keys; `read`, `purge_session`, `with_retention`), `apply_per_result_persistence`, `spill_aggregate_tool_results`, paged artifact reads (`read_target`). Host supplies redactor, read/wrapper tool names, read limit, and a read tool that serves `tool-results/` keys from the blob store. |
+| `tool_results.rs` | Per-tool-result persistence: `ToolResultArtifactStore` (over a host-supplied tinystoragedrivers `BlobStore`; pointers are `tool-results/<session>/<tool>/<call>.txt` blob keys; `read`, `purge_session`, `with_retention`), `apply_per_result_persistence`, `spill_aggregate_tool_results`, paged artifact reads (`read_target`). Host supplies redactor, read/wrapper tool names, read limit, and a read tool that serves `tool-results/` keys from the blob store. |
 | `tool_results_tests.rs` | Tests for the above, incl. a byte-stable envelope fixture. |
 | `ops.rs`     | `ArtifactOffload` writer over a `BlobStore`, `offload_oversized_result`, pointer/handoff plumbing. |
 | `mod_tests.rs`, `contract_tests.rs`, `policy_tests.rs`, `request_truncation_tests.rs` | Unit tests: happy path, fallback path, fail-closed hardening. |

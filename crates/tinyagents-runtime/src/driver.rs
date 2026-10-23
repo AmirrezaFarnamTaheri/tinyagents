@@ -5,7 +5,8 @@ use tinyagents_harness::{context::RunContext, runtime::AgentHarness};
 use tinyinference_llm::message::Message;
 
 use crate::turn_driver::TurnControls;
-use crate::{RuntimeError, ToolSnapshot, TranscriptPartial};
+use crate::{RuntimeError, TranscriptPartial};
+use tinyagents_harness::tool::ToolSnapshot;
 
 /// Immutable values passed from a [`crate::Session`] to one driver invocation.
 pub struct DriverRequest<C = ()> {

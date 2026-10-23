@@ -23,6 +23,23 @@ fn identical_failures_halt_at_the_repeat_threshold() {
 }
 
 #[test]
+fn typed_recoverable_halt_preserves_transient_class_and_operation() {
+    let legacy = RecoverableFailureLadder::default();
+    let typed = RecoverableFailureLadder::default();
+    for _ in 0..7 {
+        let _ = legacy.record(&Copy, "web_fetch", "a", "timeout");
+        let _ = typed.record_with_cause(&Copy, "web_fetch", "a", "timeout");
+    }
+    let old_summary = legacy.record(&Copy, "web_fetch", "a", "timeout").unwrap();
+    let cause = typed
+        .record_with_cause(&Copy, "web_fetch", "a", "timeout")
+        .unwrap();
+    assert_eq!(cause.summary, old_summary);
+    assert_eq!(cause.class, "transient");
+    assert_eq!(cause.operation, "web_fetch");
+}
+
+#[test]
 fn varied_failures_halt_at_the_streak_threshold() {
     let ladder = RecoverableFailureLadder::default();
     for i in 0..11 {

@@ -106,3 +106,108 @@ async fn install_attaches_only_for_root_turns_with_a_scope() {
     .await;
     assert!(harness.policy().capture.tool_io);
 }
+
+struct PlainResponseModel;
+
+#[async_trait::async_trait]
+impl tinyinference_llm::model::ChatModel<()> for PlainResponseModel {
+    async fn invoke(
+        &self,
+        _: &(),
+        _: tinyinference_llm::model::ModelRequest,
+    ) -> tinyinference_llm::Result<tinyinference_llm::model::ModelResponse> {
+        Ok(tinyinference_llm::model::ModelResponse::assistant("ok"))
+    }
+}
+
+struct PhysicalDispatchBase(Arc<dyn tinyinference_llm::model::ChatModel<()>>);
+
+impl crate::middleware::ModelBaseCall<(), ()> for PhysicalDispatchBase {
+    fn call<'a>(
+        &'a self,
+        _: &'a mut RunContext,
+        state: &'a (),
+        request: ModelRequest,
+    ) -> crate::middleware::BoxModelFuture<'a> {
+        Box::pin(async move { Ok(self.0.invoke(state, request).await?) })
+    }
+}
+
+#[tokio::test]
+async fn installed_model_observer_restores_scope_after_caller_scope_ends() {
+    use crate::middleware::MiddlewareStack;
+
+    let recorder = Arc::new(Recorder::default());
+    let scope = ObserverScope::new(recorder.clone(), TraceContent::MetadataOnly);
+    let provider = observe_physical_dispatches(Arc::new(PlainResponseModel));
+    let base = PhysicalDispatchBase(provider);
+    let mut stack = MiddlewareStack::new();
+    with_observer(scope.clone(), async {
+        stack.push_model_middleware(Arc::new(InstalledObserverMiddleware(scope)));
+    })
+    .await;
+
+    let mut ctx = RunContext::new(crate::context::RunConfig::new("scope-test"), ());
+    stack
+        .run_wrapped_model(&mut ctx, &(), ModelRequest::default(), &base)
+        .await
+        .expect("model call");
+
+    let events = recorder.0.lock().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, TurnObservation::ModelDispatch { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, TurnObservation::Model { .. }))
+            .count(),
+        1
+    );
+}
+
+struct NeverCalled;
+
+#[async_trait::async_trait]
+impl tinyinference_llm::model::ChatModel<()> for NeverCalled {
+    async fn invoke(
+        &self,
+        _: &(),
+        _: tinyinference_llm::model::ModelRequest,
+    ) -> tinyinference_llm::Result<tinyinference_llm::model::ModelResponse> {
+        panic!("budget refusal must happen before provider invocation")
+    }
+}
+
+#[tokio::test]
+async fn budget_refusal_emits_no_physical_dispatch_event() {
+    use tinyinference_llm::model::budget::{Budget, CallBudget, SpendLimits};
+
+    let recorder = Arc::new(Recorder::default());
+    let scope = ObserverScope::new(recorder.clone(), TraceContent::MetadataOnly);
+    let budget = crate::cost::ModelBudget::new(
+        Budget::new(SpendLimits {
+            tokens: Some(0),
+            cost_micros: None,
+        }),
+        CallBudget {
+            input_tokens: 10_000,
+            output_tokens: 100,
+            cost_micros: 0,
+        },
+    );
+    let model = budget.wrap_model(Arc::new(NeverCalled));
+    let result = with_observer(scope, async {
+        model
+            .invoke(&(), tinyinference_llm::model::ModelRequest::new(Vec::new()))
+            .await
+    })
+    .await;
+
+    assert!(result.is_err());
+    assert!(recorder.0.lock().unwrap().is_empty());
+}

@@ -15,6 +15,10 @@ collects results, and manages state transitions durably.
 - **`WorkflowStore`, `SessionWorkflowStore`** — durable run state: loads,
   saves, claims (lease), and compare-and-swap updates. [`SessionWorkflowStore`]
   wraps the session run ledger.
+- **`WorkflowRunSupervisor`** — process-local start/resume/stop coordination.
+  Hosts supply their task-context spawner and wrap the drive future with any
+  host parent or origin scopes. Every start installs a fresh cancellation
+  generation; stale handles cannot cancel a resumed loop.
 - **`WorkflowDefinition`, `WorkflowPhase`** — the declarative phase DAG: phase
   names, descriptions, agent ids, dependencies, concurrency settings.
 - **`PhaseStatus`** — phase state machine: Pending → Running → (Completed |
@@ -48,6 +52,8 @@ collects results, and manages state transitions durably.
 - **`engine.rs`** — [`WorkflowEngine`] implementation: phase scheduling, child
   task spawning and monitoring, state persistence, concurrency enforcement.
   [`WorkflowStore`], [`SessionWorkflowStore`], [`WorkflowExecutor`] trait.
+- **`supervisor.rs`** — generation-safe cancellation and scheduling handles for
+  host-launched drive futures.
 - **`types.rs`** — data types: [`WorkflowDefinition`], [`WorkflowPhase`],
   [`DefinitionError`], [`WorkflowDefinitionListResponse`].
 - **`state.rs`** — phase-state projection: JSON document queries and mutations.

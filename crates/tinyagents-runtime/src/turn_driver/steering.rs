@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tinyagents_harness::run_queue::{
-    self, ForwardEventSink, ForwarderCleanup, QueuedMessage, RunQueue, SteeringForwarderGuard,
+    self, ForwardEventSink, ForwarderCleanup, MessageSteeringForwarderGuard, QueuedMessage,
+    RunQueue, RunQueueHandle, SteeringForwarderGuard,
 };
 use tinyagents_harness::steering::SteeringHandle;
 
@@ -82,6 +83,52 @@ impl<T: QueuedMessage> SteeringFeed for RunQueueFeed<T> {
     }
 }
 
+/// A [`SteeringFeed`] for the driver's native
+/// [`tinyinference_llm::message::Message`] queue.
+///
+/// Unlike host-defined [`RunQueueFeed`] payloads, native messages have no
+/// stable queue item ID. This adapter preserves complete user message content
+/// while forwarding and leaves unsupported non-user messages in their lane.
+pub struct MessageRunQueueFeed {
+    queue: RunQueueHandle,
+    sink: ForwardEventSink,
+}
+
+impl MessageRunQueueFeed {
+    /// Feeds from a native message queue, reporting deliveries and requeues.
+    pub fn new(queue: RunQueueHandle, sink: ForwardEventSink) -> Self {
+        Self { queue, sink }
+    }
+
+    /// Feeds from a native message queue without observing deliveries.
+    pub fn silent(queue: RunQueueHandle) -> Self {
+        Self::new(queue, Arc::new(|_| {}))
+    }
+}
+
+#[async_trait]
+impl SteeringFeed for MessageRunQueueFeed {
+    async fn prime(&self, handle: &SteeringHandle, thread_label: &str) {
+        run_queue::forward_message_steers(&self.queue, handle, thread_label, &self.sink).await;
+        run_queue::forward_message_collects(&self.queue, handle, thread_label, &self.sink).await;
+    }
+
+    fn arm(
+        &self,
+        handle: SteeringHandle,
+        thread_label: String,
+        cleanup: Option<ForwarderCleanup>,
+    ) -> FeedGuard {
+        Box::new(MessageSteeringForwarderGuard::new(
+            handle,
+            Some(self.queue.clone()),
+            cleanup,
+            thread_label,
+            self.sink.clone(),
+        ))
+    }
+}
+
 /// A message type for a steering-only guard that has no queue.
 pub(crate) struct NoQueued;
 
@@ -111,3 +158,7 @@ pub(crate) fn cleanup_only_guard(
         Arc::new(|_| {}),
     ))
 }
+
+#[cfg(test)]
+#[path = "steering_tests.rs"]
+mod tests;

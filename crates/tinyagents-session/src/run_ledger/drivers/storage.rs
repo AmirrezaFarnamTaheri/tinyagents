@@ -10,9 +10,9 @@ use super::DriverRunLedger;
 use super::dto::Stored;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use tinystoragedrivers_core::primitives::{self, Repo};
+use tinyagents_storage_kit::primitives::{self, Repo};
 
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     CollectionSpec, DocumentStoreExt, Filter, IndexSpec, Key, MIGRATIONS_COLLECTION, Query, Sort,
     StorageError, Versioned, WriteOp, WriteOptions,
 };
@@ -81,17 +81,6 @@ pub(super) fn eq_nonblank(filter: Filter, field: &str, value: Option<&str>) -> F
 /// metadata, so none declares a TTL.
 pub(super) fn ledger_specs() -> Vec<CollectionSpec> {
     vec![
-        CollectionSpec::new(super::entry_tree::HEADS),
-        CollectionSpec::new(super::entry_tree::ENTRIES)
-            .index(IndexSpec::new("session_ordinal", ["session_id", "ordinal"]))
-            .index(IndexSpec::new(
-                "session_parent",
-                ["session_id", "parent_id"],
-            )),
-        CollectionSpec::new(super::entry_tree::LABELS)
-            .index(IndexSpec::new("session", ["session_id"])),
-        CollectionSpec::new(super::entry_tree::INDEXES)
-            .index(IndexSpec::new("session", ["session_id"])),
         CollectionSpec::new(EVENT_HEADS),
         CollectionSpec::new(EVENTS)
             .index(IndexSpec::new("run_sequence", ["run_id", "sequence"]).unique()),
@@ -194,7 +183,7 @@ pub(super) fn put_op<T: Stored>(
     collection: &str,
     id: String,
     record: &T,
-    precondition: tinystoragedrivers_core::Precondition,
+    precondition: tinystoragedrivers_types::Precondition,
 ) -> Result<WriteOp, StorageError> {
     Ok(WriteOp::Put {
         collection: collection.into(),

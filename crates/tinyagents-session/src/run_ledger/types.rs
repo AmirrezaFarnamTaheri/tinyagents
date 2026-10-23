@@ -16,7 +16,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// What kind of background run an [`AgentRun`] represents.
+/// What kind of agent run an [`AgentRun`] represents.
 ///
 /// Distinguishes the several call sites that create a run row so listings and
 /// UI can filter by origin without inferring it from other fields.
@@ -29,6 +29,8 @@ pub enum AgentRunKind {
     WorkerThread,
     /// A top-level background agent with no synchronous caller.
     BackgroundAgent,
+    /// A foreground agent turn initiated directly by a user or host caller.
+    InteractiveTurn,
     /// An agent acting as a member of an [`AgentTeam`].
     TeamMember,
     /// A run spawned as a child of a [`WorkflowRun`] phase.
@@ -42,6 +44,7 @@ impl AgentRunKind {
             Self::Subagent => "subagent",
             Self::WorkerThread => "worker_thread",
             Self::BackgroundAgent => "background_agent",
+            Self::InteractiveTurn => "interactive_turn",
             Self::TeamMember => "team_member",
             Self::WorkflowChild => "workflow_child",
         }
@@ -53,6 +56,7 @@ impl AgentRunKind {
         match raw {
             "worker_thread" => Self::WorkerThread,
             "background_agent" => Self::BackgroundAgent,
+            "interactive_turn" => Self::InteractiveTurn,
             "team_member" => Self::TeamMember,
             "workflow_child" => Self::WorkflowChild,
             _ => Self::Subagent,
@@ -622,6 +626,19 @@ pub struct AgentTeamMember {
     pub run_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Outcome of atomically reserving a team member for one task run.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AgentTeamMemberRunAdmission {
+    /// A pending or idle member was atomically moved to active.
+    Started(AgentTeamMember),
+    /// The member already owns an active task.
+    AlreadyActive(AgentTeamMember),
+    /// The member exists but is stopped and cannot start a task.
+    NotAdmissible(AgentTeamMember),
+    /// No member matched the requested team and id.
+    Missing,
 }
 
 /// Fields a caller supplies to create or update an [`AgentTeamMember`].
