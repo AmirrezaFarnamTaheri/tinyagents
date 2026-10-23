@@ -1,6 +1,6 @@
 use super::*;
 use crate::progress::AgentProgress;
-use crate::run_queue::QueuedMessage;
+use crate::run_queue::{QueueLane, QueuedMessage};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Payload {
@@ -76,6 +76,19 @@ fn turn_request_is_a_queue_message_with_a_rebuilt_host_payload() {
     assert_eq!(recovered.payload.queued_at_ms, 2);
     assert_eq!(recovered.payload.inherited, None);
     assert_eq!(recovered.disposition, QueueDisposition::Steer);
+}
+
+#[test]
+fn requeued_turn_request_keeps_its_original_queue_lane() {
+    let recovered = <TurnRequest as QueuedMessage>::requeued_in_lane(
+        "request-2".into(),
+        "additional context".into(),
+        "thread-1",
+        QueueLane::Collect,
+        2,
+    );
+
+    assert_eq!(recovered.disposition, QueueDisposition::Collect);
 }
 
 #[test]
