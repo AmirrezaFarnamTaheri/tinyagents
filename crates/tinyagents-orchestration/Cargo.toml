@@ -10,7 +10,6 @@ description = "Host-neutral subagent invocation and lifecycle orchestration."
 
 [dependencies]
 tinyagents-definition = { path = "../tinyagents-definition", version = "3.0.0" }
-anyhow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
