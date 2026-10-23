@@ -67,6 +67,25 @@ where
     }
 }
 
+impl RequeuePayload for serde_json::Value {
+    fn requeued(thread_id: &str, queued_at_ms: u64) -> Self {
+        serde_json::json!({
+            "thread_id": thread_id,
+            "queued_at_ms": queued_at_ms,
+        })
+    }
+
+    fn adopt(&mut self, running: &Self) {
+        if let (Self::Object(requeued), Self::Object(active)) = (self, running) {
+            for (key, value) in active {
+                requeued
+                    .entry(key.clone())
+                    .or_insert_with(|| value.clone());
+            }
+        }
+    }
+}
+
 /// Host-owned identity and fingerprint for the checked-out durable session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnSession {
@@ -345,6 +364,7 @@ pub(crate) struct ActiveTurn<P> {
     pub(crate) cancel: crate::CancellationToken,
     pub(crate) generation: u64,
     pub(crate) queue: Arc<RunQueue<TurnRequest<P>>>,
+    pub(crate) payload: P,
 }
 
 type ThreadLockKey = (ScopeKey, String);
@@ -361,9 +381,16 @@ fn queue_lane(disposition: QueueDisposition) -> Option<QueueLane> {
     }
 }
 
-fn restore_queue_scope<P>(requests: &mut [TurnRequest<P>], scope: &ScopeKey) {
+fn restore_queue_context<P: RequeuePayload>(
+    requests: &mut [TurnRequest<P>],
+    scope: &ScopeKey,
+    thread_id: &str,
+    running_payload: &P,
+) {
     for request in requests {
         request.scope.clone_from(scope);
+        request.thread_id = thread_id.to_owned();
+        request.payload.adopt(running_payload);
     }
 }
 
@@ -391,7 +418,7 @@ where
     E: EventSink<P> + 'static,
     F: FailureClassifier + 'static,
     S: Summarizer<P> + 'static,
-    P: Clone + Send + Sync + 'static,
+    P: RequeuePayload + Clone + Send + Sync + 'static,
 {
     pub fn new(
         host: Arc<H>,
@@ -595,6 +622,7 @@ where
                 let mut state = reserved.clone();
                 state.request_id = request.request_id.clone();
                 state.cancel = cancellation.clone();
+                state.payload.clone_from(&request.payload);
                 active.insert(key.clone(), state.clone());
                 active_generation = Some(state.generation);
                 *state_out = Some(state);
@@ -614,6 +642,7 @@ where
                         .next_generation
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                     queue: queue.clone(),
+                    payload: request.payload.clone(),
                 };
                 let previous = active.insert(key.clone(), state.clone());
                 active_generation = Some(state.generation);
@@ -843,7 +872,12 @@ where
         for lane in [QueueLane::Steer, QueueLane::Followup, QueueLane::Collect] {
             queued.extend(turn.queue.take(lane, QueueMode::All).await);
         }
-        restore_queue_scope(&mut queued, &request.scope);
+        restore_queue_context(
+            &mut queued,
+            &request.scope,
+            &request.thread_id,
+            &turn.payload,
+        );
         queued
     }
 
@@ -938,7 +972,7 @@ where
             return (Vec::new(), None);
         };
         let mut collected = current.queue.take(QueueLane::Collect, QueueMode::All).await;
-        restore_queue_scope(&mut collected, scope);
+        restore_queue_context(&mut collected, scope, thread_id, &current.payload);
         let next = current
             .queue
             .take(QueueLane::Steer, QueueMode::OneAtATime)
@@ -956,7 +990,12 @@ where
             next
         };
         if let Some(mut request) = next {
-            request.scope.clone_from(scope);
+            restore_queue_context(
+                std::slice::from_mut(&mut request),
+                scope,
+                thread_id,
+                &current.payload,
+            );
             let reserved = ActiveTurn {
                 request_id: request.request_id.clone(),
                 cancel: crate::CancellationToken::new(),
@@ -964,6 +1003,7 @@ where
                     .next_generation
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                 queue: current.queue,
+                payload: request.payload.clone(),
             };
             active.insert(key, reserved.clone());
             (collected, Some((request, reserved)))
@@ -987,7 +1027,7 @@ where
         match active.get(&key) {
             Some(turn) => {
                 let mut requests = turn.queue.take(lane, mode).await;
-                restore_queue_scope(&mut requests, scope);
+                restore_queue_context(&mut requests, scope, thread_id, &turn.payload);
                 requests
             }
             None => Vec::new(),
