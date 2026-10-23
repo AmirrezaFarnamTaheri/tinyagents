@@ -188,7 +188,7 @@ pub async fn replace_if_absent(
         item.content = item.content.trim().to_string();
     }
     items.retain(|item| !item.content.is_empty());
-    sequence::apply_write(&mut Vec::new(), &mut items).map_err(TinyAgentsError::Validation)?;
+    sequence::apply_write(&[], &mut items).map_err(TinyAgentsError::Validation)?;
     save_items(store, &thread_id, items).await?;
     Ok(true)
 }
