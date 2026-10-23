@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.0.0 — 2026-10-22
+
+**Breaking.** This release completes the TinyAgents slim-down: generic tool
+types and tool-call parsing live in TinyTools, while host-specific execution
+policy and adapters remain with their hosts. Public crates and modules removed
+during the 2.x migration are no longer part of the TinyAgents workspace.
+
+- Bump the surviving TinyAgents workspace crates to 3.0.0.
+- Update the nested TinyTools pin to the 0.6-compatible epic revision.
+
+The unreleased entries below describe the changes accumulated before this
+major release.
+
 ## Unreleased: dedicated hooks crate (tinyagents#470)
 
 **Breaking.** Stop-hook and lifecycle-hook APIs now live in
