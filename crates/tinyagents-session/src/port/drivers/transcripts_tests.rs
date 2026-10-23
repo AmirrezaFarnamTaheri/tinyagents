@@ -143,20 +143,16 @@ fn a_reserved_generation_rejects_entry_insert_after_lease_takeover() {
         scope.clone(),
     )) as Arc<dyn DocumentStore>;
     let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let callback_stem = Arc::new(std::sync::Mutex::new(None::<String>));
+    let (conditioned_open_tx, conditioned_open_rx) = std::sync::mpsc::channel();
+    let (takeover_done_tx, takeover_done_rx) = std::sync::mpsc::channel();
+    let takeover_done_rx = std::sync::Mutex::new(takeover_done_rx);
     let opener_scope = scope.clone();
     let opener: ConditionedEntryOpener = {
         let armed = Arc::clone(&armed);
-        let base = Arc::clone(&base);
-        let callback_stem = Arc::clone(&callback_stem);
         Arc::new(move |condition: &WriteCondition| {
             if armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                let stem = callback_stem
-                    .lock()
-                    .unwrap()
-                    .clone()
-                    .expect("test stem was installed");
-                take_over_reservation(Arc::clone(&base), stem);
+                conditioned_open_tx.send(()).unwrap();
+                takeover_done_rx.lock().unwrap().recv().unwrap();
             }
             Ok(Arc::new(SqliteDocuments::conditioned(
                 connection.clone(),
@@ -176,11 +172,16 @@ fn a_reserved_generation_rejects_entry_insert_after_lease_takeover() {
     let parent = SessionRef::scoped("reservation-race", "planner");
     let (successor, history) = locator.begin_generation(&parent, meta("reservation-race")).unwrap();
     let stem = session_stem(&successor);
-    *callback_stem.lock().unwrap() = Some(stem.clone());
     armed.store(true, std::sync::atomic::Ordering::SeqCst);
 
-    let rows = vec![message("user", "first successor write")];
-    let result = history.append_turn(turn(&[], &rows, &meta("reservation-race")));
+    let writer = std::thread::spawn(move || {
+        let rows = vec![message("user", "first successor write")];
+        history.append_turn(turn(&[], &rows, &meta("reservation-race")))
+    });
+    conditioned_open_rx.recv().unwrap();
+    take_over_reservation(Arc::clone(&base), stem.clone());
+    takeover_done_tx.send(()).unwrap();
+    let result = writer.join().unwrap();
 
     assert!(
         result.is_err(),
