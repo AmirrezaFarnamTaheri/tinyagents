@@ -1704,7 +1704,9 @@ async fn dynamic_prompt_skips_when_none() {
 #[tokio::test]
 async fn redaction_masks_response_and_tool_text() {
     let (mut ctx, _recorder) = ctx_with_recorder();
-    let redaction = Arc::new(RedactionMiddleware::new(["sk-secret", "hunter2"]));
+    // `sk` is a prefix of `sk-secret`: the longer secret must win, or its
+    // tail (`-secret`) would leak.
+    let redaction = Arc::new(RedactionMiddleware::new(["sk", "sk-secret", "hunter2"]));
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
     stack.push(redaction.clone());
 

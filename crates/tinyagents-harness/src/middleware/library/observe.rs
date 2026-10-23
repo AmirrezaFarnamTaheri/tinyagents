@@ -118,13 +118,17 @@ impl RedactionMiddleware {
         patterns: impl IntoIterator<Item = impl Into<String>>,
         mask: impl Into<String>,
     ) -> Self {
+        let mut patterns: Vec<String> = patterns
+            .into_iter()
+            .map(Into::into)
+            .filter(|p| !p.is_empty())
+            .collect();
+        // Longest first, so at one position the longest match wins and a
+        // secret that starts with a shorter one never leaks its tail.
+        patterns.sort_by_key(|pattern| std::cmp::Reverse(pattern.len()));
         Self {
             label: "redaction",
-            patterns: patterns
-                .into_iter()
-                .map(Into::into)
-                .filter(|p| !p.is_empty())
-                .collect(),
+            patterns,
             mask: mask.into(),
             redactions: Mutex::new(0),
         }
@@ -144,7 +148,7 @@ impl RedactionMiddleware {
     /// are skipped as opaque, which makes redaction idempotent: re-running the
     /// middleware over already-redacted text is a no-op even when a pattern
     /// happens to be a substring of the mask. When several patterns match at
-    /// the same position, the first-configured pattern wins.
+    /// the same position, the longest pattern wins.
     fn redact(&self, text: &str) -> (String, usize) {
         let mut out = String::with_capacity(text.len());
         let mut hits = 0usize;
