@@ -21,7 +21,6 @@ async fn live_openai_parent_composes_child_subagent() {
 
     use async_trait::async_trait;
     use serde_json::{Value, json};
-    use tinyagents_harness::cancel::CancellationToken;
     use tinyagents_harness::context::{RunConfig, RunContext};
     use tinyagents_harness::runtime::AgentHarness;
     use tinyagents_harness::testkit::{EventRecorder, Trajectory};
