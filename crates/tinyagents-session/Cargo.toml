@@ -47,6 +47,8 @@ tracing = ["tinyagents-harness/tracing"]
 storage-drivers = []
 
 [dev-dependencies]
+tinystoragedrivers-connect = { workspace = true }
+tinystoragedrivers-document = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }
 tinystoragedrivers-testkit = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }
