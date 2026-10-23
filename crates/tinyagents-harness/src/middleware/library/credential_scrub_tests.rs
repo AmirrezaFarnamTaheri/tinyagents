@@ -246,6 +246,11 @@ async fn the_middleware_annotates_a_scrubbed_result() {
     .await;
     assert!(!out.contains("aB3dE5fG7hJ9kL1mN3pQ"), "{out}");
     assert!(out.contains("[credential_scrub] 1 value(s)"), "{out}");
+    assert_eq!(
+        out.matches("[credential_scrub]").count(),
+        1,
+        "the notice is added once, not once per text block plus once per result: {out}"
+    );
 }
 
 #[tokio::test]
