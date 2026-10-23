@@ -395,3 +395,25 @@ async fn malformed_legacy_bytes_are_rejected() {
     assert!(import_legacy_sessions(&store, b"not json").await.is_err());
     assert_eq!(store.get("thread").await.unwrap(), None);
 }
+
+// Committed delivery claims must not leave one lease row per turn forever.
+#[tokio::test]
+async fn committed_claims_do_not_accumulate_lease_records() {
+    let (storage, store) = new_store();
+    for turn in 0..10 {
+        let fp = vec![format!("turn-{turn}")];
+        let (_, claim) = store.claim_delivered("thread", &fp).await.unwrap();
+        store.record_delivered("thread", &fp).await.unwrap();
+        claim.commit().await;
+    }
+    tokio::task::yield_now().await;
+    let left = storage
+        .documents()
+        .count(
+            tinyagents_storage_kit::primitives::LEASES,
+            &Filter::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(left, 0, "lease rows left behind by committed claims");
+}
