@@ -4,9 +4,7 @@ use tinyagents_harness::progress::{AgentProgress, SubagentUsage};
 use tinyagents_session::run_ledger::{
     AgentRunKind, AgentRunStatus, DriverRunLedger, RunEventListRequest, RunLedgerStore,
 };
-use tinyagents_storage_kit::{
-    ErrorKind, Scope, ScopedStorage, Storage, StorageBackend,
-};
+use tinyagents_storage_kit::{ErrorKind, Scope, ScopedStorage, Storage, StorageBackend};
 use tinystoragedrivers_testkit::{Failing, FaultPlan, MemoryBackend};
 
 fn identity() -> RunProgressIdentity {
@@ -125,14 +123,8 @@ async fn terminal_progress_event_and_status_share_one_atomic_write() {
 
     // With split appends, the completion event is write one and the status
     // update is write two. The atomic transition should need only one write.
-    faults.fail_operation_nth(
-        "documents.atomic_batch_checked",
-        2,
-        ErrorKind::Unavailable,
-    );
-    ledger
-        .observe(&AgentProgress::turn_completed(1))
-        .await;
+    faults.fail_operation_nth("documents.atomic_batch_checked", 2, ErrorKind::Unavailable);
+    ledger.observe(&AgentProgress::turn_completed(1)).await;
     faults.clear();
 
     let run = store

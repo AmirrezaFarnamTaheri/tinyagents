@@ -7,15 +7,15 @@
 
 mod types;
 
-pub use types::{ProgressLedgerContext, RunProgressIdentity, RunProgressLedger};
 use std::sync::atomic::Ordering;
+pub use types::{ProgressLedgerContext, RunProgressIdentity, RunProgressLedger};
 
 use serde_json::{Map, Value};
+use std::sync::Arc;
 use tinyagents_harness::progress::AgentProgress;
 use tinyagents_session::run_ledger::{
-    AgentRunKind, AgentRunStatus, AgentRunUpsert, RunEventAppend, RunLedgerStore, RunTransition,
+    AgentRunKind, AgentRunStatus, AgentRunUpsert, RunEventAppend, RunLedgerStore,
 };
-use std::sync::Arc;
 use types::LedgerState;
 
 impl RunProgressLedger {
@@ -44,24 +44,21 @@ impl RunProgressLedger {
             return context;
         }
 
+        let completed = matches!(event, AgentProgress::TurnCompleted { .. });
         if let Some((event_type, payload)) = serialize_event(event) {
-            if let Err(error) = store
-                .append_run_event(RunEventAppend {
-                    run_id: self.identity.request_id.clone(),
-                    event_type,
-                    payload,
-                })
-                .await
-            {
+            let event = RunEventAppend {
+                run_id: self.identity.request_id.clone(),
+                event_type,
+                payload,
+            };
+            if completed {
+                self.transition_if_open(store.as_ref(), AgentRunStatus::Completed, None, event)
+                    .await;
+            } else if let Err(error) = store.append_run_event(event).await {
                 tracing::warn!(run_id = %self.identity.request_id, %error, "could not append progress ledger event");
             }
         } else {
             tracing::warn!(run_id = %self.identity.request_id, "could not serialize progress ledger event");
-        }
-
-        if matches!(event, AgentProgress::TurnCompleted { .. }) {
-            self.transition_if_open(store.as_ref(), AgentRunStatus::Completed, None)
-                .await;
         }
         context
     }
@@ -85,21 +82,17 @@ impl RunProgressLedger {
         }
 
         if let Err(error) = store
-            .append_run_event(RunEventAppend {
-                run_id: self.identity.request_id.clone(),
-                event_type: "turn_interrupted".into(),
-                payload: Value::Object(Map::new()),
-            })
-            .await
-        {
-            tracing::warn!(run_id = %self.identity.request_id, %error, "could not append interrupted progress ledger event");
-        }
-        if let Err(error) = store
-            .transition_agent_run_status(
+            .transition_agent_run_status_from(
                 &self.identity.request_id,
+                run.status,
                 AgentRunStatus::Interrupted,
                 None,
                 Some(chrono::Utc::now()),
+                Some(RunEventAppend {
+                    run_id: self.identity.request_id.clone(),
+                    event_type: "turn_interrupted".into(),
+                    payload: Value::Object(Map::new()),
+                }),
             )
             .await
         {
@@ -156,15 +149,18 @@ impl RunProgressLedger {
         store: &dyn RunLedgerStore,
         status: AgentRunStatus,
         error: Option<&str>,
+        event: RunEventAppend,
     ) {
         match store.get_agent_run(&self.identity.request_id).await {
             Ok(Some(run)) if !is_terminal(run.status) => {
                 if let Err(error) = store
-                    .transition_agent_run_status(
+                    .transition_agent_run_status_from(
                         &self.identity.request_id,
+                        run.status,
                         status,
                         error,
                         Some(chrono::Utc::now()),
+                        Some(event),
                     )
                     .await
                 {
@@ -224,6 +220,12 @@ fn correlation_for(event: &AgentProgress, state: &mut LedgerState) -> ProgressLe
         | AgentProgress::SubagentToolCallCompleted { task_id, .. }
         | AgentProgress::SubagentTextDelta { task_id, .. }
         | AgentProgress::SubagentThinkingDelta { task_id, .. } => ProgressLedgerContext {
+            parent_call_id: state.subagent_parent_calls.get(task_id).cloned().flatten(),
+        },
+        AgentProgress::ModelCallCompleted {
+            subagent_task_id: Some(task_id),
+            ..
+        } => ProgressLedgerContext {
             parent_call_id: state.subagent_parent_calls.get(task_id).cloned().flatten(),
         },
         _ => ProgressLedgerContext::default(),

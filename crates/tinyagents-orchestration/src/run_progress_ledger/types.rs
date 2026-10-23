@@ -1,9 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{
-        Arc,
-        atomic::AtomicUsize,
-    },
+    sync::{Arc, atomic::AtomicUsize},
 };
 
 use tinyagents_session::run_ledger::RunLedgerStore;
