@@ -7,7 +7,8 @@
 //! routing context when forwarding them.
 
 /// A real-time progress event emitted during an agent turn.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentProgress {
     /// The turn has started (about to enter the iteration loop).
     TurnStarted,
