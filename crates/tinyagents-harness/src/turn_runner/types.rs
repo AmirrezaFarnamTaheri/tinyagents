@@ -361,6 +361,12 @@ fn queue_lane(disposition: QueueDisposition) -> Option<QueueLane> {
     }
 }
 
+fn restore_queue_scope<P>(requests: &mut [TurnRequest<P>], scope: &ScopeKey) {
+    for request in requests {
+        request.scope.clone_from(scope);
+    }
+}
+
 /// Reusable turn lifecycle coordinator, parameterized entirely by host ports.
 pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value> {
     host: Arc<H>,
@@ -815,7 +821,7 @@ where
         }
     }
 
-    async fn retire_generation(
+    pub(crate) async fn retire_generation(
         &self,
         request: &TurnRequest<P>,
         generation: Option<u64>,
@@ -837,6 +843,7 @@ where
         for lane in [QueueLane::Steer, QueueLane::Followup, QueueLane::Collect] {
             queued.extend(turn.queue.take(lane, QueueMode::All).await);
         }
+        restore_queue_scope(&mut queued, &request.scope);
         queued
     }
 
@@ -930,7 +937,8 @@ where
         let Some(current) = active.get(&key).cloned() else {
             return (Vec::new(), None);
         };
-        let collected = current.queue.take(QueueLane::Collect, QueueMode::All).await;
+        let mut collected = current.queue.take(QueueLane::Collect, QueueMode::All).await;
+        restore_queue_scope(&mut collected, scope);
         let next = current
             .queue
             .take(QueueLane::Steer, QueueMode::OneAtATime)
@@ -979,9 +987,7 @@ where
         match active.get(&key) {
             Some(turn) => {
                 let mut requests = turn.queue.take(lane, mode).await;
-                for request in &mut requests {
-                    request.scope.clone_from(scope);
-                }
+                restore_queue_scope(&mut requests, scope);
                 requests
             }
             None => Vec::new(),

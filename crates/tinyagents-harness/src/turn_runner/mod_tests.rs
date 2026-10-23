@@ -263,6 +263,80 @@ async fn finalizing_a_rebuilt_queue_request_restores_the_active_scope() {
 }
 
 #[tokio::test]
+async fn finalizing_rebuilt_collect_requests_restores_the_active_scope() {
+    let runner = runner(
+        Arc::new(Host::default()),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    );
+    let scope = ScopeKey {
+        agent_id: "agent-a".into(),
+        profile_id: Some("profile-a".into()),
+    };
+    let queue = Arc::new(RunQueue::new());
+    let mut recovered = request(QueueDisposition::Collect, false);
+    recovered.scope = ScopeKey {
+        agent_id: String::new(),
+        profile_id: None,
+    };
+    queue.push_now(QueueLane::Collect, recovered);
+    runner.active.lock().await.insert(
+        (scope.clone(), "thread-a".into()),
+        ActiveTurn {
+            request_id: "active".into(),
+            cancel: crate::CancellationToken::new(),
+            generation: 7,
+            queue,
+        },
+    );
+
+    let (collected, _) = runner.finalize_generation(&scope, "thread-a", 7).await;
+
+    assert_eq!(collected[0].scope, scope);
+}
+
+#[tokio::test]
+async fn retiring_rebuilt_queue_requests_restores_the_active_scope() {
+    let runner = runner(
+        Arc::new(Host::default()),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    );
+    let scope = ScopeKey {
+        agent_id: "agent-a".into(),
+        profile_id: Some("profile-a".into()),
+    };
+    let queue = Arc::new(RunQueue::new());
+    for lane in [QueueLane::Steer, QueueLane::Followup, QueueLane::Collect] {
+        let mut recovered = request(QueueDisposition::Steer, false);
+        recovered.request_id = format!("{lane:?}");
+        recovered.scope = ScopeKey {
+            agent_id: String::new(),
+            profile_id: None,
+        };
+        queue.push_now(lane, recovered);
+    }
+    runner.active.lock().await.insert(
+        (scope.clone(), "thread-a".into()),
+        ActiveTurn {
+            request_id: "active".into(),
+            cancel: crate::CancellationToken::new(),
+            generation: 7,
+            queue,
+        },
+    );
+
+    let mut owner = request(QueueDisposition::Interrupt, false);
+    owner.scope = scope.clone();
+    let retired = runner.retire_generation(&owner, Some(7)).await;
+
+    assert_eq!(retired.len(), 3);
+    assert!(retired.iter().all(|request| request.scope == scope));
+}
+
+#[tokio::test]
 async fn ingress_stages_run_in_order_before_queue_acceptance() {
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());

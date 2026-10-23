@@ -8,6 +8,7 @@
 
 mod types;
 
+#[cfg(test)]
 pub(crate) use types::ActiveTurn;
 
 pub use types::{
