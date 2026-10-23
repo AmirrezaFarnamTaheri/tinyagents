@@ -301,12 +301,18 @@ impl SessionHistoryStore for DriverRunLedger {
                 compatible_sessions.insert(session.id.as_str());
             }
         }
-        report.sessions = super::super::import::ImportCounts::new(import.sessions.len(), imported);
+        report.sessions = super::super::import::ImportCounts::with_skipped(
+            import.sessions.len(),
+            imported,
+            import.sessions.len() - compatible_sessions.len(),
+        );
 
         let mut imported = 0;
+        let mut skipped = 0;
         let mut highest = 0_u64;
         for message in &import.messages {
             if !compatible_sessions.contains(message.session_id.as_str()) {
+                skipped += 1;
                 continue;
             }
             if message.id <= 0 {
@@ -323,12 +329,18 @@ impl SessionHistoryStore for DriverRunLedger {
         Counters::new(self.scoped.documents())
             .set_at_least(HISTORY_OWNER, MESSAGE_COUNTER, highest)
             .await?;
-        report.messages = super::super::import::ImportCounts::new(import.messages.len(), imported);
+        report.messages = super::super::import::ImportCounts::with_skipped(
+            import.messages.len(),
+            imported,
+            skipped,
+        );
 
         let mut imported = 0;
+        let mut skipped = 0;
         let mut highest = 0_u64;
         for call in &import.tool_calls {
             if !compatible_sessions.contains(call.session_id.as_str()) {
+                skipped += 1;
                 continue;
             }
             if call.id <= 0 {
@@ -345,8 +357,11 @@ impl SessionHistoryStore for DriverRunLedger {
         Counters::new(self.scoped.documents())
             .set_at_least(HISTORY_OWNER, TOOL_CALL_COUNTER, highest)
             .await?;
-        report.tool_calls =
-            super::super::import::ImportCounts::new(import.tool_calls.len(), imported);
+        report.tool_calls = super::super::import::ImportCounts::with_skipped(
+            import.tool_calls.len(),
+            imported,
+            skipped,
+        );
         self.history_reindex().await?;
         Ok(report)
     }

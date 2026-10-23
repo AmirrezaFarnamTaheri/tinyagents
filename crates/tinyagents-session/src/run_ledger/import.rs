@@ -18,16 +18,24 @@ pub struct ImportCounts {
     pub read: usize,
     /// Rows written by this call.
     pub imported: usize,
-    /// Rows already present and left untouched.
+    /// Rows already present and left untouched. Rows that conflict with
+    /// different stored data (for example, a session id already used by
+    /// another session) are neither imported nor present: they are the
+    /// remainder, `read - imported - already_present`.
     pub already_present: usize,
 }
 
 impl ImportCounts {
     pub(super) fn new(read: usize, imported: usize) -> Self {
+        Self::with_skipped(read, imported, 0)
+    }
+
+    /// Counts for a batch where `skipped` rows conflicted and were left out.
+    pub(super) fn with_skipped(read: usize, imported: usize, skipped: usize) -> Self {
         Self {
             read,
             imported,
-            already_present: read.saturating_sub(imported),
+            already_present: read.saturating_sub(imported + skipped),
         }
     }
 }
