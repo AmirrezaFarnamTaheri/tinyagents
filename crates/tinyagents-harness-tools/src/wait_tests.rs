@@ -89,7 +89,10 @@ fn timeout_policy_covers_the_requested_wait_with_grace() {
     use tinytools::{Tool, ToolTimeout};
 
     let args = json!({"message": "poll", "duration_secs": 4});
-    assert_eq!(WaitTool::new().timeout_policy(&args), ToolTimeout::Millis(5_000));
+    assert_eq!(
+        WaitTool::new().timeout_policy(&args),
+        ToolTimeout::Millis(5_000)
+    );
 }
 
 #[tokio::test]

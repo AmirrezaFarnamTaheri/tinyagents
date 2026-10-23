@@ -2066,6 +2066,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "chrono-tz",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",

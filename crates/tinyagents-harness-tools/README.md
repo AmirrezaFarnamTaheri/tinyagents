@@ -29,7 +29,12 @@ run-state middleware and its required `goals` and `todos` modules.
   `tinyagents_orchestration::subagent::SubAgentJobRegistry`.
 - `thread_locks` provides the public `ThreadLockMap` concurrency primitive.
 - The crate root exports `CurrentTimeTool`, `ResolveTimeTool`,
-  `AskClarificationTool`, `PlanExitTool`, and the `per_call` binding adapter.
+  `AskClarificationTool`, `PlanExitTool`, `WaitTool`, `WaitLoopTool`, and the
+  `per_call` binding adapter.
+
+`WaitTool` and `WaitLoopTool` provide bounded delayed callback ticks for
+orchestrator-controlled polling. They return the caller's callback message
+without owning scheduling state.
 
 Subagent registry policy stays in `tinyagents-orchestration`; this crate owns
 the reusable tool declarations. The harness owns tool registration,
