@@ -12,14 +12,16 @@ use crate::checkpoint::{CheckpointConfig, Checkpointer, InMemoryCheckpointer, Pe
 use crate::command::{Command, Interrupt, NodeResult};
 use crate::reducer::ClosureStateReducer;
 
-/// `p` and `q` both pause on their first run; on resume each adds its value.
-/// Returns the graph, its checkpointer and the per-node run counters.
-fn two_pausing_nodes() -> (
+/// The graph, its checkpointer and the `p`/`q` run counters.
+type Fixture = (
     crate::CompiledGraph<i32, i32>,
     Arc<InMemoryCheckpointer<i32>>,
     Arc<AtomicUsize>,
     Arc<AtomicUsize>,
-) {
+);
+
+/// `p` and `q` both pause on their first run; on resume each adds its value.
+fn two_pausing_nodes() -> Fixture {
     let cp = Arc::new(InMemoryCheckpointer::<i32>::new());
     let p_runs = Arc::new(AtomicUsize::new(0));
     let q_runs = Arc::new(AtomicUsize::new(0));
