@@ -183,9 +183,17 @@ async fn collided_native_session_does_not_receive_legacy_child_rows() {
         .await
         .unwrap();
 
-    assert_eq!(report.sessions.already_present, 1);
+    // The stored session is a different one, so nothing here is "already
+    // present": a host that reads it that way marks the import done and the
+    // legacy rows are gone for good.
+    assert_eq!(report.sessions.already_present, 0);
     assert_eq!(report.messages.imported, 0);
+    assert_eq!(report.messages.already_present, 0);
     assert_eq!(report.tool_calls.imported, 0);
+    assert_eq!(report.tool_calls.already_present, 0);
+    for counts in [report.sessions, report.messages, report.tool_calls] {
+        assert_eq!(counts.read - counts.imported - counts.already_present, 1);
+    }
     assert_eq!(ledger.get_session("shared-id").await.unwrap(), Some(native));
     assert!(
         ledger
@@ -200,6 +208,44 @@ async fn collided_native_session_does_not_receive_legacy_child_rows() {
             .await
             .unwrap()
             .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_failed_history_import_never_leaves_ids_above_the_counter() {
+    let backend = MemoryStorage::new();
+    let ledger = ledger_on(&backend, "history-import-counter");
+    let session = ledger
+        .record_session_start(start("s", "agent", "Agent"))
+        .await
+        .unwrap();
+    let message = |id| SessionMessage {
+        id,
+        session_id: "s".into(),
+        role: "user".into(),
+        content: format!("legacy {id}"),
+        reasoning_content: None,
+        model: None,
+        input_tokens: None,
+        output_tokens: None,
+        cost_usd: None,
+        created_at: Utc::now(),
+    };
+    // The second row is invalid, so the import fails part-way.
+    let failed = ledger
+        .import_session_history(SessionHistoryImport {
+            sessions: vec![session],
+            messages: vec![message(50), message(0)],
+            tool_calls: vec![],
+        })
+        .await;
+    assert!(failed.is_err());
+    let stored = ledger.list_messages("s", None).await.unwrap();
+    let next = say(&ledger, "s", "new").await;
+    assert!(
+        stored.iter().all(|row| row.id < next),
+        "new id {next} is not above the imported ids {:?}",
+        stored.iter().map(|row| row.id).collect::<Vec<_>>()
     );
 }
 
@@ -498,19 +544,22 @@ async fn trim_keeps_the_newest_messages_and_their_index_rows() {
         .record_session_start(start("other", "agent", "Agent"))
         .await
         .unwrap();
-    for n in 1..=5 {
+    // More than nine rows, so "newest" must follow the numeric id, not the
+    // text order of an id or of the content (`message9` > `message12`).
+    for n in 1..=12 {
         say(&ledger, "s", &format!("message{n}")).await;
     }
     say(&ledger, "other", "bystander").await;
-    assert_eq!(ledger.trim_session_messages("s", 2).await.unwrap(), 3);
+    assert_eq!(ledger.trim_session_messages("s", 2).await.unwrap(), 10);
     let kept = ledger.list_messages("s", None).await.unwrap();
     assert_eq!(
         kept.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(),
-        ["message4", "message5"]
+        ["message11", "message12"]
     );
     // Trimmed text is no longer findable; kept text and other sessions are.
-    assert!(search(&ledger, "message1").await.is_empty());
-    assert_eq!(search(&ledger, "message5").await, ["s"]);
+    assert!(search(&ledger, "message10").await.is_empty());
+    assert!(search(&ledger, "message9").await.is_empty());
+    assert_eq!(search(&ledger, "message12").await, ["s"]);
     assert_eq!(search(&ledger, "bystander").await, ["other"]);
     assert_eq!(ledger.list_messages("other", None).await.unwrap().len(), 1);
     assert_eq!(ledger.trim_session_messages("s", 10).await.unwrap(), 0);

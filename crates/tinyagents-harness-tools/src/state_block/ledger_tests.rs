@@ -306,3 +306,43 @@ fn a_closed_pipe_and_a_multi_line_script_are_probes_too() {
     );
     assert!(ledger.failures.is_empty(), "{:?}", ledger.failures);
 }
+
+// A compound command that fails with output on stdout (a test run behind a
+// `cd`) is a failure, not a search miss.
+#[test]
+fn compound_command_failing_on_stdout_is_a_failure() {
+    let mut ledger = RunLedger::default();
+    record_result(
+        &mut ledger,
+        shell("cd app && pytest -q"),
+        true,
+        "Command failed (exit code 1)\n[stdout]\nFAILED tests/test_auth.py::test_login - AssertionError",
+    );
+    assert_eq!(ledger.failures.len(), 1);
+}
+
+#[test]
+fn a_compound_probe_that_prints_and_ends_in_a_search_is_still_a_miss() {
+    let mut ledger = RunLedger::default();
+    record_result(
+        &mut ledger,
+        shell("echo start; cat notes.txt | grep TODO"),
+        true,
+        "Command failed (exit code 1)\n[stdout]\nstart",
+    );
+    assert!(ledger.failures.is_empty(), "{:?}", ledger.failures);
+}
+
+/// Stdout that only holds bracket-prefixed lines (`[FAIL] login`) is still
+/// output, so the failed test run is recorded.
+#[test]
+fn bracketed_stdout_still_counts_as_output() {
+    let mut ledger = RunLedger::default();
+    record_result(
+        &mut ledger,
+        shell("cd app && ./run-tests"),
+        true,
+        "Command failed (exit code 1)\n[stdout]\n[FAIL] login",
+    );
+    assert_eq!(ledger.failures.len(), 1);
+}

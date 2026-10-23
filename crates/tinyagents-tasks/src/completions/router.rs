@@ -9,7 +9,7 @@ use tinyagents_harness::run_queue::{QueueLane, RunQueueHandle};
 
 use super::format::{CompletionFormatter, NeutralCompletionFormatter};
 use super::store::CompletionStore;
-use super::types::{CompletionRecord, CompletionState, NotifyMode};
+use super::types::{CompletionRecord, CompletionResult, CompletionState, NotifyMode};
 
 const LOG_PREFIX: &str = "[completion-router]";
 
@@ -536,6 +536,10 @@ impl CompletionRouter {
     /// can apply its own give-up policy (the router never delivers it again).
     /// The returned record carries the full result; the stored one does not,
     /// so the host's give-up writer is the result's last reader.
+    ///
+    /// A record whose give-up cannot be stored stays `Pending` (its lease is
+    /// released) and is retried; the ones already given up are still returned,
+    /// so a partly written batch never strands a give-up the host has not seen.
     pub fn mark_failed<S: AsRef<str>>(&self, task_ids: &[S]) -> Result<Vec<CompletionRecord>> {
         let mut state = self.lock()?;
         let mut gave_up = Vec::new();
@@ -548,10 +552,15 @@ impl CompletionRouter {
             if record.state != CompletionState::Pending || record.attempts < self.max_attempts {
                 continue;
             }
+            // The stored copy keeps its result until the host has the record:
+            // the cleanup below drops it only for records returned from here.
             let result = std::mem::take(&mut record.result);
             record.settle(CompletionState::GaveUp);
-            state.store.put(&record)?;
             record.result = result;
+            if let Err(error) = state.store.put(&record) {
+                tracing::warn!(task_id = %record.task_id, %error, "{LOG_PREFIX} could not store a give-up; it stays pending");
+                continue;
+            }
             tracing::warn!(
                 task_id = %record.task_id,
                 parent_key = %record.parent_key,
@@ -559,6 +568,15 @@ impl CompletionRouter {
                 "{LOG_PREFIX} gave up"
             );
             gave_up.push(record);
+        }
+        for record in &gave_up {
+            let settled = CompletionRecord {
+                result: CompletionResult::default(),
+                ..record.clone()
+            };
+            if let Err(error) = state.store.put(&settled) {
+                tracing::warn!(task_id = %record.task_id, %error, "{LOG_PREFIX} could not drop a given-up result");
+            }
         }
         Ok(gave_up)
     }

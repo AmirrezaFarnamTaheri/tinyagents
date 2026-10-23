@@ -10,8 +10,10 @@
 use std::future::Future;
 
 use tinyagents_harness::ids::TaskId;
-use tinyagents_harness::run_queue::QueueLane;
-use tinyagents_harness::steering::{RecentRequestIds, SteeringCommand, SteeringHandle};
+use tinyagents_harness::run_queue::{QueueLane, fence_agent_message, lane_prefix};
+use tinyagents_harness::steering::{
+    MAX_STEER_TEXT_BYTES, RecentRequestIds, SteeringCommand, SteeringHandle,
+};
 use tinyagents_tasks::{CancelledDetachedTask, DetachedTaskRegistry, DetachedTaskRegistryError};
 use tinyinference_llm::message::Message;
 
@@ -30,12 +32,18 @@ pub enum SteerError {
     UnsupportedLane,
     /// The `request_id` exceeds [`RecentRequestIds::MAX_REQUEST_ID_BYTES`].
     RequestIdTooLong,
+    /// An [`SteerAccess::Owner`] steer's text exceeds [`MAX_STEER_TEXT_BYTES`].
+    TextTooLong,
+    /// The registry failed internally (its lock was poisoned by a panic); the
+    /// subagent may still be live, so this is not [`Self::Unknown`].
+    Internal,
 }
 
 impl From<DetachedTaskRegistryError> for SteerError {
     fn from(error: DetachedTaskRegistryError) -> Self {
         match error {
             DetachedTaskRegistryError::NotOwned => Self::NotOwned,
+            DetachedTaskRegistryError::LockPoisoned => Self::Internal,
             _ => Self::Unknown,
         }
     }
@@ -64,9 +72,12 @@ pub struct SteerReceipt {
 /// Whose authority a steer is made under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SteerAccess<'a> {
-    /// Only the owning parent session may steer.
+    /// Only the owning parent session may steer. The text is a parent
+    /// agent's, so it is length-capped, fenced and labelled as agent-origin
+    /// (see [`fence_agent_message`]), never presented as the user's.
     Owner(&'a str),
-    /// A trusted control surface: no ownership check.
+    /// A trusted control surface (a real user): no ownership check, and the
+    /// text is framed as the user's.
     Trusted,
 }
 
@@ -103,14 +114,14 @@ pub fn queue_lane_name(lane: QueueLane) -> &'static str {
 
 /// The steering command a lane maps to; `None` for a lane a detached subagent
 /// does not accept.
+///
+/// The text is framed as the user's, or as the parent agent's when it is a
+/// [`fence_agent_message`] fence ([`lane_prefix`]).
 pub fn steering_command_for_lane(lane: QueueLane, text: &str) -> Option<SteeringCommand> {
     match lane {
-        QueueLane::Steer => Some(SteeringCommand::InjectMessage(Message::user(format!(
-            "[User steering message]: {text}"
-        )))),
-        QueueLane::Collect => Some(SteeringCommand::InjectMessage(Message::user(format!(
-            "[Additional context from user]: {text}"
-        )))),
+        QueueLane::Steer | QueueLane::Collect => Some(SteeringCommand::InjectMessage(
+            Message::user(format!("{}{text}", lane_prefix(lane, text))),
+        )),
         QueueLane::Followup => None,
     }
 }
@@ -157,7 +168,9 @@ where
 /// never consumes its id and can be retried. A terminal task with retained
 /// metadata is delivered through the host fallback. A `request_id`
 /// longer than [`RecentRequestIds::MAX_REQUEST_ID_BYTES`] is rejected with
-/// [`SteerError::RequestIdTooLong`].
+/// [`SteerError::RequestIdTooLong`]. An [`SteerAccess::Owner`] steer longer
+/// than [`MAX_STEER_TEXT_BYTES`] is rejected with [`SteerError::TextTooLong`];
+/// a shorter one is delivered fenced, labelled as the parent agent's.
 ///
 /// # Delivery semantics
 ///
@@ -190,6 +203,13 @@ where
     if request_id.is_some_and(|id| id.len() > RecentRequestIds::MAX_REQUEST_ID_BYTES) {
         return Err(SteerError::RequestIdTooLong);
     }
+    let text = match access {
+        SteerAccess::Owner(_) if text.len() > MAX_STEER_TEXT_BYTES => {
+            return Err(SteerError::TextTooLong);
+        }
+        SteerAccess::Owner(_) => fence_agent_message(&text),
+        SteerAccess::Trusted => text,
+    };
     if let Some(request_id) = request_id
         && !registry.claim_steer_request(&key, request_id)?
     {

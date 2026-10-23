@@ -13,7 +13,7 @@ use tinyagents_harness::host::{
 use tinyagents_harness::runtime::{
     AgentHarness, AgentInvocation, AgentTurnRequest, InvocationRuntime,
 };
-use tinyagents_harness::testkit::ScriptedModel;
+use tinyagents_harness::testkit::{FakeTool, ScriptedModel};
 use tinyagents_orchestration::subagent::{
     ChildDataPolicy, SubAgent, SubAgentJobRegistry, SubAgentJobStatus, SubAgentTool,
 };
@@ -131,6 +131,7 @@ async fn authorized_child_reuses_the_parent_host_bundle() {
 async fn parent_denial_cannot_fall_back_to_the_child_harness() {
     let parent_model = Arc::new(ScriptedModel::new(vec![delegation_call()]));
     let local_child_model = Arc::new(ScriptedModel::replies(vec!["local bypass"]));
+    let host_worker_model = Arc::new(ScriptedModel::replies(vec!["host worker"]));
     let mut child_harness = AgentHarness::new();
     child_harness.register_model("local", local_child_model.clone());
 
@@ -142,7 +143,7 @@ async fn parent_denial_cannot_fall_back_to_the_child_harness() {
                     AgentDefinition::new("parent", "Parent", "does not delegate")
                         .with_tools(["worker"]),
                     parent_model,
-                    Arc::new(ScriptedModel::replies(vec!["host worker"])),
+                    host_worker_model.clone(),
                 ),
                 AgentTurnRequest::new(
                     "parent",
@@ -163,5 +164,92 @@ async fn parent_denial_cannot_fall_back_to_the_child_harness() {
     assert!(
         local_child_model.requests().is_empty(),
         "the child cannot substitute its own model authority"
+    );
+    assert!(
+        host_worker_model.requests().is_empty(),
+        "a denied child must not run on the host's worker model either"
+    );
+}
+
+#[tokio::test]
+async fn hosted_child_cannot_call_a_tool_the_parent_was_denied() {
+    // The parent may only call `worker`; the worker's own definition is an
+    // explicit wildcard. A hosted child never widens what its parent holds.
+    let parent_model = Arc::new(ScriptedModel::new(vec![
+        delegation_call(),
+        ModelResponse::assistant("parent answer"),
+    ]));
+    let mut shell_call = ModelResponse::assistant("");
+    shell_call
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "shell-1",
+            "shell",
+            json!({"command": "rm -rf /"}),
+        ));
+    let worker_model = Arc::new(ScriptedModel::new(vec![
+        shell_call,
+        ModelResponse::assistant("child answer"),
+    ]));
+    let parent = AgentDefinition::new("parent", "Parent", "delegates")
+        .with_subagents(["worker"])
+        .with_tools(["worker"]);
+    let mut worker = AgentDefinition::new("worker", "Worker", "child");
+    worker.disallowed_tools = vec!["unused".into()];
+    let host = HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![parent, worker])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(AgentResolver {
+            parent: parent_model,
+            worker: worker_model,
+        }),
+    );
+    let shell = Arc::new(FakeTool::returning("shell", "ran"));
+    let mut child_harness = AgentHarness::new();
+    child_harness.register_tool(shell.clone());
+    let child = Arc::new(SubAgent::new("worker", "child", Arc::new(child_harness)));
+    let jobs = SubAgentJobRegistry::new();
+    let mut overlay = AgentHarness::new();
+    overlay.register_tool(shell.clone());
+    overlay.register_tool_dispatch(Arc::new(
+        SubAgentTool::new(child, ChildDataPolicy::new(|_: &()| ())).with_job_registry(jobs.clone()),
+    ));
+    let mut entry = AgentHarness::new();
+    entry.register_tool(shell.clone());
+
+    entry
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "parent",
+                    vec![tinyinference_llm::message::Message::user("delegate")],
+                ),
+                RunContext::new(RunConfig::new("child-ceiling"), ()),
+            )
+            .with_runtime(InvocationRuntime::new(overlay)),
+            &(),
+        )
+        .await
+        .expect("parent run");
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if let Some(job) = jobs.list().into_iter().next()
+                && job.status.is_terminal()
+            {
+                return job;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("hosted child job reaches a terminal state");
+
+    assert!(
+        shell.calls().is_empty(),
+        "the child ran `shell`, which its parent was never allowed: {:?}",
+        shell.calls()
     );
 }

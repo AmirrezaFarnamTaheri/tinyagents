@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::middleware::{
-    AgentRun, Middleware, ToolInvocationIdentity, push_ephemeral_instruction,
+    AgentRun, HARNESS_NOTE_HEADER, Middleware, ToolInvocationIdentity, push_ephemeral_instruction,
 };
 use tinyagents_harness::store::Store;
 use tinyinference_llm::message::{ContentBlock, Message};
@@ -86,18 +86,27 @@ impl StateBlockMiddleware {
 
 /// Takes the block out of whichever message carries it, dropping a message that
 /// held nothing else (a tail system message or trailing user turn of its own).
+/// Only a part shaped like one [`push_ephemeral_instruction`] wrote is removed:
+/// a system part that opens with the block header, or a user or tool part that
+/// opens with the harness-note header followed by it. A later rewrite may have
+/// truncated the block, so its tail is not compared. History that merely quotes
+/// the header stays.
 fn remove_block(request: &mut ModelRequest) {
+    let opens_block = |text: &str| text.trim_start().starts_with(STATE_BLOCK_HEADER);
+    let opens_note = |text: &str| {
+        text.trim_start()
+            .strip_prefix(HARNESS_NOTE_HEADER)
+            .is_some_and(opens_block)
+    };
     request.messages.retain_mut(|message| {
-        let content = match message {
-            Message::System(system) => &mut system.content,
-            Message::User(user) => &mut user.content,
-            Message::Tool(tool) => &mut tool.content,
+        let (content, ours): (_, &dyn Fn(&str) -> bool) = match message {
+            Message::System(system) => (&mut system.content, &opens_block),
+            Message::User(user) => (&mut user.content, &opens_note),
+            Message::Tool(tool) => (&mut tool.content, &opens_note),
             _ => return true,
         };
         let before = content.len();
-        content.retain(
-            |part| !matches!(part, ContentBlock::Text(text) if text.contains(STATE_BLOCK_HEADER)),
-        );
+        content.retain(|part| !matches!(part, ContentBlock::Text(text) if ours(text)));
         !(content.len() != before && content.is_empty())
     });
 }

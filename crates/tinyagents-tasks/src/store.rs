@@ -304,10 +304,15 @@ pub(crate) mod transition {
         Ok(())
     }
 
+    /// A task its owner asked to cancel settles as Cancelled whatever it
+    /// ended with; so do [`fail`] and [`timeout`].
     pub(crate) fn complete(
         record: &mut OrchestrationTaskRecord,
         result: OrchestrationTaskResult,
     ) -> Result<()> {
+        if record.status == OrchestrationTaskStatus::CancelRequested {
+            return mark_cancelled(record);
+        }
         require_live(record, OrchestrationTaskStatus::Completed)?;
         let now = SystemTime::now();
         record.status = OrchestrationTaskStatus::Completed;
@@ -319,6 +324,9 @@ pub(crate) mod transition {
     }
 
     pub(crate) fn fail(record: &mut OrchestrationTaskRecord, error: String) -> Result<()> {
+        if record.status == OrchestrationTaskStatus::CancelRequested {
+            return mark_cancelled(record);
+        }
         require_live(record, OrchestrationTaskStatus::Failed)?;
         let now = SystemTime::now();
         record.status = OrchestrationTaskStatus::Failed;
@@ -330,6 +338,9 @@ pub(crate) mod transition {
     }
 
     pub(crate) fn timeout(record: &mut OrchestrationTaskRecord, error: String) -> Result<()> {
+        if record.status == OrchestrationTaskStatus::CancelRequested {
+            return mark_cancelled(record);
+        }
         require_live(record, OrchestrationTaskStatus::TimedOut)?;
         let now = SystemTime::now();
         record.status = OrchestrationTaskStatus::TimedOut;
@@ -439,3 +450,7 @@ pub(crate) fn control_outcome(
         message: message.into(),
     }
 }
+
+#[cfg(test)]
+#[path = "store_tests.rs"]
+mod tests;

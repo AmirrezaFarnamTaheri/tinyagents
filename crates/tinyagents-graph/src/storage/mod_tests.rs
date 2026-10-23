@@ -298,3 +298,59 @@ async fn v1_task_cache_rows_move_into_the_graph_kv_namespace() {
     );
     assert_eq!(import_legacy_task_cache(&storage).await.unwrap(), 0);
 }
+
+#[tokio::test]
+async fn open_runs_the_graph_migration_so_a_v1_checkpoint_is_visible() {
+    let storage = scoped();
+    v1_checkpoint(&storage, "delegation_graph", "t", 0, "d1", 2).await;
+    // The sync constructor over an unmigrated scope does not see v1 rows.
+    assert!(
+        checkpointer(&storage, "delegation")
+            .get("t", None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let cp = DriverCheckpointer::<i32>::open(storage.clone(), "delegation")
+        .await
+        .unwrap();
+    let found = cp.get("t", None).await.unwrap().expect("migrated on open");
+    assert_eq!((found.checkpoint_id.as_str(), found.state), ("d1", 2));
+}
+
+#[tokio::test]
+async fn a_second_open_skips_the_migration_lease_and_changes_nothing() {
+    let storage = scoped();
+    v1_checkpoint(&storage, "delegation_graph", "t", 0, "d1", 2).await;
+    DriverCheckpointer::<i32>::open(storage.clone(), "delegation")
+        .await
+        .unwrap();
+    // Another process now holds the graph's migration lease: a second open
+    // that took it again would wait for that lease to expire.
+    tinyagents_storage_kit::primitives::Leases::new(storage.documents())
+        .acquire_with(tinyagents_storage_kit::primitives::Acquire {
+            owner: "graph",
+            key: "owner_migrations",
+            holder: "someone-else",
+            ttl_ms: 600_000,
+            endpoint: None,
+            held_epoch: None,
+        })
+        .await
+        .unwrap();
+    let cp = tokio::time::timeout(
+        Duration::from_secs(5),
+        DriverCheckpointer::<i32>::open(storage.clone(), "delegation"),
+    )
+    .await
+    .expect("the second open must not wait for the migration lease")
+    .unwrap();
+    assert_eq!(cp.get_thread("t").await.unwrap().len(), 1);
+    let rows = storage
+        .documents()
+        .query_all("graph.checkpoints", &Query::all())
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+}

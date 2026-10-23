@@ -705,5 +705,8 @@ mod interrupt_selectors_test;
 #[path = "policy_tests.rs"]
 mod policy_test;
 #[cfg(test)]
+#[path = "resume_tests.rs"]
+mod resume_test;
+#[cfg(test)]
 #[path = "mod_tests.rs"]
 mod test;

@@ -415,9 +415,11 @@ impl ToolResultArtifactStore {
     /// `<session>/<tool>/<call>.txt`, the part of an artifact's key below the
     /// namespace.
     fn session_relative_path(&self, tool_name: &str, call_id: Option<&str>) -> String {
+        // Filter before sanitizing: `sanitize_component("")` is "unknown", so
+        // every empty id would share (and overwrite) one `unknown.txt`.
         let call = call_id
-            .map(sanitize_component)
             .filter(|value| !value.is_empty())
+            .map(sanitize_component)
             .unwrap_or_else(random_call_id);
         format!(
             "{}/{}/{}.txt",

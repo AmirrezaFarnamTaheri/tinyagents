@@ -16,8 +16,10 @@ host's `Registry::compose` (owner `harness`, scope class Agent):
 Document and blob steps run with `Registry::migrate`. A step may only write its
 own owner's collections, so the key-value stores move with
 `tinyagents_harness::storage::import_legacy_kv(storage, owner, legacy_collection,
-LegacyKv::{Flat, Namespaced, ResponseCache})`, which the host calls once per
-scope (it records completion in `tsd.migrations`). `DriverStore` also serves the
+LegacyKv::{Flat, Namespaced, ResponseCache})`, which `open_storage(scoped)`
+calls for the three harness stores (it records completion in `tsd.migrations`).
+`DriverStatusStore::open`, `DriverEmbeddingCache::open` and
+`BlobAttachmentStash::open` run `open_storage` first; the sync `new` does not. `DriverStore` also serves the
 session crate's key-value store under owner `session` (`session_kv`, `LegacyKv::Flat`).
 A transcript pointer written before the move (`tool-results/…`, `outputs/…`,
 `workspace/…`) still resolves.

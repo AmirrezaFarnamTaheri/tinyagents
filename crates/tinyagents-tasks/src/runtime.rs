@@ -202,7 +202,7 @@ where
         if entry.owner_id != owner_id {
             return Err(DetachedTaskRegistryError::NotOwned);
         }
-        if (self.is_terminal)(&entry.status.borrow()) {
+        if self.is_settled(&entry.status) {
             return Err(DetachedTaskRegistryError::AlreadyDone);
         }
         if let Some(token) = entry.cancellation.take() {
@@ -365,8 +365,10 @@ where
     ///
     /// Each task's metadata is captured before its terminal runtime entry is
     /// pruned. A timeout leaves the current and later runtimes registered.
-    /// On the first registry error, later ids are left untouched. `None` waits
-    /// without a deadline.
+    /// Every id is checked before any wait, so an unknown or foreign id fails
+    /// the batch without pruning anything; a repeated id gets the same result.
+    /// On a registry error while waiting, later ids are left untouched. `None`
+    /// waits without a deadline.
     pub async fn wait_many(
         &self,
         task_ids: &[TaskId],
@@ -376,18 +378,33 @@ where
         Vec<DetachedTaskBatchWaitItem<Metadata, Status>>,
         DetachedTaskBatchWaitError,
     > {
-        let deadline = timeout.map(|duration| Instant::now() + duration);
-        let mut results = Vec::with_capacity(task_ids.len());
+        // Check every id before waiting on any: a terminal wait prunes its
+        // entry, so an error on a later id would drop an earlier finished
+        // task's result with nobody holding it.
+        let mut metadata = Vec::with_capacity(task_ids.len());
         for task_id in task_ids {
-            let metadata = match self.metadata_for(task_id, owner_id) {
-                Ok(metadata) => metadata,
+            match self.metadata_for(task_id, owner_id) {
+                Ok(found) => metadata.push(found),
                 Err(error) => {
                     return Err(DetachedTaskBatchWaitError {
                         task_id: task_id.clone(),
                         error,
                     });
                 }
-            };
+            }
+        }
+        let deadline = timeout.map(|duration| Instant::now() + duration);
+        let mut results: Vec<DetachedTaskBatchWaitItem<Metadata, Status>> =
+            Vec::with_capacity(task_ids.len());
+        for (task_id, metadata) in task_ids.iter().zip(metadata) {
+            // A repeated id was pruned by its first terminal wait.
+            if let Some(earlier) = results.iter().find(|item| {
+                &item.task_id == task_id
+                    && matches!(item.outcome, DetachedTaskWaitOutcome::Terminal(_))
+            }) {
+                results.push(earlier.clone());
+                continue;
+            }
             let remaining =
                 deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
             match self.wait_until(task_id, owner_id, remaining).await {
@@ -521,13 +538,14 @@ where
         self.cancel_where(|_| true)
     }
 
-    /// Prunes every entry whose latest watched status is terminal.
+    /// Prunes every entry whose latest watched status is terminal, or whose
+    /// status sender is gone.
     pub fn sweep_terminal(&self) -> std::result::Result<usize, DetachedTaskRegistryError> {
         let removed = {
             let mut guard = self.lock()?;
             let task_ids: Vec<_> = guard
                 .iter()
-                .filter(|(_, entry)| (self.is_terminal)(&entry.status.borrow()))
+                .filter(|(_, entry)| self.is_settled(&entry.status))
                 .map(|(task_id, _)| task_id.clone())
                 .collect();
             for task_id in &task_ids {
@@ -539,6 +557,12 @@ where
             self.steering.deregister(task_id);
         }
         Ok(removed.len())
+    }
+
+    /// Whether a task is done: its latest status is terminal, or its status
+    /// sender is gone, so nothing will ever publish, drain a steer or settle it.
+    fn is_settled(&self, status: &watch::Receiver<Status>) -> bool {
+        status.has_changed().is_err() || (self.is_terminal)(&status.borrow())
     }
 
     fn ensure_live_owned(
@@ -553,7 +577,7 @@ where
         if entry.owner_id != owner_id {
             return Err(DetachedTaskRegistryError::NotOwned);
         }
-        if (self.is_terminal)(&entry.status.borrow()) {
+        if self.is_settled(&entry.status) {
             return Err(DetachedTaskRegistryError::AlreadyDone);
         }
         Ok(())
@@ -564,7 +588,7 @@ where
         let entry = guard
             .get(task_id)
             .ok_or(DetachedTaskRegistryError::Unknown)?;
-        if (self.is_terminal)(&entry.status.borrow()) {
+        if self.is_settled(&entry.status) {
             return Err(DetachedTaskRegistryError::AlreadyDone);
         }
         Ok(())

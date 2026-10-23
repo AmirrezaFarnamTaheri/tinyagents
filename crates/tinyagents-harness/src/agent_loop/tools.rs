@@ -320,6 +320,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         Ok(
             ToolGate::new(allowed, &self.policy.tool_rules, definition_rules)
                 .with_denied_names(binding.iter().flat_map(|b| b.denied_tools.iter().cloned()))
+                .with_inherited_rules(binding.iter().flat_map(|b| b.inherited_rules.iter()))
                 .with_deferred_names(
                     binding
                         .iter()

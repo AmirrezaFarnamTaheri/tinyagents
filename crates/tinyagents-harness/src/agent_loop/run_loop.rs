@@ -1051,7 +1051,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     messages,
                     &mut turn_recovery,
                     &turn,
-                ) {
+                )? {
                     continue;
                 }
 
@@ -1524,17 +1524,24 @@ fn pending_tool_calls(messages: &[Message]) -> Result<Vec<ToolCall>> {
     let Message::Assistant(assistant) = &messages[assistant_at] else {
         unreachable!("rposition matched an assistant row");
     };
-    let answered: std::collections::HashSet<&str> = messages[assistant_at + 1..]
-        .iter()
-        .filter_map(|message| match message {
-            Message::Tool(tool) => Some(tool.tool_call_id.as_str()),
-            _ => None,
-        })
-        .collect();
+    // Count answers per id: two calls sharing an id need two tool rows, so
+    // one row must not mark both answered (the earlier call takes it).
+    let mut answered: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for message in &messages[assistant_at + 1..] {
+        if let Message::Tool(tool) = message {
+            *answered.entry(tool.tool_call_id.as_str()).or_default() += 1;
+        }
+    }
     let pending: Vec<ToolCall> = assistant
         .tool_calls
         .iter()
-        .filter(|call| !answered.contains(call.id.as_str()))
+        .filter(|call| match answered.get_mut(call.id.as_str()) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                false
+            }
+            _ => true,
+        })
         .cloned()
         .collect();
     if pending.is_empty() {

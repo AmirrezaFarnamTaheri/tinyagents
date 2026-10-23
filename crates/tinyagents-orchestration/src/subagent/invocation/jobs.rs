@@ -5,9 +5,9 @@ use std::sync::Arc;
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::{TaskId, next_seq};
-use tinyagents_harness::run_queue::QueueLane;
+use tinyagents_harness::run_queue::{QueueLane, fence_agent_message};
 use tinyagents_harness::steering::{
-    SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy,
+    MAX_STEER_TEXT_BYTES, SteeringCommandKind, SteeringHandle, SteeringPolicy,
 };
 use tinyagents_tasks::DetachedTaskRegistryError;
 use tinyinference_llm::message::Message;
@@ -78,6 +78,7 @@ impl SubAgentJobRegistry {
     #[allow(dead_code)]
     pub(crate) fn create(&self, agent: &str, owner: u64) -> (SubAgentJobId, SteeringHandle) {
         self.create_with_cancellation(agent, owner, CancellationToken::new(), JobLink::default())
+            .expect("a fresh job id registers")
     }
 
     /// Registers a job whose child run observes `cancellation`, so
@@ -88,12 +89,14 @@ impl SubAgentJobRegistry {
         owner: u64,
         cancellation: CancellationToken,
         link: JobLink,
-    ) -> (SubAgentJobId, SteeringHandle) {
+    ) -> Result<(SubAgentJobId, SteeringHandle), SubAgentJobError> {
         self.create_with_cancellation_and_queue(agent, owner, cancellation, link, None)
     }
 
     /// Registers a job with an optional loop-consumed queue for content
-    /// messages routed to a specific lane.
+    /// messages routed to a specific lane. A job the registry could not record
+    /// is an error: its handle would be untracked, so it could be neither
+    /// listed, steered nor cancelled.
     pub(crate) fn create_with_cancellation_and_queue(
         &self,
         agent: &str,
@@ -101,7 +104,7 @@ impl SubAgentJobRegistry {
         cancellation: CancellationToken,
         link: JobLink,
         run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
-    ) -> (SubAgentJobId, SteeringHandle) {
+    ) -> Result<(SubAgentJobId, SteeringHandle), SubAgentJobError> {
         let id = SubAgentJobId(format!("subagent-job-{}", next_seq()));
         let steering =
             SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage));
@@ -117,8 +120,9 @@ impl SubAgentJobRegistry {
             },
         ) {
             tracing::error!("{LOG_PREFIX} register.failed job_id={id} error={error}");
+            return Err(error);
         }
-        (id, steering)
+        Ok((id, steering))
     }
 
     fn insert_job(
@@ -340,19 +344,20 @@ impl SubAgentJobRegistry {
         applied: Option<AppliedResult>,
     ) {
         let settled = self.settle(id, |job, cancellation_requested| match result {
+            // An owner cancel wins over whatever the run ended with, as in
+            // `mark_budget_overrun`.
+            _ if cancellation_requested => {
+                job.status = SubAgentJobStatus::Cancelled;
+                job.error = Some(TinyAgentsError::Cancelled.to_string());
+            }
             Ok(run) => {
-                if cancellation_requested {
-                    job.status = SubAgentJobStatus::Cancelled;
-                    job.error = Some(TinyAgentsError::Cancelled.to_string());
-                } else {
-                    job.status = SubAgentJobStatus::Completed;
-                    job.output = run.text();
-                    if let Some(applied) = applied {
-                        job.output = Some(applied.text);
-                        job.artifacts.extend(applied.artifact);
-                        job.schema_error = applied.schema_error;
-                        job.artifact_error = applied.artifact_error;
-                    }
+                job.status = SubAgentJobStatus::Completed;
+                job.output = run.text();
+                if let Some(applied) = applied {
+                    job.output = Some(applied.text);
+                    job.artifacts.extend(applied.artifact);
+                    job.schema_error = applied.schema_error;
+                    job.artifact_error = applied.artifact_error;
                 }
             }
             Err(TinyAgentsError::Cancelled) => {
@@ -700,8 +705,10 @@ impl SubAgentJobRegistry {
         jobs
     }
 
-    /// Queues a user message for delivery at the running child's next safe
-    /// steering checkpoint.
+    /// Queues a parent agent's message for delivery at the running child's
+    /// next safe steering checkpoint. The text is fenced and labelled as the
+    /// parent agent's (never the user's) and refused over
+    /// `MAX_STEER_TEXT_BYTES`.
     #[allow(dead_code)]
     pub fn send_message_owned(
         &self,
@@ -772,6 +779,12 @@ impl SubAgentJobRegistry {
         } else {
             None
         };
+        let message = message.into();
+        if message.len() > MAX_STEER_TEXT_BYTES {
+            return Err(SubAgentJobError::MessageTooLong {
+                limit: MAX_STEER_TEXT_BYTES,
+            });
+        }
         if let Some(request_id) = request_id {
             match self.tasks.claim_steer_request(&task_id, request_id) {
                 Ok(false) => {
@@ -785,13 +798,18 @@ impl SubAgentJobRegistry {
                 Err(_) => return Err(not_found()),
             }
         }
-        let message = message.into();
+        // A parent agent wrote this, not the user: fence it so it cannot forge
+        // lines such as `[System]:`, and frame it as agent-origin.
+        let message = fence_agent_message(&message);
         if let Some(lane) = lane {
             lane_queue
                 .expect("lane queue was validated before claiming the request id")
                 .push_now(lane, Message::user(message));
         } else {
-            handle.send(SteeringCommand::InjectMessage(Message::user(message)));
+            handle.send(
+                crate::steering::steering_command_for_lane(QueueLane::Steer, &message)
+                    .expect("the steer lane maps to a command"),
+            );
         }
         Ok(false)
     }

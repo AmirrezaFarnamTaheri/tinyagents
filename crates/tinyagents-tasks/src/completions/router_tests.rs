@@ -810,3 +810,31 @@ async fn record_with_retries_survives_a_transient_store_failure() {
     );
     handle.await.unwrap();
 }
+
+// A failed put mid-batch must not lose an already-given-up result.
+#[tokio::test]
+async fn partial_mark_failed_keeps_a_gave_up_result() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let store = Arc::new(FailingSecondPut {
+        inner: InMemoryCompletionStore::new(),
+        puts: std::sync::atomic::AtomicUsize::new(0),
+        fail_from: std::sync::atomic::AtomicUsize::new(usize::MAX),
+    });
+    let router = CompletionRouter::new(store.clone()).with_max_attempts(1);
+    router.record(record("t1", "p")).await.unwrap();
+    router.record(record("t2", "p")).await.unwrap();
+    router.claim_pending("p", 10).unwrap();
+    store.fail_from.store(store.puts.load(SeqCst) + 1, SeqCst);
+    // t2's give-up cannot be stored: t1's is still handed to the host with its
+    // result, and t2 stays pending so a later failure gives it up again.
+    let gave_up = router.mark_failed(&["t1", "t2"]).unwrap();
+    assert_eq!(
+        gave_up
+            .iter()
+            .map(|r| (r.task_id.as_str(), r.result.text.as_str()))
+            .collect::<Vec<_>>(),
+        [("t1", "result of t1")]
+    );
+    let t2 = store.inner.get("t2").unwrap();
+    assert_eq!(t2.state, CompletionState::Pending);
+}

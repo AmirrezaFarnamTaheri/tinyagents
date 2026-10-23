@@ -64,6 +64,9 @@ pub(crate) struct HostInvocationBinding<State: Send + Sync, Ctx: Send + Sync> {
     /// The resolved definition's pattern rules, stacked on the harness
     /// policy's by the loop's tool gate.
     pub(crate) tool_rules: Option<tinytools::ToolRules>,
+    /// A hosted parent's rule layers (its own and those it inherited),
+    /// stacked on [`Self::tool_rules`] so a child never widens its parent.
+    pub(crate) inherited_rules: Vec<tinytools::ToolRules>,
     /// Per-turn ordered, nonblocking projection to the optional progress sink.
     pub(crate) progress: Option<super::agent::ProgressSender>,
     /// The exact invocation-local runtime inherited by authorized children.
@@ -83,6 +86,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Clone for HostInvocationBinding<State
             denied_tools: self.denied_tools.clone(),
             deferred_tools: self.deferred_tools.clone(),
             tool_rules: self.tool_rules.clone(),
+            inherited_rules: self.inherited_rules.clone(),
             progress: self.progress.clone(),
             runtime: self.runtime.clone(),
         }
