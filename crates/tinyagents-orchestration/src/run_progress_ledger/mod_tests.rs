@@ -97,6 +97,41 @@ async fn records_progress_with_stable_run_identity_and_terminal_status() {
 }
 
 #[tokio::test]
+async fn failure_breaker_completion_marks_the_run_failed() {
+    let backend = MemoryBackend::new();
+    let store = make_store(&backend);
+    let ledger = RunProgressLedger::new(Some(store.clone()), identity());
+
+    ledger.observe(&AgentProgress::TurnStarted).await;
+    ledger
+        .observe(&AgentProgress::TurnCompleted {
+            iterations: 3,
+            stop: Some(tinyagents_harness::TurnStop::breaker(
+                "repeated provider failure",
+                |_| "turn_stop.repeated_failure",
+            )),
+        })
+        .await;
+
+    let run = store
+        .get_agent_run("request-1")
+        .await
+        .expect("read run")
+        .expect("run exists");
+    assert_eq!(run.status, AgentRunStatus::Failed);
+    let events = store
+        .list_recent_run_events(&RunEventListRequest {
+            run_id: "request-1".into(),
+            after_sequence: None,
+            limit: None,
+        })
+        .await
+        .expect("read events")
+        .events;
+    assert_eq!(events.last().expect("terminal event").event_type, "turn_completed");
+}
+
+#[tokio::test]
 async fn terminal_progress_event_and_status_share_one_atomic_write() {
     let backend = MemoryBackend::new();
     let scope = Scope::new("local").expect("scope");
