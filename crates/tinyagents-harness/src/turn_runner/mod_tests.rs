@@ -268,6 +268,7 @@ async fn taking_rebuilt_queue_requests_restores_the_owner_thread_id() {
     assert_eq!(recovered[0].thread_id, "thread-a");
     assert_eq!(recovered[0].payload["access"], "full");
     assert_eq!(recovered[0].payload["locale"], "fr");
+    assert_eq!(recovered[0].payload["thread_id"], "thread-a");
     assert_eq!(recovered[0].payload["queued_at_ms"], 42);
 }
 
