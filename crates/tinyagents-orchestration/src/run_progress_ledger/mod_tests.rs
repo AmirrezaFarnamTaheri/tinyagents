@@ -123,7 +123,7 @@ async fn terminal_progress_event_and_status_share_one_atomic_write() {
 
     // With split appends, the completion event is write one and the status
     // update is write two. The atomic transition should need only one write.
-    faults.fail_operation_nth("documents.atomic_batch_checked", 3, ErrorKind::Unavailable);
+    faults.fail_operation_nth("documents.atomic_batch_checked", 4, ErrorKind::Unavailable);
     ledger.observe(&AgentProgress::turn_completed(1)).await;
     faults.clear();
 
