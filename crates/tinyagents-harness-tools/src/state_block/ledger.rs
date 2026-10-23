@@ -149,9 +149,19 @@ fn is_search_miss(call: &CallRecord, output: &str) -> bool {
         .rsplit(['\n', ';', '|', '&'])
         .map(str::trim)
         .find(|step| !step.is_empty());
-    code == Some(141)
-        || section_line(output, "[stdout]").is_none()
-        || last_step.is_some_and(is_search)
+    code == Some(141) || !printed_stdout(output) || last_step.is_some_and(is_search)
+}
+
+/// Whether the output's `[stdout]` section (up to any `[stderr]` marker) has
+/// a non-empty line. Unlike [`section_line`], a line that starts with `[`
+/// counts: test runners print `[FAIL] login`.
+fn printed_stdout(output: &str) -> bool {
+    output.split_once("[stdout]").is_some_and(|(_, rest)| {
+        let stdout = rest
+            .split_once("[stderr]")
+            .map_or(rest, |(stdout, _)| stdout);
+        stdout.lines().any(|line| !line.trim().is_empty())
+    })
 }
 
 /// Drops failures older than the horizon.

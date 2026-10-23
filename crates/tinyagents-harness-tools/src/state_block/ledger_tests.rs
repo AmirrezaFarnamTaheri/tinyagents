@@ -332,3 +332,17 @@ fn a_compound_probe_that_prints_and_ends_in_a_search_is_still_a_miss() {
     );
     assert!(ledger.failures.is_empty(), "{:?}", ledger.failures);
 }
+
+/// Stdout that only holds bracket-prefixed lines (`[FAIL] login`) is still
+/// output, so the failed test run is recorded.
+#[test]
+fn bracketed_stdout_still_counts_as_output() {
+    let mut ledger = RunLedger::default();
+    record_result(
+        &mut ledger,
+        shell("cd app && ./run-tests"),
+        true,
+        "Command failed (exit code 1)\n[stdout]\n[FAIL] login",
+    );
+    assert_eq!(ledger.failures.len(), 1);
+}
