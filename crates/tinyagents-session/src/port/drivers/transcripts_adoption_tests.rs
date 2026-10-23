@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use crate::port::drivers::transcripts::tests::meta;
 use crate::transcript::TranscriptMessage;
-use crate::transcript::test_locator::driver_locator;
+use crate::transcript::test_locator::conditioned_driver_locator;
 use tinyagents_storage_kit::Blocking;
 
 const THREAD: &str = "t";
 
-fn locator() -> Arc<dyn TranscriptLocator> {
-    driver_locator()
+fn locator() -> DriverTranscriptLocator {
+    conditioned_driver_locator()
 }
 
 /// A root of `THREAD` under `stem`, written with `meta` (as an import does).
@@ -211,7 +211,7 @@ fn a_reserved_stem_reports_nothing_adopted() {
     let session = SessionRef::scoped(THREAD, "planner");
     // A concurrent writer holds the session's stem.
     let stem = session_stem(&session);
-    let docs = Arc::clone(&locator.docs);
+    let docs = Arc::clone(locator.documents());
     let tables = Arc::clone(&locator.tables);
     let declared = Arc::clone(&locator.declared);
     run_on(&locator.bridge, async move {

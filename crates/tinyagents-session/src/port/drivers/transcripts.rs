@@ -811,6 +811,10 @@ impl std::fmt::Debug for DriverTranscriptLocator {
 }
 
 impl DriverTranscriptLocator {
+    pub(crate) fn documents(&self) -> &Arc<dyn DocumentStore> {
+        &self.docs
+    }
+
     /// Transcripts in `docs`, with synchronous calls run on `bridge`.
     ///
     /// `label` names where `docs` points (driver, database, scope). It is
