@@ -792,11 +792,11 @@ where
 
     let short = key("g", "n", "short");
     cache
-        .put(&short, json!(1), Some(Duration::from_millis(30)))
+        .put(&short, json!(1), Some(Duration::from_secs(2)))
         .await
         .unwrap();
     assert_eq!(cache.get(&short).await.unwrap(), Some(json!(1)));
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
     assert_eq!(cache.get(&short).await.unwrap(), None, "expired after TTL");
     assert_eq!(cache.get(&short).await.unwrap(), None, "stays expired");
     cache.put(&short, json!(2), None).await.unwrap();
