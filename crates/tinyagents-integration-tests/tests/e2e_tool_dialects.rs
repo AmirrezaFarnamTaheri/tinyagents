@@ -15,6 +15,7 @@ use serde_json::json;
 use tinyagents_harness::config::ToolDispatcher;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::events::{AgentEvent, RecordingListener};
+use tinyagents_harness::host::FixedModelResolver;
 use tinyagents_harness::middleware::{
     Middleware, MiddlewareModelOutcome, ModelHandler, ModelMiddleware,
 };
@@ -1929,8 +1930,7 @@ async fn a_streamed_native_delta_keeps_the_narrated_call() {
     let model = Arc::new(StreamingMock::new(items));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(FixedModelResolver::new(model.clone())))
         .register_tool(Arc::new(FakeTool::returning("lookup", "lookup-output")))
         .register_tool(Arc::new(FakeTool::returning("second", "second-output")))
         .with_policy(RunPolicy {
