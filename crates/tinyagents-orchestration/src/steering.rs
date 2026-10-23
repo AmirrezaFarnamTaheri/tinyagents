@@ -34,12 +34,16 @@ pub enum SteerError {
     RequestIdTooLong,
     /// An [`SteerAccess::Owner`] steer's text exceeds [`MAX_STEER_TEXT_BYTES`].
     TextTooLong,
+    /// The registry failed internally (its lock was poisoned by a panic); the
+    /// subagent may still be live, so this is not [`Self::Unknown`].
+    Internal,
 }
 
 impl From<DetachedTaskRegistryError> for SteerError {
     fn from(error: DetachedTaskRegistryError) -> Self {
         match error {
             DetachedTaskRegistryError::NotOwned => Self::NotOwned,
+            DetachedTaskRegistryError::LockPoisoned => Self::Internal,
             _ => Self::Unknown,
         }
     }
