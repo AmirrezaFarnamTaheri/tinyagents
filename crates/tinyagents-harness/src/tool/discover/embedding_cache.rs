@@ -46,7 +46,22 @@ impl DriverEmbeddingCache {
     /// The collection every cache uses.
     pub const COLLECTION: &'static str = crate::storage::EMBEDDING_CACHE;
 
-    /// Cache in [`Self::COLLECTION`].
+    /// Open the scope's harness storage (running the harness's migrations once
+    /// per scope, see [`crate::storage::open_storage`]) and cache in it. Prefer
+    /// this over [`Self::new`].
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::TinyAgentsError::Storage`] when the migration fails.
+    pub async fn open(storage: tinyagents_storage_kit::ScopedStorage) -> Result<Self> {
+        let storage = crate::storage::open_storage(storage)
+            .await
+            .map_err(map_error)?;
+        Ok(Self::new(Arc::clone(storage.documents())))
+    }
+
+    /// Cache in [`Self::COLLECTION`]. The caller must have opened the scope's
+    /// harness storage first; prefer [`Self::open`].
     pub fn new(docs: Arc<dyn DocumentStore>) -> Self {
         Self {
             docs,
