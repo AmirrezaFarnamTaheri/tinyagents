@@ -1,13 +1,8 @@
 use super::*;
-use async_trait::async_trait;
 use crate::testkit::MemoryStorage;
 use crate::testkit::conformance::transcript_history_conformance;
-use tinyagents_storage_kit::{Precondition, Scope, WriteOptions};
-use tinystoragedrivers_api::DocumentWatch;
-use tinystoragedrivers_types::{
-    Capabilities, CollectionSpec, Filter, Page, Query, SearchHit, Sort, Version, Versioned,
-    WriteResult,
-};
+use tinyagents_storage_kit::{Precondition, Scope, WriteCondition, WriteOptions};
+use tinystoragedrivers_types::{CollectionSpec, Filter, Query, Sort};
 
 pub(in crate::port::drivers) fn meta(thread_id: &str) -> TranscriptMeta {
     let mut meta = discovered_seed("planner");
@@ -101,146 +96,31 @@ fn on_bridge<T: Send + 'static>(
     Blocking::new().unwrap().run(future).unwrap().unwrap()
 }
 
-/// A deterministic interleaving at the first successor-entry write: expire
-/// and take over its reservation after the stale handle claimed it, immediately
-/// before the underlying insert.
-#[derive(Debug)]
-struct TakeoverBeforeEntry {
-    inner: Arc<dyn DocumentStore>,
-    armed: std::sync::atomic::AtomicBool,
-}
-
-impl TakeoverBeforeEntry {
-    fn arm(&self) {
-        self.armed
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    async fn take_over(&self, stem: &str) -> Result<(), StorageError> {
-        let id = Key::of(["session", stem])?;
-        let lease = self
-            .inner
+/// Expires and takes over a reserved successor while the old handle is
+/// opening its conditioned entry store, after claim and immediately before
+/// the first insert.
+fn take_over_reservation(docs: Arc<dyn DocumentStore>, stem: String) {
+    on_bridge(async move {
+        let id = Key::of(["session", stem.as_str()])?;
+        let lease = docs
             .get("tsd.leases", id.as_str())
             .await?
             .expect("successor reservation exists");
         let mut body = lease.doc;
         body["expires_ms"] = json!(0);
-        self.inner
-            .put(
-                "tsd.leases",
-                id.as_str(),
-                body,
-                Precondition::Version(lease.version),
-            )
-            .await?;
-        Leases::new(&self.inner)
-            .acquire("session", stem, "replacement-holder", 30_000)
+        docs.put(
+            "tsd.leases",
+            id.as_str(),
+            body,
+            Precondition::Version(lease.version),
+        )
+        .await?;
+        Leases::new(&docs)
+            .acquire("session", &stem, "replacement-holder", 30_000)
             .await?
             .expect("expired reservation can be taken over");
         Ok(())
-    }
-}
-
-#[async_trait]
-impl DocumentStore for TakeoverBeforeEntry {
-    fn capabilities(&self) -> Capabilities {
-        self.inner.capabilities()
-    }
-
-    async fn ensure_collection(&self, spec: &CollectionSpec) -> Result<(), StorageError> {
-        self.inner.ensure_collection(spec).await
-    }
-
-    async fn get(&self, collection: &str, id: &str) -> Result<Option<Versioned<Value>>, StorageError> {
-        self.inner.get(collection, id).await
-    }
-
-    async fn put(
-        &self,
-        collection: &str,
-        id: &str,
-        value: Value,
-        precondition: Precondition,
-    ) -> Result<Version, StorageError> {
-        if collection == ENTRIES
-            && self
-                .armed
-                .swap(false, std::sync::atomic::Ordering::SeqCst)
-        {
-            let stem = value["stem"].as_str().expect("entry has a stem");
-            self.take_over(stem).await?;
-        }
-        self.inner
-            .put(collection, id, value, precondition)
-            .await
-    }
-
-    async fn put_with(
-        &self,
-        collection: &str,
-        id: &str,
-        value: Value,
-        precondition: Precondition,
-        options: WriteOptions,
-    ) -> Result<Version, StorageError> {
-        if collection == ENTRIES
-            && self
-                .armed
-                .swap(false, std::sync::atomic::Ordering::SeqCst)
-        {
-            let stem = value["stem"].as_str().expect("entry has a stem");
-            self.take_over(stem).await?;
-        }
-        self.inner
-            .put_with(collection, id, value, precondition, options)
-            .await
-    }
-
-    async fn delete(
-        &self,
-        collection: &str,
-        id: &str,
-        precondition: Precondition,
-    ) -> Result<bool, StorageError> {
-        self.inner.delete(collection, id, precondition).await
-    }
-
-    async fn query(&self, collection: &str, query: &Query) -> Result<Page<Versioned<Value>>, StorageError> {
-        self.inner.query(collection, query).await
-    }
-
-    async fn count(&self, collection: &str, filter: &Filter) -> Result<u64, StorageError> {
-        self.inner.count(collection, filter).await
-    }
-
-    async fn delete_where(&self, collection: &str, filter: &Filter) -> Result<u64, StorageError> {
-        self.inner.delete_where(collection, filter).await
-    }
-
-    async fn claim(
-        &self,
-        collection: &str,
-        filter: &Filter,
-        sort: &[Sort],
-        patch: &Value,
-    ) -> Result<Option<Versioned<Value>>, StorageError> {
-        self.inner.claim(collection, filter, sort, patch).await
-    }
-
-    async fn drop_collection(&self, collection: &str) -> Result<(), StorageError> {
-        self.inner.drop_collection(collection).await
-    }
-
-    async fn search(&self, collection: &str, text: &str, limit: usize) -> Result<Vec<SearchHit>, StorageError> {
-        self.inner.search(collection, text, limit).await
-    }
-
-    async fn atomic_batch(
-        &self,
-        ops: Vec<tinystoragedrivers_types::WriteOp>,
-    ) -> Result<Vec<WriteResult>, StorageError> {
-        self.inner.atomic_batch(ops).await
-    }
+    });
 }
 
 #[test]
@@ -257,23 +137,46 @@ fn a_reserved_generation_rejects_entry_insert_after_lease_takeover() {
 
     let directory = tempfile::tempdir().unwrap();
     let connection = SqliteConnection::open(directory.path().join("transcripts.db")).unwrap();
+    let scope = Scope::new("local").unwrap();
     let base = Arc::new(SqliteDocuments::new(
-        connection,
-        Scope::new("local").unwrap(),
+        connection.clone(),
+        scope.clone(),
     )) as Arc<dyn DocumentStore>;
-    let interleaving = Arc::new(TakeoverBeforeEntry {
-        inner: Arc::clone(&base),
-        armed: std::sync::atomic::AtomicBool::new(false),
-    });
-    let locator = DriverTranscriptLocator::new(
-        interleaving.clone(),
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let callback_stem = Arc::new(std::sync::Mutex::new(None::<String>));
+    let opener: ConditionedEntryOpener = {
+        let armed = Arc::clone(&armed);
+        let base = Arc::clone(&base);
+        let callback_stem = Arc::clone(&callback_stem);
+        Arc::new(move |condition: &WriteCondition| {
+            if armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                let stem = callback_stem
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .expect("test stem was installed");
+                take_over_reservation(Arc::clone(&base), stem);
+            }
+            Ok(Arc::new(SqliteDocuments::conditioned(
+                connection.clone(),
+                scope.clone(),
+                condition.clone(),
+            )) as Arc<dyn DocumentStore>)
+        })
+    };
+    let locator = DriverTranscriptLocator::new_with_conditioned_entry_opener(
+        Arc::clone(&base),
         Blocking::new().unwrap(),
         "sqlite://transcript-reservation-race",
+        tinyagents_harness::store::SchemaAdmission::Declare,
+        scope,
+        opener,
     );
     let parent = SessionRef::scoped("reservation-race", "planner");
     let (successor, history) = locator.begin_generation(&parent, meta("reservation-race")).unwrap();
     let stem = session_stem(&successor);
-    interleaving.arm();
+    *callback_stem.lock().unwrap() = Some(stem.clone());
+    armed.store(true, std::sync::atomic::Ordering::SeqCst);
 
     let rows = vec![message("user", "first successor write")];
     let result = history.append_turn(turn(&[], &rows, &meta("reservation-race")));
