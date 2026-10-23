@@ -33,6 +33,7 @@ impl StateBlockMiddleware {
         Self {
             store,
             fallback_thread: None,
+            hide_goal: false,
             runs: Mutex::default(),
         }
     }
@@ -42,6 +43,16 @@ impl StateBlockMiddleware {
     /// run (no chat thread) still sees the plan it wrote.
     pub fn with_fallback_thread(mut self, key: impl Into<String>) -> Self {
         self.fallback_thread = Some(key.into());
+        self
+    }
+
+    /// Leaves the thread goal out of the block when `hide` is true; the plan,
+    /// the model's notes and the run's own facts still show. The goal itself
+    /// is not touched. A host that installs the block for each turn sets this
+    /// for a turn that must not be steered by the thread's goal, such as a
+    /// conversational reply on a thread whose goal belongs to an earlier task.
+    pub fn hide_goal(mut self, hide: bool) -> Self {
+        self.hide_goal = hide;
         self
     }
 
@@ -138,7 +149,7 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
                 saved.notes.as_ref().and_then(|pad| pad.blockers.last()),
             );
             ledger.staged = render(
-                saved.goal.as_ref(),
+                saved.goal.as_ref().filter(|_| !self.hide_goal),
                 saved.notes.as_ref(),
                 &saved.todos,
                 ledger,
