@@ -16,7 +16,7 @@ use crate::port::SessionStoreProvider;
 
 /// An empty driver-backed locator with native conditional writes available.
 pub(crate) fn driver_locator() -> Arc<dyn TranscriptLocator> {
-    use crate::port::drivers::DriverTranscriptLocator;
+    use crate::port::DriverTranscriptLocator;
     use tinyagents_harness::store::SchemaAdmission;
     use tinyagents_storage_kit::{Blocking, Scope, WriteCondition};
     use tinystoragedrivers_api::DocumentStore;

@@ -2,6 +2,7 @@ use super::*;
 use crate::testkit::MemoryStorage;
 use crate::testkit::conformance::{session_store_conformance, session_store_isolation_conformance};
 use crate::turn_state::{TurnLifecycle, TurnState};
+use tinyagents_storage_kit::WriteCondition;
 use tinystoragedrivers_api::{DocumentStore, StorageBackend};
 
 fn storage_factory(backend: Arc<dyn StorageBackend>) -> AgentStorageFactory {
