@@ -16,6 +16,10 @@ use crate::port::SessionStoreProvider;
 
 /// An empty driver-backed locator with native conditional writes available.
 pub(crate) fn driver_locator() -> Arc<dyn TranscriptLocator> {
+    Arc::new(conditioned_driver_locator())
+}
+
+pub(crate) fn conditioned_driver_locator() -> crate::port::DriverTranscriptLocator {
     use crate::port::DriverTranscriptLocator;
     use tinyagents_harness::store::SchemaAdmission;
     use tinyagents_storage_kit::{Blocking, Scope, WriteCondition};
@@ -37,14 +41,14 @@ pub(crate) fn driver_locator() -> Arc<dyn TranscriptLocator> {
             condition.clone(),
         )) as Arc<dyn DocumentStore>)
     });
-    Arc::new(DriverTranscriptLocator::new_with_conditioned_entry_opener(
+    DriverTranscriptLocator::new_with_conditioned_entry_opener(
         docs,
         Blocking::new().expect("start transcript test bridge"),
         "sqlite://transcript-tests",
         SchemaAdmission::Declare,
         scope,
         opener,
-    ))
+    )
 }
 
 /// A fixture locator holding parsed transcript rows from `<workspace>`.
