@@ -70,19 +70,22 @@ async fn threshold_persists_redacted_preview_and_file() {
     assert!(!stored.contains(&test_github_token()));
 }
 
-/// A call with no id still gets a unique, well-formed file name.
+/// A call with no id, or an empty one, still gets a unique, well-formed file
+/// name; an empty id must not collapse onto a shared `unknown.txt`.
 #[tokio::test]
 async fn a_call_without_an_id_gets_a_random_hex_name() {
     let store = store("s");
-    let a = store.path_for_read_tool("shell", None);
-    let b = store.path_for_read_tool("shell", None);
-    assert_ne!(a, b);
-    let stem = a
-        .strip_prefix("harness/tool_results/s/shell/")
-        .and_then(|rest| rest.strip_suffix(".txt"))
-        .expect("path shape");
-    assert_eq!(stem.len(), 32);
-    assert!(stem.chars().all(|c| c.is_ascii_hexdigit()));
+    for call_id in [None, Some("")] {
+        let a = store.path_for_read_tool("shell", call_id);
+        let b = store.path_for_read_tool("shell", call_id);
+        assert_ne!(a, b, "{call_id:?}");
+        let stem = a
+            .strip_prefix("harness/tool_results/s/shell/")
+            .and_then(|rest| rest.strip_suffix(".txt"))
+            .expect("path shape");
+        assert_eq!(stem.len(), 32, "{call_id:?}: {a}");
+        assert!(stem.chars().all(|c| c.is_ascii_hexdigit()));
+    }
 }
 
 #[tokio::test]

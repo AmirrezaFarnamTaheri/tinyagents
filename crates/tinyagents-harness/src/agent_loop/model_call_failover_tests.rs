@@ -482,3 +482,65 @@ async fn a_fallback_chosen_by_the_skip_hint_is_not_tried_twice() {
     assert_eq!(b.attempts(), 1, "b must be tried once");
     assert_eq!(c.attempts(), 1);
 }
+
+/// Cancels the run's token, then fails with a retryable provider error, so the
+/// next thing the run does is the retry backoff.
+struct CancelThenFail {
+    token: crate::cancel::CancellationToken,
+}
+
+#[async_trait]
+impl ChatModel<()> for CancelThenFail {
+    async fn invoke(
+        &self,
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        self.token.cancel();
+        Err(tinyinference_llm::Error::Provider(Box::new(
+            provider_error(503, "busy", true),
+        )))
+    }
+}
+
+/// A run cancelled while a retry backoff (from the loop's own retry, or from a
+/// `RetryMiddleware`) is pending must end now, not after the backoff.
+#[tokio::test(start_paused = true)]
+async fn a_cancel_during_a_retry_backoff_stops_without_waiting_it_out() {
+    let backoff = RetryPolicy::default()
+        .with_max_attempts(3)
+        .with_initial_backoff_ms(60_000)
+        .with_jitter(false)
+        .with_backoff_sleep(true);
+    for middleware in [false, true] {
+        let token = crate::cancel::CancellationToken::new();
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.register_model(
+            "flaky",
+            Arc::new(CancelThenFail {
+                token: token.clone(),
+            }),
+        );
+        if middleware {
+            harness.push_model_middleware(Arc::new(
+                crate::middleware::library::RetryMiddleware::new(backoff.clone()),
+            ));
+        }
+        harness.with_policy(RunPolicy {
+            retry: backoff.clone(),
+            ..RunPolicy::default()
+        });
+        let ctx = RunContext::new(RunConfig::new("cancel-backoff"), ()).with_cancellation(token);
+        let started = tokio::time::Instant::now();
+        let err = harness
+            .invoke_in_context(&(), ctx, vec![Message::user("hi")])
+            .await
+            .expect_err("a cancelled run must not complete");
+        assert!(matches!(err, TinyAgentsError::Cancelled), "got {err:?}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "middleware={middleware}: waited {:?} of a 60 s backoff after the cancel",
+            started.elapsed()
+        );
+    }
+}

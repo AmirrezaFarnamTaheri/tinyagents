@@ -66,7 +66,7 @@ fn router_pool_opens_once_per_key_and_reuses_the_router() {
 }
 
 #[test]
-fn router_pool_can_drop_cached_routers_for_restart_recovery() {
+fn router_pool_clear_drops_cached_routers() {
     let pool = CompletionRouterPool::new(|_| {
         Arc::new(CompletionRouter::new(Arc::new(
             InMemoryCompletionStore::new(),

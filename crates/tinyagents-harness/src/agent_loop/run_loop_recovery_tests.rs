@@ -223,3 +223,25 @@ async fn text_dialect_recovery_policy_on_stream_and_unary() {
         }
     }
 }
+
+/// Two calls that share one id need two answers: one tool row must not mark
+/// both as answered, or a resume drops the second call.
+#[test]
+fn a_shared_call_id_is_answered_once_per_tool_row() {
+    use tinyinference_llm::message::Message;
+    use tinyinference_llm::tool::ToolCall;
+
+    let mut turn = ModelResponse::assistant("");
+    turn.message.tool_calls = vec![
+        ToolCall::new("dup", "lookup", serde_json::json!({"q": "a"})),
+        ToolCall::new("dup", "lookup", serde_json::json!({"q": "b"})),
+    ];
+    let messages = vec![
+        Message::user("go"),
+        Message::Assistant(turn.message),
+        Message::tool("dup", "first result"),
+    ];
+    let pending = super::pending_tool_calls(&messages).expect("one call is still unanswered");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].arguments, serde_json::json!({"q": "b"}));
+}

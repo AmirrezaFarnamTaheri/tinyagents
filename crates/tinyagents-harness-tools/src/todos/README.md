@@ -128,7 +128,7 @@ let tool = TodoTool::new(store.clone());
 | --- | --- |
 | `types.rs` | Item/list model, `parse_status`, `render_markdown`, `normalise_list`, `TodosSnapshot`. |
 | `sequence.rs` | The step order: whole-list writes, `complete`, `cancel`. |
-| `store.rs` | `Store`-backed `replace`/`complete`/`cancel`/`list`/`clear`, per-thread RMW lock. |
+| `store.rs` | `Store`-backed `replace`/`complete`/`cancel`/`list`/`clear`, per-thread RMW lock; `replace_if_absent` seeds a thread with no stored list (for a host migrating a list from an old key). |
 | `tool.rs` | The `todo` tool. |
 | `middleware.rs` | `TodoSequenceMiddleware`: tool gate, finish hold, reminder. |
 | `mod_tests.rs`, `sequence_tests.rs`, `middleware_tests.rs` | Unit tests. |

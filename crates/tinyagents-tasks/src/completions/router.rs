@@ -1258,32 +1258,43 @@ impl CompletionRouter {
     /// claimed again, unless its attempts have reached [`Self::max_attempts`]:
     /// then it becomes [`CompletionState::GaveUp`] and is returned so the host
     /// can apply its own give-up policy (the router never delivers it again).
+    /// A failure resolving one receipt does not hide give-ups already resolved
+    /// in this batch; the failed receipt can be retried after its store claim
+    /// expires.
     pub fn mark_failed(&self, receipts: &[CompletionReceipt]) -> Result<Vec<CompletionRecord>> {
         let mut state = self.lock()?;
         let mut gave_up = Vec::new();
         for receipt in receipts {
-            let gate = ParentGateGuard::acquire(
+            let resolved = ParentGateGuard::acquire(
                 Arc::clone(&state.store),
                 Arc::clone(&state.lifecycle),
                 &receipt.parent_key,
-            )?;
-            let record = state.store.resolve_claim(ResolveClaimRequest {
-                task_id: receipt.task_id.clone(),
-                parent_key: receipt.parent_key.clone(),
-                parent_epoch: receipt.parent_epoch,
-                gate: gate.claim().clone(),
-                token: receipt.token.clone(),
-                resolution: ClaimResolution::Failed {
-                    max_attempts: self.max_attempts,
-                },
-            })?;
+            )
+            .and_then(|gate| {
+                state.store.resolve_claim(ResolveClaimRequest {
+                    task_id: receipt.task_id.clone(),
+                    parent_key: receipt.parent_key.clone(),
+                    parent_epoch: receipt.parent_epoch,
+                    gate: gate.claim().clone(),
+                    token: receipt.token.clone(),
+                    resolution: ClaimResolution::Failed {
+                        max_attempts: self.max_attempts,
+                    },
+                })
+            });
             if state.active_receipts.get(&receipt.task_id) == Some(receipt) {
                 state.active_receipts.remove(&receipt.task_id);
                 state.leased.remove(&receipt.task_id);
             }
-            if let Some(record) = record.filter(|record| record.state == CompletionState::GaveUp) {
-                tracing::warn!(task_id = %record.task_id, parent_key = %record.parent_key, attempts = record.attempts, "{LOG_PREFIX} gave up");
-                gave_up.push(record);
+            match resolved {
+                Ok(Some(record)) if record.state == CompletionState::GaveUp => {
+                    tracing::warn!(task_id = %record.task_id, parent_key = %record.parent_key, attempts = record.attempts, "{LOG_PREFIX} gave up");
+                    gave_up.push(record);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(task_id = %receipt.task_id, %error, "{LOG_PREFIX} could not resolve failed delivery");
+                }
             }
         }
         Ok(gave_up)

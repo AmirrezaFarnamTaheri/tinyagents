@@ -1451,6 +1451,18 @@ impl CompletionStore for FailingSecondPut {
         }
         self.inner.claim_task(request)
     }
+    fn resolve_claim(
+        &self,
+        request: ResolveClaimRequest,
+    ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst) {
+            return Err(tinyagents_harness::error::TinyAgentsError::Graph(
+                "disk".into(),
+            ));
+        }
+        self.inner.resolve_claim(request)
+    }
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)
     }
@@ -1857,6 +1869,38 @@ async fn record_resilient_uses_local_memory_only_when_explicitly_allowed() {
         .unwrap();
     assert!(matches!(outcome, RecordOutcome::Recorded { .. }));
     assert!(router.store().get("local").is_some());
+}
+
+#[tokio::test]
+async fn partial_mark_failed_keeps_a_gave_up_result() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let store = Arc::new(FailingSecondPut {
+        inner: InMemoryCompletionStore::new(),
+        puts: Default::default(),
+        fail_from: std::sync::atomic::AtomicUsize::new(usize::MAX),
+    });
+    let router = CompletionRouter::new(store.clone()).with_max_attempts(1);
+    router.record(record("t1", "p")).await.unwrap();
+    router.record(record("t2", "p")).await.unwrap();
+    let batch = router.claim_pending("p", 10).unwrap();
+    store.fail_from.store(store.puts.load(SeqCst) + 1, SeqCst);
+
+    let gave_up = router.mark_failed(&receipts(&batch)).unwrap();
+    assert_eq!(
+        gave_up
+            .iter()
+            .map(|record| (record.task_id.as_str(), record.result.text.as_str()))
+            .collect::<Vec<_>>(),
+        [("t1", "result of t1")]
+    );
+    assert_eq!(
+        store.inner.get("t1").unwrap().state,
+        CompletionState::GaveUp
+    );
+    assert_eq!(
+        store.inner.get("t2").unwrap().state,
+        CompletionState::Pending
+    );
 }
 
 #[tokio::test]

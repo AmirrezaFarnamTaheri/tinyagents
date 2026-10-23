@@ -86,6 +86,13 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
                 "{kind} `{name}` is already registered"
             )));
         }
+        // A registration under an alias's name would shadow the alias and
+        // silently redirect every lookup of it.
+        if self.aliases.contains_key(&(kind, name.to_owned())) {
+            return Err(TinyAgentsError::DuplicateComponent(format!(
+                "{kind} `{name}` is already an alias"
+            )));
+        }
         Ok(())
     }
 

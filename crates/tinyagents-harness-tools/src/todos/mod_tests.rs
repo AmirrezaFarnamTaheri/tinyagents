@@ -170,6 +170,49 @@ mod store_tests {
     }
 
     #[tokio::test]
+    async fn replace_if_absent_seeds_only_a_thread_without_a_stored_list() {
+        let s = store();
+        let seed = || items(&[("Migrated step", TodoStatus::Pending)]);
+
+        assert!(store::replace_if_absent(&s, "t", seed()).await.unwrap());
+        assert_eq!(
+            store::list(&s, "t").await.unwrap().items[0].content,
+            "Migrated step"
+        );
+
+        // A stored list wins, even an empty one the user cleared.
+        store::replace(&s, "t", items(&[("Written first", TodoStatus::Pending)]))
+            .await
+            .unwrap();
+        assert!(!store::replace_if_absent(&s, "t", seed()).await.unwrap());
+        assert_eq!(
+            store::list(&s, "t").await.unwrap().items[0].content,
+            "Written first"
+        );
+        store::clear(&s, "t").await.unwrap();
+        assert!(!store::replace_if_absent(&s, "t", seed()).await.unwrap());
+        assert!(store::list(&s, "t").await.unwrap().items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn concurrent_seeds_write_exactly_once() {
+        // Check-then-write under the thread lock: of two racing seeds, one
+        // writes and the other sees the stored list.
+        let s = store();
+        let (a, b) = tokio::join!(
+            store::replace_if_absent(&s, "race", items(&[("A", TodoStatus::Pending)])),
+            store::replace_if_absent(&s, "race", items(&[("B", TodoStatus::Pending)])),
+        );
+        assert_eq!(
+            [a.unwrap(), b.unwrap()]
+                .iter()
+                .filter(|wrote| **wrote)
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn get_and_delete_preserve_absent_vs_empty() {
         let s = store();
         assert!(store::get(&s, " t ").await.unwrap().is_none());

@@ -122,7 +122,7 @@ impl Key {
     }
 }
 
-pub use migration_lease::{MigrationLease, with_migration_lease};
+pub use migration_lease::{MigrationLease, with_migration_lease, with_migration_lease_once};
 pub use migrations::{MIGRATIONS_COLLECTION, Migrations};
 pub use primitives::{Counters, Kv, Leases, Repo, RetryPolicy};
 pub use schema::{

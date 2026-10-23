@@ -443,3 +443,57 @@ mod journal_step {
         );
     }
 }
+
+async fn v1_run_status(storage: &ScopedStorage) {
+    put_v1(
+        storage,
+        "harness_run_status",
+        "8f3a-hash",
+        json!({
+            "runId": "run.abc", "rootRunId": "run.root", "threadId": "t-1", "active": true,
+            "record": {
+                "run_id": "run.abc", "parent_run_id": "run.root", "root_run_id": "run.root",
+                "thread_id": "t-1", "component": "model", "status": "running",
+                "current_phase": "model", "model_calls": 2, "tool_calls": 1,
+                "active_tool_calls": [], "usage": {}, "cost": {},
+                "started_at": 1_700_000_000_u64, "updated_at": 1_700_000_010_u64,
+                "metadata": {}
+            }
+        }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn status_store_open_runs_the_harness_migration_so_a_v1_status_is_visible() {
+    use crate::observability::{DriverStatusStore, HarnessStatusStore};
+    let storage = scoped();
+    v1_run_status(&storage).await;
+    // The sync constructor over an unmigrated scope does not see v1 rows.
+    let unmigrated = DriverStatusStore::new(std::sync::Arc::clone(storage.documents()));
+    assert!(unmigrated.get_status("run.abc").await.unwrap().is_none());
+
+    let store = DriverStatusStore::open(storage.clone()).await.unwrap();
+    let status = store
+        .get_status("run.abc")
+        .await
+        .unwrap()
+        .expect("migrated");
+    assert_eq!(status.root_run_id.0, "run.root");
+}
+
+#[tokio::test]
+async fn opening_the_status_store_twice_keeps_one_row() {
+    use crate::observability::{DriverStatusStore, HarnessStatusStore};
+    let storage = scoped();
+    v1_run_status(&storage).await;
+    DriverStatusStore::open(storage.clone()).await.unwrap();
+    let store = DriverStatusStore::open(storage.clone()).await.unwrap();
+    assert_eq!(store.list_by_thread("t-1").await.unwrap().len(), 1);
+    let rows = storage
+        .documents()
+        .count("harness.run_status", &Filter::default())
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+}

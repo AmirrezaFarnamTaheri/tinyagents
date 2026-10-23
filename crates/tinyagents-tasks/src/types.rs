@@ -1,9 +1,10 @@
-//! Type definitions for graph-level orchestration controls.
+//! Type definitions for orchestration controls.
 //!
-//! This file owns the plain data model for managed child work: task identity,
-//! task kinds, lifecycle status, task records, store filters, and the
-//! model-visible orchestration tool descriptors. Implementations live in
-//! `mod.rs` and tests live in `test.rs`.
+//! This file owns the plain data model for managed child work: task kinds,
+//! lifecycle status, task specs, results and records, store filters, control
+//! outcomes, and the detached-task registry's snapshots, wait outcomes and
+//! errors. Implementations live in the sibling modules (`store.rs`,
+//! `runtime.rs`, …) and tests in their `*_tests.rs` files.
 
 use std::collections::BTreeMap;
 use std::fmt;

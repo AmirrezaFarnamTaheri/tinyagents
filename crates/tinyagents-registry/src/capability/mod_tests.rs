@@ -133,6 +133,25 @@ fn duplicate_registration_is_rejected() {
     ));
 }
 
+/// A new registration must not take over a name already used as an alias:
+/// it would silently redirect every lookup of that alias.
+#[test]
+fn registering_under_an_existing_alias_is_rejected() {
+    let mut reg = CapabilityRegistry::<()>::new();
+    reg.register_model("gpt-4o", Arc::new(FakeModel("m")))
+        .unwrap();
+    reg.alias(ComponentKind::Model, "default", "gpt-4o")
+        .unwrap();
+    let err = reg
+        .register_model("default", Arc::new(FakeModel("other")))
+        .unwrap_err();
+    assert!(matches!(err, TinyAgentsError::DuplicateComponent(_)));
+    assert_eq!(
+        reg.resolve_name(ComponentKind::Model, "default").as_deref(),
+        Some("gpt-4o")
+    );
+}
+
 #[test]
 fn replace_overwrites_without_error_and_keeps_metadata() {
     let mut reg = CapabilityRegistry::<()>::new();
