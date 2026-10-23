@@ -1,5 +1,5 @@
 use super::*;
-use crate::run_queue::{QueueLane, QueueMode, RunQueue};
+use crate::run_queue::{QueueLane, QueueMode, QueuedMessage, RunQueue};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -218,6 +218,7 @@ async fn taking_rebuilt_queue_requests_restores_the_active_scope() {
             cancel: crate::CancellationToken::new(),
             generation: 7,
             queue,
+            payload: serde_json::Value::Null,
         },
     );
 
@@ -241,12 +242,13 @@ async fn taking_rebuilt_queue_requests_restores_the_owner_thread_id() {
         profile_id: Some("profile-a".into()),
     };
     let queue = Arc::new(RunQueue::new());
-    let mut recovered = request(QueueDisposition::Steer, false);
-    recovered.scope = ScopeKey {
-        agent_id: String::new(),
-        profile_id: None,
-    };
-    recovered.thread_id = "subagent-task-label".into();
+    let mut recovered = <TurnRequest as QueuedMessage>::requeued(
+        "recovered".into(),
+        "follow up".into(),
+        "subagent-task-label",
+        42,
+    );
+    recovered.disposition = QueueDisposition::Steer;
     queue.push_now(QueueLane::Steer, recovered);
     runner.active.lock().await.insert(
         (scope.clone(), "thread-a".into()),
@@ -255,6 +257,7 @@ async fn taking_rebuilt_queue_requests_restores_the_owner_thread_id() {
             cancel: crate::CancellationToken::new(),
             generation: 7,
             queue,
+            payload: serde_json::json!({"access": "full", "locale": "fr"}),
         },
     );
 
@@ -263,6 +266,9 @@ async fn taking_rebuilt_queue_requests_restores_the_owner_thread_id() {
         .await;
 
     assert_eq!(recovered[0].thread_id, "thread-a");
+    assert_eq!(recovered[0].payload["access"], "full");
+    assert_eq!(recovered[0].payload["locale"], "fr");
+    assert_eq!(recovered[0].payload["queued_at_ms"], 42);
 }
 
 #[tokio::test]
@@ -291,6 +297,7 @@ async fn finalizing_a_rebuilt_queue_request_restores_the_active_scope() {
             cancel: crate::CancellationToken::new(),
             generation: 7,
             queue,
+            payload: serde_json::Value::Null,
         },
     );
 
@@ -325,6 +332,7 @@ async fn finalizing_rebuilt_collect_requests_restores_the_active_scope() {
             cancel: crate::CancellationToken::new(),
             generation: 7,
             queue,
+            payload: serde_json::Value::Null,
         },
     );
 
@@ -362,6 +370,7 @@ async fn retiring_rebuilt_queue_requests_restores_the_active_scope() {
             cancel: crate::CancellationToken::new(),
             generation: 7,
             queue,
+            payload: serde_json::Value::Null,
         },
     );
 
