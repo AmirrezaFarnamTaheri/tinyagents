@@ -83,6 +83,9 @@ where
     }
 }
 
+// Untyped JSON payloads have no host schema, so only known turn-scoped fields
+// are inherited; request-local values such as attachments stay with their
+// original request.
 impl RequeuePayload for serde_json::Value {
     fn requeued(thread_id: &str, queued_at_ms: u64) -> Self {
         serde_json::json!({
@@ -93,8 +96,20 @@ impl RequeuePayload for serde_json::Value {
 
     fn adopt(&mut self, running: &Self) {
         if let (Self::Object(requeued), Self::Object(active)) = (self, running) {
-            for (key, value) in active {
-                requeued.entry(key.clone()).or_insert_with(|| value.clone());
+            for key in [
+                "access",
+                "locale",
+                "attribution",
+                "channel_attribution",
+                "client_id",
+                "model_override",
+                "temperature",
+            ] {
+                if let Some(value) = active.get(key) {
+                    requeued
+                        .entry(key.to_owned())
+                        .or_insert_with(|| value.clone());
+                }
             }
         }
     }
