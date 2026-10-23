@@ -252,7 +252,10 @@ async fn unobserved_ordinary_reservation_returns_typed_uncertainty_with_original
 #[tokio::test]
 async fn an_append_admits_a_stream_capability_its_document_port_does_not_list() {
     let store = actor(&MemoryStorage::new()).await;
-    let split = faulted(&store, Fault::new(Phase::Probe, Action::DocsLackStreamAppend));
+    let split = faulted(
+        &store,
+        Fault::new(Phase::Probe, Action::DocsLackStreamAppend),
+    );
     assert!(
         !split
             .docs
@@ -271,7 +274,10 @@ async fn an_append_admits_a_stream_capability_its_document_port_does_not_list() 
 #[tokio::test]
 async fn an_append_is_refused_when_the_stream_port_lacks_conditional_appends() {
     let store = actor(&MemoryStorage::new()).await;
-    let split = faulted(&store, Fault::new(Phase::Probe, Action::StreamsLackStreamAppend));
+    let split = faulted(
+        &store,
+        Fault::new(Phase::Probe, Action::StreamsLackStreamAppend),
+    );
     let error = split
         .append_message("same", message("agent:a", "refused"))
         .await
