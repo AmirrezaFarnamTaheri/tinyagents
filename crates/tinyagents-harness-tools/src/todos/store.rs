@@ -164,6 +164,35 @@ pub async fn replace(
     .await
 }
 
+/// Store `items` as the thread's list only if the thread has no stored list
+/// (absent, not merely empty), checking and writing under the thread lock.
+/// Returns whether the list was written. A host migrating a list from an old
+/// key uses this so a concurrent first write on the new key is never
+/// overwritten by the copy.
+pub async fn replace_if_absent(
+    store: &Arc<dyn Store>,
+    thread_id: &str,
+    mut items: Vec<TodoItem>,
+) -> Result<bool> {
+    let thread_id = validate_thread_id(thread_id)?;
+    let lock = thread_lock(&thread_id);
+    let _guard = lock.lock().await;
+    if store
+        .get(TODOS_NAMESPACE, &key(&thread_id))
+        .await?
+        .is_some()
+    {
+        return Ok(false);
+    }
+    for item in &mut items {
+        item.content = item.content.trim().to_string();
+    }
+    items.retain(|item| !item.content.is_empty());
+    sequence::apply_write(&[], &mut items).map_err(TinyAgentsError::Validation)?;
+    save_items(store, &thread_id, items).await?;
+    Ok(true)
+}
+
 /// Complete step `step` (1-based) and start the next open one.
 pub async fn complete(
     store: &Arc<dyn Store>,
