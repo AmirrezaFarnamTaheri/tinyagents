@@ -84,12 +84,7 @@ pub fn conditioned_sqlite_factories(
             as AgentStorageFactory
     };
     let conditioned = Arc::new(move |_: &str, condition: &WriteCondition| {
-        Ok(sqlite_storage(
-            &directory,
-            &name,
-            &scope,
-            Some(condition),
-        ))
+        Ok(sqlite_storage(&directory, &name, &scope, Some(condition)))
     }) as ConditionedAgentStorageFactory;
     (plain, conditioned)
 }
