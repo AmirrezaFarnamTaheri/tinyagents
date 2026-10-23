@@ -2,7 +2,7 @@ use super::*;
 use std::sync::Arc;
 use tinyagents_harness::progress::{AgentProgress, SubagentUsage};
 use tinyagents_session::run_ledger::{
-    AgentRunKind, AgentRunStatus, DriverRunLedger, RunEventListRequest,
+    AgentRunKind, AgentRunStatus, DriverRunLedger, RunEventListRequest, RunLedgerStore,
 };
 use tinyagents_storage_kit::{Scope, StorageBackend};
 use tinystoragedrivers_testkit::MemoryBackend;
