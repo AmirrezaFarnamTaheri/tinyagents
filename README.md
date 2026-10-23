@@ -164,6 +164,12 @@ for exercising the loop without a live provider. Memory, workspace lifecycle,
 authorization, and persistence policy stay in the host and can wrap a complete
 run with `AgentMiddleware`.
 
+Tool packs keep read-only disclosure available in mixed-permission sessions
+while gating each bound invocation on its actual arguments. The harness also
+exposes [executor-entry observation](docs/modules/harness/middleware-tool-wrap.md#actual-execution-observation)
+for finish checks and host bookkeeping: it reports the bound target without
+changing the outer transcript or treating a preview as a write.
+
 ## Subagent orchestration
 
 `tinyagents-orchestration` owns child-agent composition. `SubAgentTool` is a

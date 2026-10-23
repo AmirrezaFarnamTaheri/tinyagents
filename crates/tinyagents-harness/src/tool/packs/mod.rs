@@ -43,3 +43,7 @@ pub use types::{PackSelection, PackToolExtension, ToolPack};
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod test;
+
+#[cfg(test)]
+#[path = "mod_permissions_tests.rs"]
+mod permissions_tests;

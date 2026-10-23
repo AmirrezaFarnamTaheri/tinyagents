@@ -108,6 +108,25 @@ fn find<'a>(tools: &'a [Box<dyn Tool>], name: &str) -> &'a dyn Tool {
 }
 
 #[test]
+fn a_pinned_disclosure_has_no_executable_selection() {
+    // A pinned disclosure is an Answer struct variant, never a packed
+    // execution target. Only Execute may expose an admitted inner tool.
+    let pinned = super::types::PinnedPackCall {
+        outer: Arc::new(FakeTool::plain("use_skill")),
+        target: super::types::PackTarget::Answer {
+            result: ToolResult::success("pack schema"),
+            permission: PermissionLevel::ReadOnly,
+        },
+    };
+    assert!(pinned.selection().is_none());
+    assert!(pinned.admission_target().is_none());
+    assert_eq!(
+        pinned.permission_level_with_args(&Value::Null),
+        PermissionLevel::ReadOnly,
+    );
+}
+
+#[test]
 fn the_use_skill_declaration_is_byte_stable() {
     let tools = bound(vec![]);
     let tool = find(&tools, USE_SKILL);
@@ -538,6 +557,7 @@ fn permission_level_is_the_inner_tools_not_the_proxys() {
         ..FakeTool::plain("a_one")
     }]);
     let use_skill = find(&tools, USE_SKILL);
+    assert_eq!(use_skill.permission_level(), PermissionLevel::ReadOnly);
     assert_eq!(
         use_skill.permission_level_with_args(&json!({"skill": "alpha", "tool": "a_one"})),
         PermissionLevel::Dangerous
@@ -578,7 +598,11 @@ fn external_effect_and_timeout_are_forwarded() {
 #[test]
 fn an_unbound_handle_degrades_closed() {
     let tool = UseSkillTool::new(PackRegistryHandle::default(), CATALOG);
-    assert_eq!(tool.permission_level(), PermissionLevel::Dangerous);
+    assert_eq!(tool.permission_level(), PermissionLevel::ReadOnly);
+    assert_eq!(
+        tool.permission_level_with_args(&json!({"skill": "alpha", "tool": "a_one"})),
+        PermissionLevel::Dangerous
+    );
 }
 
 #[tokio::test]
