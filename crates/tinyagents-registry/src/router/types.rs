@@ -6,6 +6,71 @@ use serde::{Deserialize, Serialize};
 
 use tinyinference_llm::model::CapabilitySet;
 
+/// Host-provided facts used by the generic workload router.
+///
+/// Implementations should expose configuration and catalog decisions without
+/// moving credentials, billing, egress, or user-facing policy into TinyAgents.
+pub trait RouteSource {
+    /// The explicitly configured provider route for `role`, if any.
+    fn configured_route_for_role(&self, role: &str) -> Option<&str>;
+    /// The host-resolved primary cloud route, including any legacy or
+    /// fail-closed configuration behavior.
+    fn primary_cloud_route(&self) -> &str;
+    /// The configured default model selection.
+    fn default_model(&self) -> Option<&str>;
+    /// Classify whether the default model is an explicit provider route,
+    /// managed catalog model, or other model identifier.
+    fn classify_default_model_route(&self, model: &str) -> DefaultModelRoute;
+    /// Whether a resolved provider route is host-managed.
+    fn is_managed_route(&self, route: &str) -> bool;
+    /// The concrete managed default model, if the host has one available.
+    fn managed_default_model(&self) -> Option<&str>;
+    /// Resolve a host-retired tier spelling to its canonical workload role.
+    fn legacy_tier_role(&self, tier: &str) -> Option<&str>;
+}
+
+/// Host classification of a configured default model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefaultModelRoute {
+    /// A configured provider route eligible to serve chat-tier roles.
+    ExplicitProvider,
+    /// A model selected from a host-managed catalog.
+    ManagedCatalog,
+    /// A model identifier that must not alter provider routing.
+    Other,
+}
+
+/// Metadata for a role that can implicitly use a primary cloud route.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CloudFallbackRole {
+    /// Canonical workload role being routed.
+    pub role: &'static str,
+    /// Role/configuration name the host can present as the override point.
+    pub override_role: &'static str,
+}
+
+/// Why a route selected a fallback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FallbackReason {
+    /// The role had no explicit route and used the host's primary cloud route.
+    ImplicitCloudFallback,
+}
+
+/// Structured routing context for host-specific diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FallbackDiagnostics {
+    /// Canonical workload role being routed.
+    pub role: String,
+    /// The requested role route, if explicitly set.
+    pub requested_route: Option<String>,
+    /// Host-resolved fallback route selected for the role.
+    pub fallback_route: String,
+    /// Generic reason for selecting this fallback.
+    pub reason: FallbackReason,
+    /// Role/configuration name that can override the fallback.
+    pub override_role: String,
+}
+
 /// One declarative **workload route**: a stable alias (e.g. `reasoning-v1`) that
 /// resolves to a concrete registered model, plus the capability gate a request
 /// routed here must satisfy and an ordered same-family fallback chain of sibling

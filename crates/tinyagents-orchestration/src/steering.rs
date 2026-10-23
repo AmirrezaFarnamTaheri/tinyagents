@@ -10,8 +10,10 @@
 use std::future::Future;
 
 use tinyagents_harness::ids::TaskId;
-use tinyagents_harness::run_queue::QueueLane;
-use tinyagents_harness::steering::{RecentRequestIds, SteeringCommand, SteeringHandle};
+use tinyagents_harness::run_queue::{QueueLane, fence_agent_message, lane_prefix};
+use tinyagents_harness::steering::{
+    MAX_STEER_TEXT_BYTES, RecentRequestIds, SteeringCommand, SteeringHandle,
+};
 use tinyagents_tasks::{CancelledDetachedTask, DetachedTaskRegistry, DetachedTaskRegistryError};
 use tinyinference_llm::message::Message;
 
@@ -30,6 +32,8 @@ pub enum SteerError {
     UnsupportedLane,
     /// The `request_id` exceeds [`RecentRequestIds::MAX_REQUEST_ID_BYTES`].
     RequestIdTooLong,
+    /// An owner supplied a message larger than the bounded steer payload.
+    TextTooLong,
 }
 
 impl From<DetachedTaskRegistryError> for SteerError {
@@ -105,12 +109,9 @@ pub fn queue_lane_name(lane: QueueLane) -> &'static str {
 /// does not accept.
 pub fn steering_command_for_lane(lane: QueueLane, text: &str) -> Option<SteeringCommand> {
     match lane {
-        QueueLane::Steer => Some(SteeringCommand::InjectMessage(Message::user(format!(
-            "[User steering message]: {text}"
-        )))),
-        QueueLane::Collect => Some(SteeringCommand::InjectMessage(Message::user(format!(
-            "[Additional context from user]: {text}"
-        )))),
+        QueueLane::Steer | QueueLane::Collect => Some(SteeringCommand::InjectMessage(
+            Message::user(format!("{}{text}", lane_prefix(lane, text))),
+        )),
         QueueLane::Followup => None,
     }
 }
@@ -163,6 +164,11 @@ where
     M: Clone + Send + Sync + 'static,
     F: SteerFallback<M>,
 {
+    if matches!(access, SteerAccess::Owner(_))
+        && text.len() > tinyagents_harness::steering::MAX_STEER_TEXT_BYTES
+    {
+        return Err(SteerError::TextTooLong);
+    }
     let receipt =
         steer_detached_with_request_id(registry, task_id, access, text, lane, None, fallback)
             .await?;
@@ -211,6 +217,13 @@ where
     if request_id.is_some_and(|id| id.len() > RecentRequestIds::MAX_REQUEST_ID_BYTES) {
         return Err(SteerError::RequestIdTooLong);
     }
+    let text = match access {
+        SteerAccess::Owner(_) if text.len() > MAX_STEER_TEXT_BYTES => {
+            return Err(SteerError::TextTooLong);
+        }
+        SteerAccess::Owner(_) => fence_agent_message(&text),
+        SteerAccess::Trusted => text,
+    };
     // A task may turn terminal between the retained snapshot and this live
     // handle check. Resolve that race before claiming the request id.
     let handle = live_handle_or_fallback(registry, &key, access)?;

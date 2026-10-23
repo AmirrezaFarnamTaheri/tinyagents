@@ -26,11 +26,11 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
-use tinystoragedrivers_core::primitives::LEASES;
-use tinystoragedrivers_core::{
-    Blocking, Capability, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec,
+use tinyagents_storage_kit::primitives::LEASES;
+use tinyagents_storage_kit::{
+    Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, IndexSpec,
     Leases, Precondition, Query, Scope, StorageBackend, StorageError, UPDATED_FIELD, Versioned,
-    WriteOptions,
+    WriteCondition, WriteOptions,
 };
 use tokio::sync::OnceCell;
 
@@ -74,7 +74,7 @@ fn decode_strict(row: Versioned<serde_json::Value>) -> Result<CompletionRecord> 
 }
 
 /// A durable [`CompletionStore`] stored in a driver [`DocumentStore`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DriverCompletionStore {
     backend: Arc<dyn StorageBackend>,
     scope: Scope,
@@ -82,6 +82,15 @@ pub struct DriverCompletionStore {
     docs: Arc<dyn DocumentStore>,
     bridge: Blocking,
     declared: Arc<OnceCell<()>>,
+}
+
+impl std::fmt::Debug for DriverCompletionStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DriverCompletionStore")
+            .field("scope", &self.scope.as_str())
+            .field("coordination_domain", &self.coordination_domain)
+            .finish_non_exhaustive()
+    }
 }
 
 impl DriverCompletionStore {
@@ -112,7 +121,6 @@ impl DriverCompletionStore {
         scope: Scope,
         coordination_domain: impl Into<String>,
     ) -> std::result::Result<Self, StorageError> {
-        backend.capabilities().require(Capability::Fencing)?;
         Self::with_bridge_and_coordination_domain(
             backend,
             scope,
@@ -149,7 +157,15 @@ impl DriverCompletionStore {
         bridge: Blocking,
         coordination_domain: impl Into<String>,
     ) -> std::result::Result<Self, StorageError> {
-        backend.capabilities().require(Capability::Fencing)?;
+        // Fail during setup when the backend cannot issue durable handles
+        // whose writes are atomically guarded by the lease document.
+        let probe = WriteCondition::new(
+            scope.clone(),
+            "tinyagents.condition_probe",
+            "completion-store",
+            Filter::eq("holder", "probe"),
+        )?;
+        backend.for_scope_conditioned(&scope, &probe)?;
         let scoped = backend.for_scope(&scope)?;
         let docs = scoped.documents().clone();
         Ok(Self {
@@ -214,9 +230,12 @@ impl DriverCompletionStore {
             .ok_or_else(|| {
                 TinyAgentsError::Storage("completion store: parent admission lease was lost".into())
             })?;
+        let condition = lease
+            .write_condition(self.scope.clone())
+            .map_err(map_error)?;
         let fenced = self
             .backend
-            .for_scope_fenced(&self.scope, &lease.fence(&self.scope))
+            .for_scope_conditioned(&self.scope, &condition)
             .map_err(map_error)?;
         Ok(Arc::clone(fenced.documents()))
     }
@@ -226,7 +245,7 @@ impl CompletionStore for DriverCompletionStore {
     fn coordination_identity(&self) -> Option<String> {
         Some(format!(
             "driver:{}",
-            serde_json::to_string(&(self.coordination_domain.as_str(), self.scope.to_string()))
+            serde_json::to_string(&(self.coordination_domain.as_str(), self.scope.as_str()))
                 .expect("driver coordination identity is serializable")
         ))
     }
@@ -378,9 +397,7 @@ impl CompletionStore for DriverCompletionStore {
                 .await
             {
                 Ok(_) => Ok(true),
-                Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {
-                    Ok(false)
-                }
+                Err(error) if error.kind() == ErrorKind::Conflict => Ok(false),
                 Err(error) => Err(map_error(error)),
             }
         })
@@ -446,7 +463,7 @@ impl CompletionStore for DriverCompletionStore {
                     .await
                 {
                     Ok(_) => claimed.push(record),
-                    Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {}
+                    Err(error) if error.kind() == ErrorKind::Conflict => {}
                     Err(error) => return Err(map_error(error)),
                 }
             }
@@ -503,9 +520,7 @@ impl CompletionStore for DriverCompletionStore {
                 .await
             {
                 Ok(_) => Ok(Some(record)),
-                Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {
-                    Ok(None)
-                }
+                Err(error) if error.kind() == ErrorKind::Conflict => Ok(None),
                 Err(error) => Err(map_error(error)),
             }
         })
@@ -561,9 +576,7 @@ impl CompletionStore for DriverCompletionStore {
                 .await
             {
                 Ok(_) => Ok(Some(record)),
-                Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {
-                    Ok(None)
-                }
+                Err(error) if error.kind() == ErrorKind::Conflict => Ok(None),
                 Err(error) => Err(map_error(error)),
             }
         })
@@ -636,7 +649,7 @@ impl CompletionStore for DriverCompletionStore {
                     .await
                 {
                     Ok(removed) => dropped += usize::from(removed),
-                    Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {}
+                    Err(error) if error.kind() == ErrorKind::Conflict => {}
                     Err(error) => return Err(map_error(error)),
                 }
             }

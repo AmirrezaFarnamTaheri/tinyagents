@@ -205,6 +205,18 @@ reason; the host can query or await that job separately and decide whether to
 retry, narrow the task, or report the partial result. The driver does not run
 child work inline in the parent model tool call.
 
+### Agent-origin text is fenced, capped and labelled
+
+A parent agent's steer is model output, not the user's instruction. The
+producers that carry one (`SubAgentJobRegistry::send_message*`, behind the
+subagent message tool, and `steer_detached` under `SteerAccess::Owner`) refuse
+text over `steering::MAX_STEER_TEXT_BYTES` (32 KiB) and wrap the rest with
+`run_queue::fence_agent_message`: JSON-quoted with `<` escaped inside
+`<parent_agent_message>`, so it cannot close the fence or forge a line such as
+`[System]:`. The child sees it under `AGENT_STEER_PREFIX` /
+`AGENT_COLLECT_PREFIX`, never `[User steering message]`. `SteerAccess::Trusted`
+(a real user via RPC) keeps the user framing.
+
 ## Human Steering
 
 Humans can steer orchestrators or sub-agents through explicit control surfaces.

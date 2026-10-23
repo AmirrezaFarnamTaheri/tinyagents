@@ -25,7 +25,7 @@ pub struct AgentStores {
     pub journal: Arc<dyn AppendStore>,
 }
 
-/// A set of agent stores whose handles retain the backend admitted at open.
+/// A set of session stores whose scoped storage was captured at open time.
 #[derive(Clone)]
 pub struct SessionStoreLease {
     stores: AgentStores,
@@ -42,7 +42,7 @@ impl SessionStoreLease {
     }
 }
 
-/// Why a provider could not open an explicitly pinned set of session stores.
+/// Why a provider could not return a pinned set of stores.
 #[derive(Debug, thiserror::Error)]
 pub enum SessionStoreLeaseError {
     /// The provider cannot guarantee that its handles retain one backend.
@@ -50,39 +50,13 @@ pub enum SessionStoreLeaseError {
     Unsupported,
     /// Opening the pinned stores failed.
     #[error("opening pinned session stores failed: {0}")]
-    Open(#[source] tinystoragedrivers_core::StorageError),
+    Open(#[source] tinystoragedrivers_types::StorageError),
 }
 
 impl std::fmt::Debug for AgentStores {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentStores")
             .field("transcripts", &self.transcripts.destination_key())
-            .finish_non_exhaustive()
-    }
-}
-
-/// An agent's driver-backed stores for one workspace.
-///
-/// Cloning shares one open backend; the backend closes when the last clone
-/// drops.
-#[derive(Clone)]
-#[cfg(feature = "legacy-import")]
-pub struct WorkspaceStores {
-    pub(super) inner: Arc<WorkspaceInner>,
-}
-
-#[cfg(feature = "legacy-import")]
-pub(super) struct WorkspaceInner {
-    pub(super) provider: Arc<super::DriverSessionStores>,
-    pub(super) stores: AgentStores,
-    pub(super) outcome: crate::legacy::OnceOutcome,
-}
-
-#[cfg(feature = "legacy-import")]
-impl std::fmt::Debug for WorkspaceStores {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WorkspaceStores")
-            .field("outcome", &self.inner.outcome)
             .finish_non_exhaustive()
     }
 }

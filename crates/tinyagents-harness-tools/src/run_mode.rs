@@ -46,7 +46,7 @@ impl<S: Clone + Eq + Hash + Send + Sync + 'static> RunModeStore<S> for InMemoryR
             let key = (scope.clone(), thread_id.to_owned());
             let mut handles = self.handles.lock();
             match handles.get(&key) {
-                Some(handle) if handle.get() == mode => false,
+                Some(handle) if mode == handle.get() => false,
                 Some(handle) => {
                     handle.set(mode);
                     true

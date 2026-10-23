@@ -2,10 +2,11 @@ use super::*;
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, MemoryStorage, Page, Precondition, Query, Scope, StorageBackend,
-    Version, Versioned,
+use tinyagents_storage_kit::{
+    Capabilities, CollectionSpec, DocumentStore, Filter, Page, Precondition, Query, Scope, Sort,
+    StorageBackend, Version, Versioned,
 };
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn key(task_id: &str) -> SubagentTaskKey {
     SubagentTaskKey {
@@ -38,8 +39,13 @@ fn upsert(task_id: &str, lifecycle_key: SubagentTaskKey) -> SubagentSessionUpser
 
 #[tokio::test]
 async fn stale_session_owner_cannot_close_a_reused_lifecycle() {
-    let backend = MemoryStorage::new();
-    let docs = Arc::clone(backend.for_scope(&Scope::local()).unwrap().documents());
+    let backend = MemoryBackend::new();
+    let docs = Arc::clone(
+        backend
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap()
+            .documents(),
+    );
     let store = DriverSubagentSessionStore::new(docs).unwrap();
     let first_key = key("task-a");
     let (first, _) = store
@@ -90,8 +96,13 @@ async fn stale_session_owner_cannot_close_a_reused_lifecycle() {
 
 #[tokio::test]
 async fn scoped_session_store_rejects_other_parent_identity() {
-    let backend = MemoryStorage::new();
-    let docs = Arc::clone(backend.for_scope(&Scope::local()).unwrap().documents());
+    let backend = MemoryBackend::new();
+    let docs = Arc::clone(
+        backend
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap()
+            .documents(),
+    );
     let inner = Arc::new(DriverSubagentSessionStore::new(docs).unwrap());
     let scoped =
         ScopedSubagentSessionStore::new(inner, "parent-session", Some("thread".to_owned()));
@@ -115,8 +126,13 @@ async fn scoped_session_store_rejects_other_parent_identity() {
 
 #[tokio::test]
 async fn scoped_session_close_notifies_only_after_current_owner_cas_wins() {
-    let backend = MemoryStorage::new();
-    let docs = Arc::clone(backend.for_scope(&Scope::local()).unwrap().documents());
+    let backend = MemoryBackend::new();
+    let docs = Arc::clone(
+        backend
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap()
+            .documents(),
+    );
     let driver = Arc::new(DriverSubagentSessionStore::new(docs).unwrap());
     let lifecycle_key = key("close-me");
     let (session, _) = driver
@@ -360,8 +376,13 @@ impl SubagentSessionStore for PauseAfterSessionRead {
 #[tokio::test]
 async fn scoped_mutations_recheck_reused_task_owner_after_a_paused_read() {
     for mutation in ["close", "finish", "fail"] {
-        let backend = MemoryStorage::new();
-        let docs = Arc::clone(backend.for_scope(&Scope::local()).unwrap().documents());
+        let backend = MemoryBackend::new();
+        let docs = Arc::clone(
+            backend
+                .for_scope(&Scope::new("local").unwrap())
+                .unwrap()
+                .documents(),
+        );
         let driver = Arc::new(DriverSubagentSessionStore::new(docs).unwrap());
         let old_key = key("same-task");
         let (old, _) = driver
@@ -469,14 +490,14 @@ struct PauseAfterSelectorRead {
 
 #[async_trait::async_trait]
 impl DocumentStore for PauseAfterSelectorRead {
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> Capabilities {
         self.inner.capabilities()
     }
 
     async fn ensure_collection(
         &self,
         spec: &CollectionSpec,
-    ) -> tinystoragedrivers_core::Result<()> {
+    ) -> tinyagents_storage_kit::error::Result<()> {
         self.inner.ensure_collection(spec).await
     }
 
@@ -484,7 +505,7 @@ impl DocumentStore for PauseAfterSelectorRead {
         &self,
         collection: &str,
         id: &str,
-    ) -> tinystoragedrivers_core::Result<Option<Versioned<Value>>> {
+    ) -> tinyagents_storage_kit::error::Result<Option<Versioned<Value>>> {
         self.inner.get(collection, id).await
     }
 
@@ -494,7 +515,7 @@ impl DocumentStore for PauseAfterSelectorRead {
         id: &str,
         doc: Value,
         precondition: Precondition,
-    ) -> tinystoragedrivers_core::Result<Version> {
+    ) -> tinyagents_storage_kit::error::Result<Version> {
         self.inner.put(collection, id, doc, precondition).await
     }
 
@@ -503,7 +524,7 @@ impl DocumentStore for PauseAfterSelectorRead {
         collection: &str,
         id: &str,
         precondition: Precondition,
-    ) -> tinystoragedrivers_core::Result<bool> {
+    ) -> tinyagents_storage_kit::error::Result<bool> {
         self.inner.delete(collection, id, precondition).await
     }
 
@@ -511,7 +532,7 @@ impl DocumentStore for PauseAfterSelectorRead {
         &self,
         collection: &str,
         query: &Query,
-    ) -> tinystoragedrivers_core::Result<Page<Versioned<Value>>> {
+    ) -> tinyagents_storage_kit::error::Result<Page<Versioned<Value>>> {
         let page = self.inner.query(collection, query).await?;
         if self.pause_once.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
@@ -523,38 +544,43 @@ impl DocumentStore for PauseAfterSelectorRead {
     async fn count(
         &self,
         collection: &str,
-        filter: &tinystoragedrivers_core::Filter,
-    ) -> tinystoragedrivers_core::Result<u64> {
+        filter: &Filter,
+    ) -> tinyagents_storage_kit::error::Result<u64> {
         self.inner.count(collection, filter).await
     }
 
     async fn delete_where(
         &self,
         collection: &str,
-        filter: &tinystoragedrivers_core::Filter,
-    ) -> tinystoragedrivers_core::Result<u64> {
+        filter: &Filter,
+    ) -> tinyagents_storage_kit::error::Result<u64> {
         self.inner.delete_where(collection, filter).await
     }
 
     async fn claim(
         &self,
         collection: &str,
-        filter: &tinystoragedrivers_core::Filter,
-        sort: &[tinystoragedrivers_core::Sort],
+        filter: &Filter,
+        sort: &[Sort],
         patch: &Value,
-    ) -> tinystoragedrivers_core::Result<Option<Versioned<Value>>> {
+    ) -> tinyagents_storage_kit::error::Result<Option<Versioned<Value>>> {
         self.inner.claim(collection, filter, sort, patch).await
     }
 
-    async fn drop_collection(&self, collection: &str) -> tinystoragedrivers_core::Result<()> {
+    async fn drop_collection(&self, collection: &str) -> tinyagents_storage_kit::error::Result<()> {
         self.inner.drop_collection(collection).await
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stale_reuse_selection_cannot_overwrite_a_newer_session_owner() {
-    let backend = MemoryStorage::new();
-    let docs = Arc::clone(backend.for_scope(&Scope::local()).unwrap().documents());
+    let backend = MemoryBackend::new();
+    let docs = Arc::clone(
+        backend
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap()
+            .documents(),
+    );
     let gate = Arc::new(PauseAfterSelectorRead {
         inner: docs.clone(),
         pause_once: AtomicBool::new(false),

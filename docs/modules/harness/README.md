@@ -1,5 +1,16 @@
 # Harness Module Specification
 
+Hosts that expose a conversation-level reasoning choice can keep it in a
+caller-owned `ThreadReasoningStore`, keyed by `ThreadId`. At the beginning of a
+turn, call `reasoning_for_turn` once and place the returned config in that
+turn's `RunPolicy::default_reasoning`. This snapshots the preference for the
+turn; later changes apply to the next turn, and request-level reasoning still
+wins. The host remains responsible for deciding which invocations consume the
+snapshot, such as applying it only to root turns. The store is instance-scoped:
+cloned handles share it, while separate stores do not. The interactive
+`AGENT_TURN_MAX_OUTPUT_TOKENS` constant is available to hosts that explicitly
+want output-room budgeting; it does not change `RunPolicy` defaults.
+
 The harness is the orchestration layer around LLM calls. It owns model
 registration, tool registration, prompt assembly, middleware, event streaming,
 tracing, retries, limits, summarization, caching, usage accounting,

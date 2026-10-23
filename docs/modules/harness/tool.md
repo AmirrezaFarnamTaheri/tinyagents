@@ -244,17 +244,24 @@ Provider-supplied tool calls must fail closed:
 
 A hosted run's tool scope uses `ToolScope`. A named scope becomes an exact
 membership set; named-empty always denies every tool, including with the legacy
-unrestricted fallback. Extra and deferred names are admitted before exact
+unrestricted fallback. Extra and deferred names are admitted before
 definition exclusions. Deferred names stay out of the initial wire catalogue
 and enter discovery even when their global registration is Direct; Hidden
 registrations remain hidden.
 
 An explicit wildcard policy remains dynamic so context-dependent toolsets
-retain their permitted tools. The shared gate applies exact exclusions to both
-catalogue and dispatch. A bare wildcard uses the host fallback:
+retain their permitted tools. The shared gate matches definition exclusions as
+`tinytools::glob_matches` patterns (`*`, `?`, ASCII case-insensitive), as a
+named scope does, on catalogue, search and dispatch alike. A bare wildcard uses the host fallback:
 `HostCapabilities::fail_closed_tool_allowlist` defaults to deny-all;
 `with_legacy_unrestricted_tool_allowlist` opts into unrestricted fallback.
 Explicit-model runs have no hosted scope and remain unaffected.
+
+A hosted child (a `SubAgentTool` run inside a hosted parent) is narrowed to its
+parent's binding: the parent's exclusions are added to the child's, the
+parent's allowlist bounds the child's (a child with no allowlist takes the
+parent's), and the parent's rule layers stack on the child's. A child never
+widens what its parent was allowed. A root run has no parent and is unchanged.
 
 ## Unknown-tool recovery
 

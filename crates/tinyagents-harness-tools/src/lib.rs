@@ -11,6 +11,9 @@ pub mod per_call;
 mod plan_exit;
 pub mod run_mode;
 pub mod schema;
+pub mod scratchpad;
+#[cfg(feature = "state-block")]
+pub mod state_block;
 pub mod thread_locks;
 mod time;
 mod time_parse;

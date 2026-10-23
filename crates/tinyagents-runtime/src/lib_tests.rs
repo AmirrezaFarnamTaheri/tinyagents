@@ -4582,13 +4582,8 @@ async fn dropping_the_turn_while_the_outcome_hook_is_pending_still_delivers_on_t
 
 #[tokio::test]
 async fn direct_resume_resolves_and_uses_the_admitted_lease() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope};
-    let provider = Arc::new(
-        tinyagents_session::port::DriverSessionStores::new(
-            Arc::new(MemoryStorage::new()),
-            Scope::local(),
-        )
-        .unwrap(),
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
     );
     let calls = Arc::new(Mutex::new(0));
     let resolver = Arc::new(FixedIdentityResolver {
@@ -4612,13 +4607,8 @@ async fn direct_resume_resolves_and_uses_the_admitted_lease() {
 
 #[tokio::test]
 async fn child_identity_resolution_preserves_parent_lineage() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope};
-    let provider = Arc::new(
-        tinyagents_session::port::DriverSessionStores::new(
-            Arc::new(MemoryStorage::new()),
-            Scope::local(),
-        )
-        .unwrap(),
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
     );
     let parent = SessionRef::scoped("root-thread", "parent-agent");
     let child = SessionRef::child_of(&parent, "delegate:worker");
@@ -4699,13 +4689,8 @@ impl SessionHooks for ReplaceTargetHook {
 
 #[tokio::test]
 async fn hook_cannot_replace_resolved_identity_locator_before_any_read() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope};
-    let provider = Arc::new(
-        tinyagents_session::port::DriverSessionStores::new(
-            Arc::new(MemoryStorage::new()),
-            Scope::local(),
-        )
-        .unwrap(),
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
     );
     let resolver = Arc::new(FixedIdentityResolver {
         provider,
@@ -4737,13 +4722,8 @@ async fn hook_cannot_replace_resolved_identity_locator_before_any_read() {
 
 #[tokio::test]
 async fn resolver_rejects_a_later_agent_change_before_another_driver_call() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope};
-    let provider = Arc::new(
-        tinyagents_session::port::DriverSessionStores::new(
-            Arc::new(MemoryStorage::new()),
-            Scope::local(),
-        )
-        .unwrap(),
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
     );
     let agent_id = Arc::new(Mutex::new("agent-one".to_owned()));
     let resolver = Arc::new(FixedIdentityResolver {
@@ -4781,13 +4761,8 @@ async fn resolver_rejects_a_later_agent_change_before_another_driver_call() {
 
 #[tokio::test]
 async fn same_admission_can_resume_the_current_generation_twice() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope};
-    let provider = Arc::new(
-        tinyagents_session::port::DriverSessionStores::new(
-            Arc::new(MemoryStorage::new()),
-            Scope::local(),
-        )
-        .unwrap(),
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
     );
     let resolver = Arc::new(FixedIdentityResolver {
         provider,
@@ -4848,13 +4823,8 @@ async fn resolver_error_does_not_touch_builder_fallback_locator() {
 
 #[tokio::test]
 async fn first_admission_ignores_same_identity_fallback_at_generation_nine() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope};
-    let provider = Arc::new(
-        tinyagents_session::port::DriverSessionStores::new(
-            Arc::new(MemoryStorage::new()),
-            Scope::local(),
-        )
-        .unwrap(),
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
     );
     let mut fallback_session = SessionRef::scoped("thread-first-admission", "agent-resolved");
     for _ in 0..9 {
@@ -4910,13 +4880,8 @@ async fn first_admission_ignores_same_identity_fallback_at_generation_nine() {
 
 #[tokio::test]
 async fn explicit_session_override_cannot_change_resolved_identity() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope};
-    let provider = Arc::new(
-        tinyagents_session::port::DriverSessionStores::new(
-            Arc::new(MemoryStorage::new()),
-            Scope::local(),
-        )
-        .unwrap(),
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
     );
     let calls = Arc::new(Mutex::new(0));
     let resolver = Arc::new(FixedIdentityResolver {
@@ -4943,13 +4908,8 @@ async fn explicit_session_override_cannot_change_resolved_identity() {
 
 #[tokio::test]
 async fn admitted_identity_keeps_compacted_head_on_following_never_resume_turn() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope};
-    let provider = Arc::new(
-        tinyagents_session::port::DriverSessionStores::new(
-            Arc::new(MemoryStorage::new()),
-            Scope::local(),
-        )
-        .unwrap(),
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
     );
     let session_ref = SessionRef::scoped("thread-identity-compact", "agent-resolved");
     let resolver = Arc::new(FixedIdentityResolver {
@@ -5034,23 +4994,20 @@ async fn admitted_identity_keeps_compacted_head_on_following_never_resume_turn()
 
 #[tokio::test]
 async fn same_agent_backend_change_is_rejected_until_a_fresh_session_admits_it() {
-    use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
-    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+    use tinyagents_session::port::SessionStoreProvider;
 
-    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let alice_root = DriverSessionStores::new(
-        Arc::new(MemoryStorage::new()),
-        Scope::tenant("alice").unwrap(),
-    )
-    .unwrap();
-    let bob_root = DriverSessionStores::new(
-        Arc::new(MemoryStorage::new()),
-        Scope::tenant("bob").unwrap(),
-    )
-    .unwrap();
-    let alice: Arc<dyn SessionStoreProvider> =
-        alice_root.bind_actor(backend.clone()).unwrap().unwrap();
-    let bob: Arc<dyn SessionStoreProvider> = bob_root.bind_actor(backend).unwrap().unwrap();
+    let backend: Arc<dyn tinystoragedrivers_api::StorageBackend> =
+        Arc::new(tinystoragedrivers_testkit::MemoryBackend::new());
+    let alice_root = crate::test_store::driver_session_stores_over(
+        backend.clone(),
+        tinyagents_storage_kit::Scope::new("tenant:alice").unwrap(),
+    );
+    let bob_root = crate::test_store::driver_session_stores_over(
+        backend,
+        tinyagents_storage_kit::Scope::new("tenant:bob").unwrap(),
+    );
+    let alice: Arc<dyn SessionStoreProvider> = alice_root;
+    let bob: Arc<dyn SessionStoreProvider> = bob_root;
     let provider = Arc::new(Mutex::new(alice));
     let resolver = Arc::new(SwitchableActorResolver {
         provider: provider.clone(),
@@ -5100,23 +5057,20 @@ async fn same_agent_backend_change_is_rejected_until_a_fresh_session_admits_it()
 
 #[tokio::test]
 async fn direct_resume_reads_admitted_transcript_and_rejects_later_actor_change() {
-    use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
-    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+    use tinyagents_session::port::SessionStoreProvider;
 
-    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let alice_root = DriverSessionStores::new(
-        Arc::new(MemoryStorage::new()),
-        Scope::tenant("alice").unwrap(),
-    )
-    .unwrap();
-    let bob_root = DriverSessionStores::new(
-        Arc::new(MemoryStorage::new()),
-        Scope::tenant("bob").unwrap(),
-    )
-    .unwrap();
-    let alice: Arc<dyn SessionStoreProvider> =
-        alice_root.bind_actor(backend.clone()).unwrap().unwrap();
-    let bob: Arc<dyn SessionStoreProvider> = bob_root.bind_actor(backend).unwrap().unwrap();
+    let backend: Arc<dyn tinystoragedrivers_api::StorageBackend> =
+        Arc::new(tinystoragedrivers_testkit::MemoryBackend::new());
+    let alice_root = crate::test_store::driver_session_stores_over(
+        backend.clone(),
+        tinyagents_storage_kit::Scope::new("tenant:alice").unwrap(),
+    );
+    let bob_root = crate::test_store::driver_session_stores_over(
+        backend,
+        tinyagents_storage_kit::Scope::new("tenant:bob").unwrap(),
+    );
+    let alice: Arc<dyn SessionStoreProvider> = alice_root;
+    let bob: Arc<dyn SessionStoreProvider> = bob_root;
     let provider = Arc::new(Mutex::new(alice));
     let resolver = Arc::new(SwitchableActorResolver {
         provider: provider.clone(),

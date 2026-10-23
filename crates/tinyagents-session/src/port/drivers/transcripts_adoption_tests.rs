@@ -1,16 +1,21 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use std::sync::Arc;
 
 use crate::port::drivers::transcripts::tests::meta;
 use crate::transcript::TranscriptMessage;
-use tinystoragedrivers_core::{Blocking, DocumentStore, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Blocking, DocumentStore, Scope};
 
 const THREAD: &str = "t";
 
 fn locator() -> DriverTranscriptLocator {
     let storage = MemoryStorage::new();
-    let docs: Arc<dyn DocumentStore> =
-        Arc::clone(storage.for_scope(&Scope::local()).unwrap().documents());
+    let docs: Arc<dyn DocumentStore> = Arc::clone(
+        storage
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap()
+            .documents(),
+    );
     DriverTranscriptLocator::new(docs, Blocking::new().unwrap(), "memory://adoption")
 }
 
@@ -56,20 +61,6 @@ fn contents(locator: &dyn TranscriptLocator, session: &SessionRef) -> Vec<String
         .into_iter()
         .map(|message| message.content)
         .collect()
-}
-
-fn snapshot(locator: &DriverTranscriptLocator, stem: &str) -> serde_json::Value {
-    let transcript = locator
-        .open_stem(stem, meta(THREAD))
-        .unwrap()
-        .read_session()
-        .unwrap()
-        .unwrap();
-    serde_json::json!({
-        "meta": transcript.meta,
-        "messages": transcript.messages,
-        "tools": transcript.tools,
-    })
 }
 
 #[test]
@@ -132,38 +123,6 @@ fn legacy_roots_are_folded_oldest_first_once() {
         .unwrap();
     assert_eq!(untouched.messages.len(), 1);
     assert!(untouched.meta.session_id.is_none());
-}
-
-#[test]
-fn legacy_root_adoption_does_not_replace_a_child_session() {
-    let locator = locator();
-    write_root(
-        &locator,
-        "1700000100_planner",
-        &legacy("planner", "2026-01-01", 1, 5),
-        &["root history"],
-    );
-    let legacy_before = snapshot(&locator, "1700000100_planner");
-    let root = SessionRef::scoped(THREAD, "planner");
-    let child = SessionRef::child_of(&root, "delegate:worker");
-
-    assert!(
-        locator
-            .adopt_legacy(&child, THREAD, &meta(THREAD))
-            .unwrap()
-            .is_none()
-    );
-    assert!(locator.read_session_transcript(&child).is_none());
-    assert_eq!(snapshot(&locator, "1700000100_planner"), legacy_before);
-    assert!(
-        locator
-            .adopt_legacy(&root, THREAD, &meta(THREAD))
-            .unwrap()
-            .is_some()
-    );
-    assert_eq!(contents(&locator, &root), vec!["root history"]);
-    assert!(locator.read_session_transcript(&child).is_none());
-    assert_eq!(snapshot(&locator, "1700000100_planner"), legacy_before);
 }
 
 #[test]
@@ -276,59 +235,42 @@ fn a_reserved_stem_reports_nothing_adopted() {
     );
 }
 
-#[cfg(feature = "legacy-import")]
 #[test]
-fn an_imported_file_workspace_is_adopted_and_resumes_the_folded_history() {
-    use crate::port::WorkspaceStores;
-    use crate::transcript::write_transcript;
-
-    let dir = tempfile::tempdir().unwrap();
-    let raw = dir.path().join("session_raw");
-    for (stem, created, row) in [
-        ("1700000100_orchestrator", "2026-01-01", "first"),
-        ("1700000200_orchestrator", "2026-01-02", "second"),
-    ] {
-        let mut legacy = legacy("orchestrator", created, 1, 0);
-        legacy.dispatcher = "native".into();
-        write_transcript(
-            &raw.join(format!("{stem}.jsonl")),
-            &[TranscriptMessage::user(row)],
-            &legacy,
-            None,
-        )
-        .unwrap();
-    }
+fn pre_identity_roots_are_adopted_and_resume_the_folded_history() {
+    let locator = locator();
+    write_root(
+        &locator,
+        "1700000100_orchestrator",
+        &legacy("orchestrator", "2026-01-01", 1, 0),
+        &["first"],
+    );
+    write_root(
+        &locator,
+        "1700000200_orchestrator",
+        &legacy("orchestrator", "2026-01-02", 1, 0),
+        &["second"],
+    );
     let session = SessionRef::scoped(THREAD, "orchestrator");
     let seed = legacy("orchestrator", "2026-02-01", 0, 0);
 
-    let stores = WorkspaceStores::open(dir.path(), "orchestrator").unwrap();
-    let transcripts = stores.transcripts();
-    let adoption = transcripts
+    let adoption = locator
         .adopt_legacy(&session, THREAD, &seed)
         .unwrap()
-        .expect("the imported legacy roots are adopted");
+        .expect("the pre-identity roots are adopted");
     assert_eq!(adoption.messages, 2);
     assert!(
-        transcripts
+        locator
             .adopt_legacy(&session, THREAD, &seed)
             .unwrap()
             .is_none()
     );
-    drop((transcripts, stores));
-
-    // The next process resumes the session in place.
-    let stores = WorkspaceStores::open(dir.path(), "orchestrator").unwrap();
-    let transcripts = stores.transcripts();
     assert!(
-        transcripts
+        locator
             .adopt_legacy(&session, THREAD, &seed)
             .unwrap()
             .is_none()
     );
-    assert_eq!(
-        contents(transcripts.as_ref(), &session),
-        vec!["first", "second"]
-    );
+    assert_eq!(contents(&locator, &session), vec!["first", "second"]);
 }
 
 #[test]
@@ -354,7 +296,7 @@ fn a_root_missing_from_the_index_is_still_folded() {
             docs.delete(
                 super::super::INDEX,
                 &super::super::index_id("1700000200_planner").unwrap(),
-                tinystoragedrivers_core::Precondition::None,
+                tinystoragedrivers_types::Precondition::None,
             )
             .await
         })

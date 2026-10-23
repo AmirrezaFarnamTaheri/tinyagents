@@ -38,9 +38,10 @@ mod types;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 pub use forwarder::{
-    COLLECT_PREFIX, ForwardEvent, ForwardEventSink, ForwarderCleanup,
-    MessageSteeringForwarderGuard, QueuedMessage, STEER_PREFIX, SteeringForwarderGuard,
-    forward_collects, forward_message_collects, forward_message_steers, forward_steers,
+    AGENT_COLLECT_PREFIX, AGENT_STEER_PREFIX, COLLECT_PREFIX, ForwardEvent, ForwardEventSink,
+    ForwarderCleanup, MessageSteeringForwarderGuard, QueuedMessage, STEER_PREFIX,
+    SteeringForwarderGuard, fence_agent_message, forward_collects, forward_message_collects,
+    forward_message_steers, forward_steers, lane_prefix,
 };
 
 pub use types::{

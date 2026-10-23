@@ -10,7 +10,8 @@ The default feature set enables `todos`, `goals`, and `skills`. The `subagents`
 feature enables the generic job and message tools and brings in
 `tinyagents-orchestration` and its task registry dependencies. Time,
 clarification, plan-exit, per-call binding, and thread-lock support are
-available without optional features.
+available without optional features. The `state-block` feature enables the
+run-state middleware and its required `goals` and `todos` modules.
 
 The opt-in `fs`, `net`, and `exec` features expose the standard tool families
 under `tinyagents_harness_tools::{fs,net,exec}`. The `media` feature exposes
@@ -26,14 +27,16 @@ default set.
   `GoalStore::prepare_turn` and composes a budget stop hook for the turn.
 - `todos` provides `TodoTool`, the persistent sequence model, and
   `TodoSequenceMiddleware`.
+- `state_block` provides `StateBlockMiddleware`, which rebuilds the current
+  goal, plan, and tool-call facts in each model request.
 - `skills` provides `UseSkillTool`, `PackCatalog`, `PackRegistryHandle`, and
   `UseSkillDispatch` for binding a selected tool from a named pack.
   Hosts can recover the shared registry from an erased registered tool with
   `skills::pack_registry_handle`; the generic `ToolCallBinding` still pins each
   call's admission and execution target.
 - `subagents` provides `DriverSubAgentTool`, `SubAgentJobsTool`, and
-  `SubAgentMessageTool` over the orchestration crate's shared
-  `SubAgentJobRegistry`.
+  `SubAgentMessageTool` over the registry owned by
+  `tinyagents_orchestration::subagent::SubAgentJobRegistry`.
 - `thread_locks` provides the public `ThreadLockMap` concurrency primitive.
 - `fs` provides filesystem tools and file-state operations in `fs`.
 - `net` provides network tools in `net`.

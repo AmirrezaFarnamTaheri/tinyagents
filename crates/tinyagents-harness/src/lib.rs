@@ -69,6 +69,8 @@ pub mod middleware;
 pub mod multimodal;
 pub mod no_progress;
 pub mod observability;
+pub mod oneshot;
+pub mod progress;
 pub mod prompt;
 pub mod providers;
 pub mod retry;
@@ -81,7 +83,9 @@ pub mod structured;
 pub mod summarization;
 pub mod terminal;
 pub mod testkit;
+pub mod thread_reasoning;
 pub mod title;
+
 pub mod token_estimation;
 pub mod tool;
 pub mod turn_deadline;
@@ -89,6 +93,7 @@ pub mod turn_outcome;
 pub mod turn_policy;
 pub mod turn_run_error;
 pub mod turn_run_finalize;
+pub mod turn_runner;
 pub mod turn_stop;
 /// Shared URL admission rules for outbound requests, including SSRF checks
 /// and DNS address pinning.
@@ -137,6 +142,7 @@ pub use observability::{DriverStatusStore, mint_run_id, reap_orphaned_runs};
 pub use observability::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
 };
+pub use progress::AgentProgress;
 pub use run_queue::{
     ForwardEvent, ForwardEventSink, ForwarderCleanup, QueueLane, QueueMode, QueueStatus,
     QueuedMessage, RunQueue, RunQueueHandle, SteeringForwarderGuard,
@@ -145,7 +151,7 @@ pub use steering::{
     RecentRequestIds, RequestIdError, SteeringCommand, SteeringCommandKind, SteeringHandle,
     SteeringOutcome, SteeringPolicy,
 };
-pub use storage::storage_schema;
+pub use storage::{collections, open_storage, storage_schema};
 pub use terminal::{TerminalClass, TerminalOutcome, TerminalReason, TimeoutPhase};
 pub use tool::ToolRegistry;
 pub use turn_stop::{TurnFailureClass, TurnStop, TurnStopKind};

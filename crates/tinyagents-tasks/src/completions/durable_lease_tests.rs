@@ -1,8 +1,9 @@
 use super::*;
+use crate::conditional_sqlite::MemoryStorage;
 use std::sync::Arc;
 use std::time::Duration;
 use tinyagents_harness::CancellationToken;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope, StorageBackend};
 
 #[tokio::test]
 async fn releasing_a_turn_lease_cancels_its_admission_and_successor_gets_new_epoch() {
@@ -53,14 +54,17 @@ async fn releasing_a_turn_lease_cancels_its_admission_and_successor_gets_new_epo
         .unwrap()
         .unwrap();
     assert!(successor.epoch() > first_epoch);
-    assert_eq!(successor.fence().collection(), "tsd.leases");
+    assert_eq!(
+        successor.write_condition().unwrap().clauses()[0].collection(),
+        "tsd.leases"
+    );
     successor.release().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_takeover_lost_during_renewal_permanently_cancels_the_turn() {
     use serde_json::json;
-    use tinystoragedrivers_core::{Key, Precondition};
+    use tinyagents_storage_kit::{Key, Precondition};
 
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let lease_scope = Scope::new("cluster").unwrap();

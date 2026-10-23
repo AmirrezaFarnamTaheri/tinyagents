@@ -38,6 +38,44 @@ pub const STEER_PREFIX: &str = "[User steering message]: ";
 /// context lines). See [`STEER_PREFIX`].
 pub const COLLECT_PREFIX: &str = "[Additional context from user]: ";
 
+/// Framing for a queued **steer** written by a parent *agent* rather than the
+/// user (see [`fence_agent_message`]). The child must not read a model's text
+/// as the user's instruction.
+pub const AGENT_STEER_PREFIX: &str = "[Steering message from the parent agent, not the user]: ";
+
+/// Framing for a queued **collect** message written by a parent agent. See
+/// [`AGENT_STEER_PREFIX`].
+pub const AGENT_COLLECT_PREFIX: &str = "[Additional context from the parent agent, not the user]: ";
+
+/// Opening line of [`fence_agent_message`]'s fence. A queued message that
+/// starts with it is framed with the agent-origin prefixes.
+const AGENT_FENCE_OPEN: &str = "<parent_agent_message>\n";
+
+/// Fences text a parent agent sends to its child: JSON-quoted with every `<`
+/// escaped (the technique of `NeutralCompletionFormatter`), so the text can
+/// neither close the fence nor start a line of its own such as `[System]:`.
+pub fn fence_agent_message(text: &str) -> String {
+    let quoted = serde_json::to_string(text)
+        .expect("a str serializes")
+        .replace('<', "\\u003c");
+    format!("{AGENT_FENCE_OPEN}{quoted}\n</parent_agent_message>")
+}
+
+/// Every framing prefix with the lane it marks, agent-origin first.
+const PREFIXES: [(&str, QueueLane); 4] = [
+    (AGENT_STEER_PREFIX, QueueLane::Steer),
+    (AGENT_COLLECT_PREFIX, QueueLane::Collect),
+    (STEER_PREFIX, QueueLane::Steer),
+    (COLLECT_PREFIX, QueueLane::Collect),
+];
+
+/// The framing prefix `text` starts with, and its lane.
+fn framed_prefix(text: &str) -> Option<(&'static str, QueueLane)> {
+    PREFIXES
+        .into_iter()
+        .find(|(prefix, _)| text.starts_with(prefix))
+}
+
 /// Poll interval of the forwarder task.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -141,17 +179,15 @@ impl<T: QueuedMessage> QueueAdapter for BorrowedQueue<'_, T> {
     }
 
     fn frame(&self, lane: QueueLane, message: TaMessage) -> TaMessage {
-        TaMessage::user(format!("{}{}", lane_prefix(lane), message.text()))
+        let text = message.text();
+        TaMessage::user(format!("{}{text}", lane_prefix(lane, &text)))
     }
 
     fn unframe(&self, message: TaMessage) -> (TaMessage, QueueLane) {
         let text = message.text();
-        if let Some(text) = text.strip_prefix(STEER_PREFIX) {
-            (TaMessage::user(text), QueueLane::Steer)
-        } else if let Some(text) = text.strip_prefix(COLLECT_PREFIX) {
-            (TaMessage::user(text), QueueLane::Collect)
-        } else {
-            (TaMessage::user(text), QueueLane::Steer)
+        match framed_prefix(&text) {
+            Some((prefix, lane)) => (TaMessage::user(&text[prefix.len()..]), lane),
+            None => (TaMessage::user(text), QueueLane::Steer),
         }
     }
 
@@ -198,7 +234,12 @@ impl QueueAdapter for BorrowedMessageQueue<'_> {
 
     fn frame(&self, lane: QueueLane, mut message: TaMessage) -> TaMessage {
         if let TaMessage::User(user) = &mut message {
-            let prefix = lane_prefix(lane);
+            let prefix = match user.content.first() {
+                Some(tinyinference_llm::message::ContentBlock::Text(text)) => {
+                    lane_prefix(lane, text)
+                }
+                _ => lane_prefix(lane, ""),
+            };
             match user.content.first_mut() {
                 Some(tinyinference_llm::message::ContentBlock::Text(text)) if !text.is_empty() => {
                     text.insert_str(0, prefix);
@@ -213,35 +254,16 @@ impl QueueAdapter for BorrowedMessageQueue<'_> {
     }
 
     fn unframe(&self, mut message: TaMessage) -> (TaMessage, QueueLane) {
-        let lane = match &message {
-            TaMessage::User(user) => match user.content.first() {
-                Some(tinyinference_llm::message::ContentBlock::Text(text))
-                    if text.starts_with(STEER_PREFIX) =>
-                {
-                    QueueLane::Steer
-                }
-                Some(tinyinference_llm::message::ContentBlock::Text(text))
-                    if text.starts_with(COLLECT_PREFIX) =>
-                {
-                    QueueLane::Collect
-                }
-                _ => QueueLane::Steer,
-            },
-            _ => QueueLane::Steer,
-        };
+        let mut lane = QueueLane::Steer;
         if let TaMessage::User(user) = &mut message
-            && let Some(tinyinference_llm::message::ContentBlock::Text(text)) = user.content.first()
-            && text.starts_with(lane_prefix(lane))
+            && let Some(tinyinference_llm::message::ContentBlock::Text(text)) =
+                user.content.first_mut()
+            && let Some((prefix, framed)) = framed_prefix(text)
         {
-            let text = match &mut user.content[0] {
-                tinyinference_llm::message::ContentBlock::Text(text) => text,
-                _ => unreachable!("the checked first block is text"),
-            };
-            let stripped = text[lane_prefix(lane).len()..].to_owned();
-            if stripped.is_empty() {
+            lane = framed;
+            text.drain(..prefix.len());
+            if text.is_empty() {
                 user.content.remove(0);
-            } else {
-                *text = stripped;
             }
         }
         (message, lane)
@@ -273,10 +295,15 @@ impl QueueAdapter for SharedMessageQueue {
     }
 }
 
-fn lane_prefix(lane: QueueLane) -> &'static str {
-    match lane {
-        QueueLane::Steer | QueueLane::Followup => STEER_PREFIX,
-        QueueLane::Collect => COLLECT_PREFIX,
+/// The prefix a message injected on `lane` is framed with: the agent-origin
+/// one when `text` is a [`fence_agent_message`] fence, the user one otherwise.
+pub fn lane_prefix(lane: QueueLane, text: &str) -> &'static str {
+    let from_agent = text.starts_with(AGENT_FENCE_OPEN);
+    match (lane, from_agent) {
+        (QueueLane::Steer | QueueLane::Followup, false) => STEER_PREFIX,
+        (QueueLane::Collect, false) => COLLECT_PREFIX,
+        (QueueLane::Steer | QueueLane::Followup, true) => AGENT_STEER_PREFIX,
+        (QueueLane::Collect, true) => AGENT_COLLECT_PREFIX,
     }
 }
 

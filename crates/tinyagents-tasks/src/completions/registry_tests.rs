@@ -2,34 +2,21 @@ use super::*;
 use std::sync::Arc;
 
 use crate::completions::{CompletionRouter, InMemoryCompletionStore};
+use crate::conditional_sqlite::MemoryStorage;
+use tinyagents_storage_kit::{Scope, ScopedStorage, StorageBackend, StorageError};
 
-#[derive(Debug)]
-struct UnfencedBackend(tinystoragedrivers_core::MemoryStorage);
+struct UnconditionedBackend(MemoryStorage);
 
-#[async_trait::async_trait]
-impl tinystoragedrivers_core::StorageBackend for UnfencedBackend {
-    fn driver(&self) -> &'static str {
-        "unfenced-test"
-    }
-
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
-        tinystoragedrivers_core::Capabilities::none()
-    }
-
-    fn for_scope(
-        &self,
-        scope: &tinystoragedrivers_core::Scope,
-    ) -> tinystoragedrivers_core::Result<tinystoragedrivers_core::ScopedStorage> {
+impl StorageBackend for UnconditionedBackend {
+    fn for_scope(&self, scope: &Scope) -> Result<ScopedStorage, StorageError> {
         self.0.for_scope(scope)
     }
 }
 
 #[tokio::test]
 async fn durable_completion_open_fails_closed_while_explicit_local_fallback_remains_usable() {
-    let backend: Arc<dyn tinystoragedrivers_core::StorageBackend> = Arc::new(UnfencedBackend(
-        tinystoragedrivers_core::MemoryStorage::new(),
-    ));
-    let scope = tinystoragedrivers_core::Scope::new("shared").unwrap();
+    let backend: Arc<dyn StorageBackend> = Arc::new(UnconditionedBackend(MemoryStorage::new()));
+    let scope = Scope::new("shared").unwrap();
     assert!(
         open_driver_completion_store_or_memory(
             Arc::clone(&backend),

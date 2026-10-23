@@ -42,12 +42,17 @@ pub use reconcile::{
 };
 pub use runtime::{DetachedAbortEvent, DetachedTaskRegistry};
 pub use steering_registry::SteeringRegistry;
-pub use storage::storage_schema;
+pub use storage::{open_storage, storage_schema};
 pub use store::{InMemoryTaskStore, TaskStore};
 pub use store_registry::{
-    TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store_or_memory,
+    TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store,
+    open_driver_task_store_or_memory,
 };
 pub use types::*;
+
+#[cfg(test)]
+#[path = "conditional_sqlite.rs"]
+mod conditional_sqlite;
 
 #[cfg(test)]
 #[path = "lib_tests.rs"]

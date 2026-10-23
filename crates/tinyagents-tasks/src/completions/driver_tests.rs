@@ -2,11 +2,12 @@ use super::*;
 use crate::completions::CompletionReceipt;
 use crate::completions::{CompletionResult, RecordOutcome};
 use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
+use crate::conditional_sqlite::MemoryStorage;
 use crate::open_driver_completion_store_with_coordination_domain;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tinyagents_harness::run_queue::QueueAdmission;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{ErrorKind, Precondition, Scope, StorageBackend};
 
 fn record(task: &str, parent: &str) -> CompletionRecord {
     CompletionRecord::new(
@@ -255,7 +256,7 @@ async fn a_claim_prepared_before_takeover_cannot_land_after_the_new_epoch() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Fenced);
+    assert_eq!(error.kind(), ErrorKind::Conflict);
     let persisted = store.get(&pending.task_id).unwrap();
     assert_eq!(persisted.attempts, 0);
     assert!(persisted.claim.is_none());
@@ -653,7 +654,7 @@ async fn batch_admission_does_not_alias_distinct_scopes_and_parent_keys() {
 
 /// A router over the SQLite file at `path`, opened afresh (a simulated restart).
 fn open_router(path: &std::path::Path) -> CompletionRouter {
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(path).unwrap();
+    let storage = MemoryStorage::open(path);
     let store =
         DriverCompletionStore::new(Arc::new(storage), Scope::new("local").unwrap()).unwrap();
     CompletionRouter::new(Arc::new(store))
@@ -996,7 +997,7 @@ async fn the_store_keeps_the_latest_record_per_task() {
 #[tokio::test]
 async fn migration_listing_fails_on_corrupt_records_while_legacy_listing_skips_them() {
     use serde_json::json;
-    use tinystoragedrivers_core::Precondition;
+    use tinyagents_storage_kit::Precondition;
 
     let storage = MemoryStorage::new();
     let store = DriverCompletionStore::new(Arc::new(storage.clone()), Scope::new("local").unwrap())
@@ -1128,7 +1129,7 @@ async fn a_cancelled_parent_stays_cancelled_after_a_reopen() {
 
 #[tokio::test]
 async fn an_unreadable_record_is_skipped_without_hiding_the_rest() {
-    use tinystoragedrivers_core::Precondition;
+    use tinyagents_storage_kit::Precondition;
     let storage = MemoryStorage::new();
     let docs = Arc::clone(
         storage

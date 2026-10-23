@@ -177,7 +177,8 @@ async fn the_reminder_fires_once_per_step_and_a_todo_call_restarts_the_count() {
     let note = tool_round(&mw, &mut ctx, "shell").await;
     assert!(
         note.contains("Step 1 \"A\" has been in progress for 3 rounds")
-            && note.contains("todo {\"complete\": 1}"),
+            && note.contains("todo {\"complete\": 1, \"facts\": [")
+            && note.contains("a list of step numbers"),
         "{note}"
     );
     for _ in 0..5 {
@@ -230,4 +231,27 @@ async fn an_ignored_reminder_gates_other_tools_until_a_todo_call() {
     // A bare `todo` read ("still on it") lifts the gate and restarts the count.
     tool_round(&mw, &mut ctx, "todo").await;
     assert!(before(&mw, &mut ctx, "shell").await.is_ok());
+}
+
+#[tokio::test]
+async fn a_run_without_a_thread_follows_the_plan_under_the_fallback_key() {
+    let store: Arc<dyn Store> = Arc::new(InMemoryStore::default());
+    store::replace(&store, "standalone", plan(&["A", "B"]))
+        .await
+        .unwrap();
+    let mut threadless = RunContext::new(RunConfig::new("no-thread").with_max_model_calls(20), ());
+
+    // Without the key the rules cannot see the plan and stay out of the way.
+    let blind = TodoSequenceMiddleware::new(store.clone());
+    let mut response = answer();
+    after(&blind, &mut threadless, &mut response).await;
+    assert!(response.continue_turn.is_none());
+
+    let mw = TodoSequenceMiddleware::new(store).with_fallback_thread("standalone");
+    let mut response = answer();
+    after(&mw, &mut threadless, &mut response).await;
+    let held = response
+        .continue_turn
+        .expect("the fallback key finds the open steps");
+    assert!(held.contains("step 1 \"A\" (in progress)"), "{held}");
 }

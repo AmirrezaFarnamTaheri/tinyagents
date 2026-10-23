@@ -5,7 +5,7 @@ use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
 use tinyagents_harness::error::Result as HarnessResult;
-use tinystoragedrivers_core::{Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope, StorageBackend};
 
 use super::lifecycle::ParentLifecycle;
 use super::{CompletionRouter, CompletionStore, DriverCompletionStore};

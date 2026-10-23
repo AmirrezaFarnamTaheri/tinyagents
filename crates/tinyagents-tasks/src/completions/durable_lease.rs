@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tinystoragedrivers_core::primitives::{Lease, Leases};
-use tinystoragedrivers_core::{Scope, StorageBackend, StorageError};
+use tinyagents_storage_kit::primitives::Lease;
+use tinyagents_storage_kit::{Leases, Scope, StorageBackend, StorageError};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -82,10 +82,10 @@ impl DurableThreadDeliveryLeases {
                 "durable thread lease key must not be empty",
             ));
         }
-        let tenant_scope = Scope::parse(tenant.as_str())?;
-        if tenant_scope.principal.is_some()
-            || tenant_scope.tenant == tinystoragedrivers_core::Tenant::Cluster
-        {
+        // TSD v2 scopes are opaque identifiers. Tenant scopes are single path
+        // segments; agent/module child scopes contain `/`, and cluster is the
+        // shared coordination namespace rather than a tenant.
+        if tenant.as_str() == "cluster" || tenant.as_str().contains('/') {
             return Err(StorageError::invalid_input(
                 "durable thread lease requires a tenant scope without a principal",
             ));
@@ -168,8 +168,8 @@ impl DurableThreadDeliveryLease {
     }
 
     /// Creates the native epoch fence for storage in `lease_scope`.
-    pub fn fence(&self) -> tinystoragedrivers_core::Fence {
-        self.lease.fence(&self.lease_scope)
+    pub fn write_condition(&self) -> Result<tinyagents_storage_kit::WriteCondition, StorageError> {
+        self.lease.write_condition(self.lease_scope.clone())
     }
 
     /// Permanently cancels the supplied token if this exact lease tenure is lost.

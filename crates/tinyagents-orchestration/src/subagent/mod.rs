@@ -17,7 +17,6 @@ mod detached;
 mod document_persistence;
 mod driver;
 mod executor;
-mod file_persistence;
 mod invocation;
 mod outcome_status_map;
 mod persistence;
@@ -55,7 +54,6 @@ pub use detached::{
 pub use document_persistence::DocumentSubagentPersistence;
 pub use driver::{SubagentCapabilities, SubagentDriver, SubagentInFlight};
 pub use executor::SubagentExecutor;
-pub use file_persistence::FileSubagentPersistence;
 pub use invocation::{
     DriverJobRegistration, JobSettleGuard, ParentJobScope, RootRunDescendantLease, SubAgentJob,
     SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus,

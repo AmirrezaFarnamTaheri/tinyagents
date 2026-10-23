@@ -328,6 +328,7 @@ impl<Ctx> RunContext<Ctx> {
             truncated_call_positions: std::collections::HashSet::new(),
             truncated_repeat_positions: std::collections::HashSet::new(),
             batch_admissions: 0,
+            dead_call_retry: false,
             workspace: None,
             on_error_dispatched: false,
             streaming: false,

@@ -459,6 +459,12 @@ pub struct RunContext<Ctx = ()> {
     /// How many calls the current batch has admitted so far; the position
     /// `truncated_call_positions` is matched against. Reset per batch.
     pub(crate) batch_admissions: usize,
+    /// Whether the tool calls now running came from a dead-call retry: the
+    /// call sent with reasoning off after a reply that died at its output cap.
+    /// Such a call has lost the reasoning that led to the last action and tends
+    /// to repeat it, so the repeated-failure breaker does not count its
+    /// failures toward the identical-repeat stop. Set for every model call.
+    pub(crate) dead_call_retry: bool,
     /// An optional host-supplied workspace/sandbox descriptor threaded into every
     /// [`ToolExecutionContext`][crate::tool::ToolExecutionContext] this
     /// run creates, so tools discover their allowed root from context rather

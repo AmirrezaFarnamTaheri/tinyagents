@@ -43,8 +43,9 @@ hosts with stable task ids without exposing executor handles such as
   host-defined scope key to a lazily-opened `Arc<dyn TaskStore>`, so a
   multi-tenant host keeps exactly one store per scope. `get_or_open` /
   `get` / `values` / `len` / `is_empty` / `clear`.
-  `open_jsonl_task_store_or_memory(path)` is the standard opener: it degrades
-  to an `InMemoryTaskStore` if the durable log can't be created or read.
+  `open_driver_task_store(storage)` applies the tasks-owned migrations to a
+  host-bound storage handle before returning the durable store. In-memory
+  storage remains an explicit choice for tests or hosts that request it.
 
 ### Process-local runtime (`runtime.rs`)
 
@@ -85,11 +86,15 @@ hand-off and nothing product-specific:
   `finished_at`, `attempts`, `notify_mode` and `state` (`Pending` /
   `Delivered` / `Tombstoned` / `GaveUp`).
 - `CompletionStore` — `InMemoryCompletionStore` and `DriverCompletionStore`.
-  The JSONL log is append-only, one `fsync`ed line per change, replayed to the
-  latest record per task id on open. A torn final line from a crash is dropped
-  and the file truncated back to the last whole line; an unreadable complete
-  line is skipped with a warning. `compact(retain)` rewrites the log through a
-  temp file and an atomic rename, dropping settled records older than `retain`.
+  The driver store keeps the latest record per task id as one document in a
+  `tinystoragedrivers` collection (`orchestration_completions` by default)
+  with `parentKey`, `state` and `updatedAtMs` projected for queries; an
+  unreadable document is skipped with a warning. A record that settles
+  (`Delivered`, `Tombstoned`, `GaveUp`, including the records `cancel_parent`
+  withdraws) is written back without its `result`, so a delivered or
+  withdrawn child's text does not sit in the store until compaction; the id,
+  state and attempts that dedupe and tombstones need stay. `compact(retain)`
+  drops settled records older than `retain`, dedupe entries included.
 - `CompletionRouter` — `record` (idempotent per task id), `tombstone(task_id)`
   (the parent waited on or collected the child, so nothing further is routed; a message already pushed to a live queue is not retracted; works
   before the completion exists), `claim_pending(parent, max)` /
@@ -97,7 +102,8 @@ hand-off and nothing product-specific:
   attempt; a claimed record is leased until resolved), `mark_delivered(ids)`,
   `mark_failed(ids)` (moves a record to `GaveUp` once `attempts >=
   max_attempts`, default `DEFAULT_MAX_ATTEMPTS` = 5, and returns those records
-  for the host's give-up policy), `pending_for(parent)`, `cancel_parent` /
+  with their full result for the host's give-up policy; the stored copy keeps
+  none), `pending_for(parent)`, `cancel_parent` /
   `resume_parent` (the flag is a durable marker record, so it survives a restart), `attach_parent` / `detach_parent`, `compact`.
 - `NotifyMode`, set per spawn: `Followup` (default) pushes onto the parent's
   `QueueLane::Followup` when the parent is attached, `Collect` onto
@@ -168,7 +174,7 @@ README.
 | `types.rs` | `NoEquivalentStatus`, task kind/status/spec/result/record/filter types, `OrchestrationControlOutcome`, and the `DetachedTaskRegistry` snapshot/error types. |
 | `steering_registry.rs` | The process-local `SteeringRegistry` of live handles. |
 | `store.rs` | `TaskStore` trait, `InMemoryTaskStore`, and the shared transition rules. |
-| `store_registry.rs` | `TaskStoreRegistry<K>`, `open_driver_task_store_or_memory`. |
+| `store_registry.rs` | `TaskStoreRegistry<K>`, `open_driver_task_store`. |
 | `runtime.rs` | `DetachedTaskRegistry<Metadata, Status>` — process-local executor handles keyed by task id. |
 | `reconcile.rs` | `reconcile_orphaned_tasks` and its report types, for settling orphans left by a dead executor. |
 | `completions/` | `types.rs`, `store.rs`, `driver.rs`, `router.rs`, `format.rs`: the completion router (tests in `router_tests.rs`, `driver_tests.rs`). |
@@ -180,7 +186,7 @@ README.
   orchestration layer uses live handles for running children and delegates
   steering of finished children to a host-owned fallback.
 - `TaskStore` is a synchronous trait, so `DriverTaskStore` bridges the async
-  driver ports with `tinystoragedrivers_core::Blocking`; build it from a
+  driver ports with `tinyagents_storage_kit::Blocking`; build it from a
   multi-thread runtime or outside one. History snapshots grow one per
   transition, so prune old records through the backend if that matters.
 - `OrchestrationTaskFilter::matches` is evaluated in-process against loaded

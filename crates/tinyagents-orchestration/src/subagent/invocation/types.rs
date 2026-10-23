@@ -303,6 +303,12 @@ pub enum SubAgentJobError {
     /// The request identifier exceeds the bounded registry size.
     #[error("subagent request id is too long")]
     RequestIdTooLong,
+    /// The message exceeds the bounded steering payload size.
+    #[error("subagent message is too long (limit {limit} bytes)")]
+    MessageTooLong {
+        /// The byte limit the message exceeded.
+        limit: usize,
+    },
     /// Descendant settlement reached its one shared absolute deadline.
     #[error("timed out while settling descendant subagent jobs")]
     SettlementTimedOut,

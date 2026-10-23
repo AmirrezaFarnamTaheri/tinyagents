@@ -1,172 +1,75 @@
-//! Scope-restricted storage for a parent/thread turn holding a TSD lease.
+//! Scope-restricted, lease-conditioned storage for a parent/thread turn.
 
 use std::sync::Arc;
 
-use tinystoragedrivers_core::{
-    Capabilities, Capability, Fence, Principal, Scope, ScopeGeneration, ScopedStorage,
-    StorageBackend, StorageError, Tenant,
-};
+use tinyagents_session::port::AgentStorageFactory;
+use tinyagents_storage_kit::{Scope, ScopedStorage, StorageBackend, StorageError, WriteCondition};
 
-/// A backend view that exposes only one tenant and its agent-principal scopes,
-/// and applies one native TSD fence to every returned scope.
-///
-/// Hosts pass this restricted backend to `SessionStoreProvider::bind_actor`
-/// while a durable turn lease is held. The wrapper never returns its raw
-/// backend or an unfenced `ScopedStorage`. It rejects module, cluster, other
-/// tenant, alternate-fence, and nonzero-generation bindings.
+/// Host storage restricted to the admitted tenant and conditioned on its
+/// durable turn lease. The lease condition is checked atomically by the
+/// backend for every mutation performed through the returned scoped handle.
 #[derive(Clone)]
 pub struct FencedSessionBackend {
     backend: Arc<dyn StorageBackend>,
     tenant: Scope,
-    tenant_kind: Tenant,
-    fence: Fence,
+    condition: WriteCondition,
 }
 
 impl std::fmt::Debug for FencedSessionBackend {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("FencedSessionBackend")
-            .field("driver", &self.backend.document_driver())
-            .field("tenant", &self.tenant)
+            .field("tenant", &self.tenant.as_str())
+            .field("condition_clauses", &self.condition.clauses().len())
             .finish_non_exhaustive()
     }
 }
 
 impl FencedSessionBackend {
-    /// Restricts `backend` to `tenant` and agent principals under it, fencing
-    /// every scope's writes with `fence`.
-    ///
-    /// # Errors
-    ///
-    /// Refuses a cluster/principal tenant, an invalid scope, or a backend that
-    /// does not advertise native fencing.
+    /// Restricts storage to agent scopes under `tenant`, conditioned on the
+    /// exact durable lease tenure supplied by the caller.
     pub fn new(
         backend: Arc<dyn StorageBackend>,
         tenant: Scope,
-        fence: Fence,
+        condition: WriteCondition,
     ) -> Result<Self, StorageError> {
-        let parsed = Scope::parse(tenant.as_str())?;
-        if parsed.principal.is_some() || parsed.tenant == Tenant::Cluster {
+        if condition.clauses().is_empty() {
             return Err(StorageError::invalid_input(
-                "a fenced session backend requires a tenant scope without a principal",
+                "a session write condition must contain a lease guard",
             ));
         }
-        backend.capabilities().require(Capability::Fencing)?;
-        fence.validate()?;
+        if tenant.as_str() == "cluster" || tenant.as_str().contains('/') {
+            return Err(StorageError::invalid_input(
+                "a conditioned session backend requires a tenant scope",
+            ));
+        }
         Ok(Self {
             backend,
             tenant,
-            tenant_kind: parsed.tenant,
-            fence,
+            condition,
         })
     }
 
-    /// Returns the tenant this adapter admits.
+    /// Builds the session provider factory for an admitted actor. Each agent
+    /// receives a distinct `tenant/agent:<id>` scope, and the backend opens
+    /// that scope only with the lease condition. Backends without atomic
+    /// conditional-write support fail closed.
+    pub fn storage_factory(self: Arc<Self>) -> AgentStorageFactory {
+        Arc::new(move |agent_id| self.for_agent(agent_id))
+    }
+
+    /// Opens one admitted agent's conditioned storage.
+    pub fn for_agent(&self, agent_id: &str) -> Result<ScopedStorage, StorageError> {
+        if agent_id.is_empty() {
+            return Err(StorageError::invalid_input("agent id must not be empty"));
+        }
+        let scope = self.tenant.child(&format!("agent:{agent_id}"))?;
+        self.backend.for_scope_conditioned(&scope, &self.condition)
+    }
+
+    /// Returns the tenant admitted by this backend.
     pub fn tenant(&self) -> &Scope {
         &self.tenant
-    }
-
-    /// Returns the native fence retained by this adapter.
-    pub fn fence(&self) -> &Fence {
-        &self.fence
-    }
-
-    fn admits(&self, scope: &Scope) -> bool {
-        let Ok(parsed) = Scope::parse(scope.as_str()) else {
-            return false;
-        };
-        if parsed.tenant != self.tenant_kind {
-            return false;
-        }
-        match parsed.principal {
-            None => scope == &self.tenant,
-            Some(Principal::Agent(_)) => scope.tenant_scope().as_ref() == Some(&self.tenant),
-            Some(Principal::Module(_)) => false,
-        }
-    }
-
-    fn bind(&self, scope: &Scope) -> Result<ScopedStorage, StorageError> {
-        if !self.admits(scope) {
-            return Err(StorageError::invalid_input(format!(
-                "scope `{scope}` is outside this fenced session tenant"
-            )));
-        }
-        self.backend.for_scope_fenced(scope, &self.fence)
-    }
-}
-
-#[async_trait::async_trait]
-impl StorageBackend for FencedSessionBackend {
-    fn driver(&self) -> &'static str {
-        self.backend.driver()
-    }
-
-    fn document_driver(&self) -> &'static str {
-        self.backend.document_driver()
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::none().with(Capability::Fencing)
-    }
-
-    fn existing_schema(&self) -> Result<Arc<dyn StorageBackend>, StorageError> {
-        let backend = self.backend.existing_schema()?;
-        let restricted = Self::new(backend, self.tenant.clone(), self.fence.clone())?;
-        Ok(Arc::new(restricted))
-    }
-
-    async fn prepare_schema(&self) -> Result<(), StorageError> {
-        Err(StorageError::unsupported(
-            Capability::ExistingSchema,
-            "turn-fenced session backends cannot bootstrap shared schema",
-        ))
-    }
-
-    fn for_scope(&self, scope: &Scope) -> Result<ScopedStorage, StorageError> {
-        self.bind(scope)
-    }
-
-    fn for_scope_fenced(
-        &self,
-        scope: &Scope,
-        fence: &Fence,
-    ) -> Result<ScopedStorage, StorageError> {
-        if fence != &self.fence {
-            return Err(StorageError::unsupported(
-                Capability::Fencing,
-                "a second fence cannot be composed with the admitted thread lease",
-            ));
-        }
-        self.bind(scope)
-    }
-
-    fn for_scope_generation(
-        &self,
-        scope: &Scope,
-        generation: ScopeGeneration,
-    ) -> Result<ScopedStorage, StorageError> {
-        if generation != ScopeGeneration::default() {
-            return Err(StorageError::unsupported(
-                Capability::ScopePurge,
-                "turn-fenced session backends do not admit alternate scope generations",
-            ));
-        }
-        self.bind(scope)
-    }
-
-    fn for_scope_fenced_generation(
-        &self,
-        scope: &Scope,
-        generation: ScopeGeneration,
-        fence: &Fence,
-    ) -> Result<ScopedStorage, StorageError> {
-        if generation != ScopeGeneration::default() || fence != &self.fence {
-            return Err(StorageError::unsupported(
-                Capability::Fencing,
-                "turn-fenced session backends reject alternate fence or scope-generation bindings",
-            ));
-        }
-        self.bind(scope)
     }
 }
 

@@ -5,11 +5,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
-use tinyinference_llm::tool::ToolCall;
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Precondition, Query,
 };
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_llm::tool::ToolCall;
 use tokio::sync::OnceCell;
 
 use super::{SubagentError, SubagentTaskKey};

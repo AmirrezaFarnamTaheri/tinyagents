@@ -1109,21 +1109,44 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         };
         let deferred_tools = definition.deferred_tools.iter().cloned().collect();
         let tool_rules = definition.tool_rules;
+        let mut binding = HostInvocationBinding {
+            host: host.clone(),
+            agent_id: request.agent_id.clone(),
+            model_pin: definition.model.pin(),
+            model_hint: definition.model.hint(),
+            role: definition.role,
+            allowed_tools,
+            wildcard_tools,
+            denied_tools,
+            deferred_tools,
+            tool_rules,
+            inherited_rules: Vec::new(),
+            progress: progress.clone(),
+            runtime: None,
+        };
+        // A hosted child runs in a context that still carries its parent's
+        // binding (`RunContext::child` copies it). Narrow the child to it, so
+        // a child never widens what its parent was allowed: the parent's
+        // denials apply, its allowlist bounds the child's, and its rule
+        // layers stack on the child's. A root run has no parent binding.
+        if let Some(parent) = host_invocation_binding::<State, Ctx>(context)? {
+            binding
+                .denied_tools
+                .extend(parent.denied_tools.iter().cloned());
+            binding.allowed_tools = match (binding.allowed_tools.take(), &parent.allowed_tools) {
+                (Some(child), Some(parent)) => Some(child.intersection(parent).cloned().collect()),
+                (None, Some(parent)) => Some(parent.clone()),
+                (child, None) => child,
+            };
+            binding.inherited_rules = parent
+                .tool_rules
+                .iter()
+                .chain(&parent.inherited_rules)
+                .cloned()
+                .collect();
+        }
         Ok(PreparedAgentTurn {
-            binding: HostInvocationBinding {
-                host: host.clone(),
-                agent_id: request.agent_id.clone(),
-                model_pin: definition.model.pin(),
-                model_hint: definition.model.hint(),
-                role: definition.role,
-                allowed_tools,
-                wildcard_tools,
-                denied_tools,
-                deferred_tools,
-                tool_rules,
-                progress: progress.clone(),
-                runtime: None,
-            },
+            binding,
             thread_id,
             run_id: context.run_id().clone(),
             input_text,
@@ -1148,16 +1171,17 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
     {
         let observer = std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(
             move |run, succeeded, error: Option<String>| {
-                spawn_host_finalizer(
-                    prepared,
-                    run,
-                    succeeded,
-                    error.map(|error| {
-                        let _ = error;
-                        tracing::warn!("[host] agent run failed");
-                        "agent run failed".to_string()
-                    }),
-                );
+                let error = error.map(|error| {
+                    let error = terminal_error_message(&error);
+                    tracing::warn!(
+                        run_id = %prepared.run_id,
+                        agent_id = %prepared.binding.agent_id,
+                        %error,
+                        "[host] agent run failed"
+                    );
+                    error
+                });
+                spawn_host_finalizer(prepared, run, succeeded, error);
             },
         )
             as crate::context::TerminalObserver)));
@@ -1255,6 +1279,20 @@ fn sanitize_hosted_preparation_error(error: TinyAgentsError) -> TinyAgentsError 
         | TinyAgentsError::CallTimeout(_) => error,
         _ => TinyAgentsError::Model("hosted agent invocation failed".to_string()),
     }
+}
+
+/// Longest failure text a terminal log line or [`ProgressEvent::Error`] carries.
+const TERMINAL_ERROR_MAX_CHARS: usize = 500;
+
+/// The failed run's error, credential-scrubbed and bounded, for the warn log
+/// and the progress event. Without it a failed hosted run logged no reason
+/// anywhere (openhuman#7830); scrubbing keeps provider/tool text that echoes
+/// a secret out of both.
+fn terminal_error_message(error: &str) -> String {
+    crate::close::truncate_chars(
+        &tinyinference_core::sanitize::scrub_credentials(error),
+        TERMINAL_ERROR_MAX_CHARS,
+    )
 }
 
 /// Runs [`finish_host_turn`] on a Tokio task, tolerating the case where the
@@ -1478,3 +1516,7 @@ async fn screen_stored<State: Send + Sync>(
 #[cfg(test)]
 #[path = "agent_progress_dispatcher_tests.rs"]
 mod progress_dispatcher_tests;
+
+#[cfg(test)]
+#[path = "agent_terminal_error_tests.rs"]
+mod terminal_error_tests;

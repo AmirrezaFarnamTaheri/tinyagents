@@ -20,6 +20,8 @@ pub struct ToolRulePolicy {
     pub rules: Arc<ToolRuleSet>,
     /// Attributes `when` conditions match against: `channel`, `agent`, ….
     pub context: RuleContext,
+    /// The highest permission level admitted by this run.
+    pub permission_ceiling: Option<tinytools::PermissionLevel>,
 }
 
 impl ToolRulePolicy {
@@ -29,6 +31,7 @@ impl ToolRulePolicy {
         Self {
             rules: Arc::new(rules.into()),
             context: RuleContext::new(),
+            permission_ceiling: None,
         }
     }
 
@@ -39,10 +42,20 @@ impl ToolRulePolicy {
         self
     }
 
+    /// Sets the highest permission level admitted by this run.
+    #[must_use]
+    pub fn with_permission_ceiling(
+        mut self,
+        permission_ceiling: tinytools::PermissionLevel,
+    ) -> Self {
+        self.permission_ceiling = Some(permission_ceiling);
+        self
+    }
+
     /// Whether the policy admits every tool, so the loop can skip it.
     #[must_use]
     pub fn is_permissive(&self) -> bool {
-        self.rules.is_permissive()
+        self.permission_ceiling.is_none() && self.rules.is_permissive()
     }
 }
 
@@ -64,6 +77,7 @@ pub(crate) struct ToolGate {
     deferred: HashSet<String>,
     rules: Option<Arc<ToolRuleSet>>,
     context: RuleContext,
+    permission_ceiling: Option<tinytools::PermissionLevel>,
 }
 
 impl ToolGate {
@@ -89,12 +103,36 @@ impl ToolGate {
             deferred: HashSet::new(),
             rules,
             context: policy.context.clone(),
+            permission_ceiling: policy.permission_ceiling,
         }
     }
 
-    /// Adds exact exclusions without freezing a dynamic wildcard catalogue.
+    /// Adds definition exclusions without freezing a dynamic wildcard
+    /// catalogue. Each is a [`tinytools::glob_matches`] pattern, as a Named
+    /// scope's are; a plain name matches itself.
     pub(crate) fn with_denied_names(mut self, names: impl IntoIterator<Item = String>) -> Self {
         self.denied.extend(names);
+        self
+    }
+
+    fn is_denied(&self, name: &str) -> bool {
+        self.denied
+            .iter()
+            .any(|pattern| tinytools::glob_matches(pattern, name))
+    }
+
+    /// Stacks a hosted parent's rule layers on this gate's, so a child's
+    /// rules can only narrow what its parent was allowed. Permissive layers
+    /// are dropped, as in [`Self::new`].
+    pub(crate) fn with_inherited_rules<'a>(
+        mut self,
+        layers: impl IntoIterator<Item = &'a ToolRules>,
+    ) -> Self {
+        for layer in layers.into_iter().filter(|layer| !layer.is_permissive()) {
+            let mut merged = self.rules.as_deref().cloned().unwrap_or_default();
+            merged.push(layer.clone());
+            self.rules = Some(Arc::new(merged));
+        }
         self
     }
 
@@ -114,7 +152,7 @@ impl ToolGate {
 
     /// Whether the exact allowlist admits `name`. Rules are not consulted.
     pub(crate) fn allows_name(&self, name: &str) -> bool {
-        !self.denied.contains(name)
+        !self.is_denied(name)
             && self
                 .allowed
                 .as_ref()
@@ -163,7 +201,7 @@ impl ToolGate {
     /// (which names registered tools) does not apply; the rules do, so a
     /// host can withhold discovery itself.
     pub(crate) fn admits_intrinsic(&self, name: &str, surface: Surface) -> CallGate {
-        if self.denied.contains(name) {
+        if self.is_denied(name) {
             return CallGate::Refuse(format!("tool '{name}' is denied by the definition"));
         }
         let Some(rules) = &self.rules else {
@@ -187,6 +225,22 @@ impl ToolGate {
     /// Decides a concrete call. The allowlist is checked by the caller before
     /// lookup; this applies the rules, including any indirect target.
     pub(crate) async fn admit_call_async(&self, tool: &dyn Tool, args: &Value) -> CallGate {
+        if let Some(ceiling) = self.permission_ceiling {
+            let required = tool.permission_level_with_args(args);
+            if required > ceiling {
+                tracing::debug!(
+                    target: "tinyagents::tool_rules",
+                    tool = %tool.name(),
+                    permission = %required,
+                    ceiling = %ceiling,
+                    "[tool_rules] call refused by permission ceiling"
+                );
+                return CallGate::Refuse(format!(
+                    "tool '{}' requires permission above the session limit ({ceiling})",
+                    tool.name()
+                ));
+            }
+        }
         let Some(rules) = &self.rules else {
             return CallGate::Admit(ApprovalDirective::Default);
         };

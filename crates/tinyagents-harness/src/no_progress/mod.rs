@@ -397,13 +397,7 @@ fn varied_nudge(step: usize, tool: &str, count: usize, err: &str) -> String {
 /// retain the deterministic leading detail the model/user needs). Char-safe so a
 /// multibyte boundary is never split.
 fn truncate_for_halt(text: &str) -> String {
-    const MAX: usize = 600;
-    if text.chars().count() <= MAX {
-        text.to_string()
-    } else {
-        let head: String = text.chars().take(MAX).collect();
-        format!("{head}…")
-    }
+    crate::turn_stop::truncate_with_suffix(text, 600, "…")
 }
 
 #[cfg(test)]
