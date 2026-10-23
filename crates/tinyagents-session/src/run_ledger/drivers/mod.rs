@@ -11,6 +11,7 @@ mod effects;
 mod events;
 mod history;
 mod history_retention;
+mod inbox;
 #[cfg(feature = "legacy-import")]
 mod import;
 #[cfg(feature = "legacy-import")]
