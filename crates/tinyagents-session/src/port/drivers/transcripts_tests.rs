@@ -144,6 +144,7 @@ fn a_reserved_generation_rejects_entry_insert_after_lease_takeover() {
     )) as Arc<dyn DocumentStore>;
     let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let callback_stem = Arc::new(std::sync::Mutex::new(None::<String>));
+    let opener_scope = scope.clone();
     let opener: ConditionedEntryOpener = {
         let armed = Arc::clone(&armed);
         let base = Arc::clone(&base);
@@ -159,7 +160,7 @@ fn a_reserved_generation_rejects_entry_insert_after_lease_takeover() {
             }
             Ok(Arc::new(SqliteDocuments::conditioned(
                 connection.clone(),
-                scope.clone(),
+                opener_scope.clone(),
                 condition.clone(),
             )) as Arc<dyn DocumentStore>)
         })
