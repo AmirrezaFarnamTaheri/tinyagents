@@ -39,8 +39,8 @@ use tinyagents_harness::store::SchemaAdmission;
 use tinyagents_storage_kit::primitives::{Lease, Leases, Repo};
 use tinyagents_storage_kit::{Blocking, DocumentStoreExt};
 use tinyagents_storage_kit::{
-    CollectionSpec, ErrorKind, Filter, ID_FIELD, IndexSpec, Key, Query, Sort, StorageError,
-    Scope, WriteCondition, WriteOptions,
+    CollectionSpec, ErrorKind, Filter, ID_FIELD, IndexSpec, Key, Query, Scope, Sort, StorageError,
+    WriteCondition, WriteOptions,
 };
 use tinystoragedrivers_api::DocumentStore;
 use tokio::sync::{Mutex, OnceCell};
@@ -311,9 +311,8 @@ struct HistoryInner {
     replay: Mutex<Replay>,
 }
 
-pub(crate) type ConditionedEntryOpener = Arc<
-    dyn Fn(&WriteCondition) -> Result<Arc<dyn DocumentStore>, StorageError> + Send + Sync,
->;
+pub(crate) type ConditionedEntryOpener =
+    Arc<dyn Fn(&WriteCondition) -> Result<Arc<dyn DocumentStore>, StorageError> + Send + Sync>;
 
 impl std::fmt::Debug for DriverTranscriptHistory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -458,7 +457,10 @@ impl HistoryInner {
                     )
                 })?;
                 let scope = self.scope.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("session generation {} has no bound storage scope", self.stem)
+                    anyhow::anyhow!(
+                        "session generation {} has no bound storage scope",
+                        self.stem
+                    )
                 })?;
                 let condition = lease.write_condition(scope.clone())?;
                 let docs = opener(&condition)?;
@@ -833,14 +835,7 @@ impl DriverTranscriptLocator {
         label: impl Into<String>,
         schema_admission: SchemaAdmission,
     ) -> Self {
-        Self::with_conditioned_entry_opener(
-            docs,
-            bridge,
-            label,
-            schema_admission,
-            None,
-            None,
-        )
+        Self::with_conditioned_entry_opener(docs, bridge, label, schema_admission, None, None)
     }
 
     /// Transcripts whose first entry in a reserved generation is opened with

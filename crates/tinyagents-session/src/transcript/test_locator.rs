@@ -32,8 +32,8 @@ pub(crate) fn conditioned_driver_locator() -> crate::port::DriverTranscriptLocat
         .expect("open transcript fixture database");
     let scope = Scope::new("transcript-tests").expect("valid test scope");
     let opener_scope = scope.clone();
-    let docs = Arc::new(SqliteDocuments::new(connection.clone(), scope.clone()))
-        as Arc<dyn DocumentStore>;
+    let docs =
+        Arc::new(SqliteDocuments::new(connection.clone(), scope.clone())) as Arc<dyn DocumentStore>;
     let opener = Arc::new(move |condition: &WriteCondition| {
         let _keep_directory = &directory;
         Ok(Arc::new(SqliteDocuments::conditioned(

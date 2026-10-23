@@ -57,9 +57,10 @@ fn conditioned_factories() -> (AgentStorageFactory, ConditionedAgentStorageFacto
         let scopes = scopes.clone();
         Arc::new(move |agent_id: &str| {
             let _keep_directory = &directory;
-            let scope = scopes.get(agent_id).cloned().ok_or_else(|| {
-                StorageError::invalid_input("test agent scope is not mapped")
-            })?;
+            let scope = scopes
+                .get(agent_id)
+                .cloned()
+                .ok_or_else(|| StorageError::invalid_input("test agent scope is not mapped"))?;
             let native = ScopedStorage::new(memory.for_scope(&scope)?, scope.clone());
             let docs = Arc::new(SqliteDocuments::new(connection.clone(), scope.clone()))
                 as Arc<dyn DocumentStore>;
@@ -72,9 +73,10 @@ fn conditioned_factories() -> (AgentStorageFactory, ConditionedAgentStorageFacto
         let directory = Arc::clone(&directory);
         Arc::new(move |agent_id: &str, condition: &WriteCondition| {
             let _keep_directory = &directory;
-            let scope = scopes.get(agent_id).cloned().ok_or_else(|| {
-                StorageError::invalid_input("test agent scope is not mapped")
-            })?;
+            let scope = scopes
+                .get(agent_id)
+                .cloned()
+                .ok_or_else(|| StorageError::invalid_input("test agent scope is not mapped"))?;
             let native = ScopedStorage::new(memory.for_scope(&scope)?, scope.clone());
             let docs = Arc::new(SqliteDocuments::conditioned(
                 connection.clone(),

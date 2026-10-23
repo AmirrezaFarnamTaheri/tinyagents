@@ -86,10 +86,8 @@ pub type ConditionedAgentStorageFactory = Arc<
     dyn Fn(
             &str,
             &tinyagents_storage_kit::WriteCondition,
-        ) -> Result<
-            tinyagents_storage_kit::ScopedStorage,
-            tinystoragedrivers_types::StorageError,
-        >
+        )
+            -> Result<tinyagents_storage_kit::ScopedStorage, tinystoragedrivers_types::StorageError>
         + Send
         + Sync,
 >;

@@ -40,8 +40,8 @@ fn docs() -> TestDocs {
     let directory = tempfile::tempdir().unwrap();
     let connection = SqliteConnection::open(directory.path().join("transcripts.db")).unwrap();
     let scope = Scope::new("local").unwrap();
-    let docs = Arc::new(SqliteDocuments::new(connection.clone(), scope.clone()))
-        as Arc<dyn DocumentStore>;
+    let docs =
+        Arc::new(SqliteDocuments::new(connection.clone(), scope.clone())) as Arc<dyn DocumentStore>;
     TestDocs {
         docs,
         connection,
@@ -178,10 +178,8 @@ fn a_reserved_generation_rejects_entry_insert_after_lease_takeover() {
     let directory = tempfile::tempdir().unwrap();
     let connection = SqliteConnection::open(directory.path().join("transcripts.db")).unwrap();
     let scope = Scope::new("local").unwrap();
-    let base = Arc::new(SqliteDocuments::new(
-        connection.clone(),
-        scope.clone(),
-    )) as Arc<dyn DocumentStore>;
+    let base =
+        Arc::new(SqliteDocuments::new(connection.clone(), scope.clone())) as Arc<dyn DocumentStore>;
     let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (conditioned_open_tx, conditioned_open_rx) = std::sync::mpsc::channel();
     let (takeover_done_tx, takeover_done_rx) = std::sync::mpsc::channel();
@@ -210,7 +208,9 @@ fn a_reserved_generation_rejects_entry_insert_after_lease_takeover() {
         opener,
     );
     let parent = SessionRef::scoped("reservation-race", "planner");
-    let (successor, history) = locator.begin_generation(&parent, meta("reservation-race")).unwrap();
+    let (successor, history) = locator
+        .begin_generation(&parent, meta("reservation-race"))
+        .unwrap();
     let stem = session_stem(&successor);
     armed.store(true, std::sync::atomic::Ordering::SeqCst);
 
@@ -227,8 +227,15 @@ fn a_reserved_generation_rejects_entry_insert_after_lease_takeover() {
         result.is_err(),
         "the old reservation holder must not insert after another holder takes over"
     );
-    assert_eq!(entries(&base, &stem).len(), 0, "the stale insert must leave no entry");
-    assert!(reservation_epoch(&base, &stem) > 1, "the test took over the lease");
+    assert_eq!(
+        entries(&base, &stem).len(),
+        0,
+        "the stale insert must leave no entry"
+    );
+    assert!(
+        reservation_epoch(&base, &stem) > 1,
+        "the test took over the lease"
+    );
 }
 
 #[test]
