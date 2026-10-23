@@ -462,7 +462,7 @@ impl HistoryInner {
                 })?;
                 let condition = lease.write_condition(scope.clone())?;
                 let docs = opener(&condition)?;
-                Repo::new(docs, ENTRIES)?
+                Repo::new(&docs, ENTRIES)?
                     .with_options(WriteOptions::new().schema(SCHEMA_VERSION))
                     .insert(&entry_id(&self.stem, seq)?, &doc)
                     .await
