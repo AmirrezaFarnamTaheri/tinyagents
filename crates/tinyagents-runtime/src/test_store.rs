@@ -12,13 +12,55 @@ use tinyagents_session::transcript::{
     TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn,
 };
 use tinyagents_storage_kit::{Scope, ScopedStorage};
-use tinystoragedrivers_api::StorageBackend;
+use tinystoragedrivers_api::{Storage, StorageBackend};
 use tinystoragedrivers_testkit::MemoryBackend;
-use tinystoragedrivers_types::StorageError;
+use tinystoragedrivers_types::{Capabilities, Result, StorageError};
 
 /// A driver-backed session provider bound to `scope`, for identity-admission tests.
 pub(crate) fn driver_session_stores(scope: Scope) -> Arc<DriverSessionStores> {
-    driver_session_stores_over(Arc::new(MemoryBackend::new()), scope)
+    driver_session_stores_over(sqlite_backend(), scope)
+}
+
+/// A SQLite backend whose temporary directory stays alive as long as the
+/// returned backend. Driver session tests exercise lease-conditioned generation
+/// writes, which the testkit's simpler in-memory backend does not implement.
+fn sqlite_backend() -> Arc<dyn StorageBackend> {
+    let directory = tempfile::tempdir().expect("SQLite session test directory");
+    let config = tinystoragedrivers::StorageConfig::parse(&format!(
+        "sqlite:{}",
+        directory.path().join("storage").display()
+    ))
+    .expect("SQLite session test URL");
+    let backend = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("SQLite session test runtime")
+            .block_on(tinystoragedrivers::open(&config))
+            .expect("SQLite session test backend")
+    })
+    .join()
+    .expect("SQLite session test thread");
+    Arc::new(TemporarySqliteBackend {
+        _directory: directory,
+        backend,
+    })
+}
+
+#[derive(Debug)]
+struct TemporarySqliteBackend {
+    _directory: tempfile::TempDir,
+    backend: Arc<dyn StorageBackend>,
+}
+
+impl StorageBackend for TemporarySqliteBackend {
+    fn capabilities(&self) -> Capabilities {
+        self.backend.capabilities()
+    }
+
+    fn for_scope(&self, scope: &Scope) -> Result<Storage> {
+        self.backend.for_scope(scope)
+    }
 }
 
 /// A driver-backed session provider bound to `scope` over a shared backend.
@@ -195,19 +237,41 @@ impl TranscriptLocator for Destination {
     }
 }
 
-/// An empty driver-backed transcript store (the production store, over memory).
+/// An empty driver-backed transcript store (the production store, over SQLite).
 pub(crate) fn driver() -> Arc<dyn TranscriptLocator> {
-    let backend = Arc::new(MemoryBackend::new());
-    let factory: AgentStorageFactory = Arc::new(move |agent_id| {
-        if agent_id != "runtime-tests" {
-            return Err(StorageError::invalid_input("unknown test agent"));
-        }
-        let scope = Scope::new("runtime-tests")?;
-        let storage = backend.for_scope(&scope)?;
-        Ok(ScopedStorage::new(storage, scope))
-    });
-    DriverSessionStores::new(factory)
-        .expect("driver session stores over memory")
-        .for_agent("runtime-tests")
-        .transcripts
+    let scope = Scope::new("runtime-tests").expect("runtime test scope");
+    let backend = sqlite_backend();
+    let stores = driver_session_stores_over(Arc::clone(&backend), scope);
+    Arc::new(OwnedTestLocator {
+        locator: stores.for_agent("runtime-tests").transcripts,
+        _backend: backend,
+    })
+}
+
+/// A transcript handle plus its backend, which retains the fixture directory.
+struct OwnedTestLocator {
+    locator: Arc<dyn TranscriptLocator>,
+    _backend: Arc<dyn StorageBackend>,
+}
+
+impl TranscriptLocator for OwnedTestLocator {
+    fn destination_key(&self) -> Option<String> {
+        self.locator.destination_key()
+    }
+
+    fn latest_for_agent(&self, agent_name: &str) -> Option<Arc<dyn TranscriptRead>> {
+        self.locator.latest_for_agent(agent_name)
+    }
+
+    fn root_for_thread(&self, thread_id: &str) -> Option<Arc<dyn TranscriptRead>> {
+        self.locator.root_for_thread(thread_id)
+    }
+
+    fn open_stem(
+        &self,
+        stem: &str,
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<Arc<dyn TranscriptHistory>> {
+        self.locator.open_stem(stem, seed)
+    }
 }
