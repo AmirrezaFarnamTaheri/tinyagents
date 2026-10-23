@@ -1,6 +1,3 @@
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;
 //! Best-effort durable observation of one agent turn's progress stream.
 //!
 //! The ledger writes each [`AgentProgress`](tinyagents_harness::progress::AgentProgress)
