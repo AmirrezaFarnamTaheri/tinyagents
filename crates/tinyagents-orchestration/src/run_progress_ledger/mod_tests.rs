@@ -128,7 +128,10 @@ async fn failure_breaker_completion_marks_the_run_failed() {
         .await
         .expect("read events")
         .events;
-    assert_eq!(events.last().expect("terminal event").event_type, "turn_completed");
+    assert_eq!(
+        events.last().expect("terminal event").event_type,
+        "turn_completed"
+    );
 }
 
 #[tokio::test]

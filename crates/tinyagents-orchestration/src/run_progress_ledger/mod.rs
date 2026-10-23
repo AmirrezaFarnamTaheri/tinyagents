@@ -62,7 +62,8 @@ impl RunProgressLedger {
                 payload,
             };
             if let Some(status) = completed {
-                self.transition_if_open(store.as_ref(), status, None, event).await;
+                self.transition_if_open(store.as_ref(), status, None, event)
+                    .await;
             } else if let Err(error) = store.append_run_event(event).await {
                 tracing::warn!(run_id = %self.identity.request_id, %error, "could not append progress ledger event");
             }
