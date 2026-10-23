@@ -10,6 +10,16 @@ use tinystoragedrivers_api::StorageBackend;
 
 use super::*;
 
+#[test]
+fn interactive_turn_kind_uses_a_stable_storage_name() {
+    assert_eq!(AgentRunKind::InteractiveTurn.as_str(), "interactive_turn");
+    assert_eq!(AgentRunKind::parse("interactive_turn"), AgentRunKind::InteractiveTurn);
+    assert_eq!(
+        serde_json::to_string(&AgentRunKind::InteractiveTurn).expect("serialize kind"),
+        "\"interactive_turn\""
+    );
+}
+
 fn ledger_on(backend: &dyn StorageBackend, scope: &str) -> Arc<dyn RunLedgerStore> {
     let scope = Scope::new(scope).unwrap();
     Arc::new(DriverRunLedger::new(ScopedStorage::new(

@@ -49,7 +49,7 @@ async fn records_progress_with_stable_run_identity_and_terminal_status() {
         .await
         .expect("read run")
         .expect("run created");
-    assert_eq!(run.kind, AgentRunKind::BackgroundAgent);
+    assert_eq!(run.kind, AgentRunKind::InteractiveTurn);
     assert_eq!(run.parent_thread_id.as_deref(), Some("thread-1"));
     assert_eq!(run.agent_id.as_deref(), Some("orchestrator"));
     assert_eq!(
