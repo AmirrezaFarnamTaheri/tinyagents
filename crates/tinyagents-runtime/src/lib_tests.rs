@@ -3337,7 +3337,6 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
         ],
         &legacy,
     );
-
     // The driver extends whatever it was handed by exactly one message.
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
         vec![
@@ -3536,7 +3535,7 @@ async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_ge
 /// regains the turns newest-wins lookup had stranded.
 #[tokio::test]
 async fn a_first_session_resume_adopts_a_pre_identity_conversation() {
-    let store = crate::test_store::in_memory();
+    let store = crate::test_store::driver();
     let mut legacy = meta();
     legacy.thread_id = Some("thread-9fa08".into());
     legacy.created = "2026-09-22T07:30:47Z".into();
@@ -3546,7 +3545,6 @@ async fn a_first_session_resume_adopts_a_pre_identity_conversation() {
         &[TranscriptMessage::new("user", "plan a trip to kashmir")],
         &legacy,
     );
-
     let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
         .codec(Arc::new(Codec::default()))
         .session(

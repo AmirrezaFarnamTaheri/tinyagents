@@ -2139,6 +2139,8 @@ dependencies = [
  "tinyinference-llm",
  "tinystoragedrivers",
  "tinystoragedrivers-api",
+ "tinystoragedrivers-connect",
+ "tinystoragedrivers-document",
  "tinystoragedrivers-testkit",
  "tinystoragedrivers-types",
  "tinytools",

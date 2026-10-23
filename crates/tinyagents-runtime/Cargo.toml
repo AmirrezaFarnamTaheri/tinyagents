@@ -30,6 +30,8 @@ tinyagents-storage-kit = { workspace = true }
 tinyagents-session = { path = "../tinyagents-session", version = "3.0.0", features = ["testkit"] }
 tinystoragedrivers-api = { workspace = true }
 tinystoragedrivers = { workspace = true }
+tinystoragedrivers-connect = { workspace = true }
+tinystoragedrivers-document = { workspace = true }
 tinystoragedrivers-testkit = { workspace = true }
 tinystoragedrivers-types = { workspace = true }
 serde_json = { workspace = true }

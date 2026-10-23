@@ -6,13 +6,16 @@
 
 use std::sync::Arc;
 
-use tinyagents_session::port::{AgentStorageFactory, DriverSessionStores, SessionStoreProvider};
-use tinyagents_session::transcript::{
-    DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscripts, TranscriptHistory,
-    TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn,
+use tinyagents_session::port::{
+    AgentStorageFactory, ConditionedAgentStorageFactory, DriverSessionStores, SessionStoreProvider,
 };
-use tinyagents_storage_kit::{Scope, ScopedStorage};
-use tinystoragedrivers_api::{Storage, StorageBackend};
+use tinyagents_session::transcript::{
+    DisplaySessionTranscript, SessionAdoption, SessionRef, SessionTranscript, ThreadTranscripts,
+    TranscriptHistory, TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead,
+    TranscriptTurn,
+};
+use tinyagents_storage_kit::{Scope, ScopedStorage, WriteCondition};
+use tinystoragedrivers_api::{DocumentStore, Storage, StorageBackend, StreamStore};
 use tinystoragedrivers_types::{Capabilities, Result};
 
 /// A driver-backed session provider bound to `scope`, for identity-admission tests.
@@ -239,12 +242,75 @@ impl TranscriptLocator for Destination {
 /// An empty driver-backed transcript store (the production store, over SQLite).
 pub(crate) fn driver() -> Arc<dyn TranscriptLocator> {
     let scope = Scope::new("runtime-tests").expect("runtime test scope");
-    let backend = sqlite_backend();
-    let stores = driver_session_stores_over(Arc::clone(&backend), scope);
+    let stores = conditioned_driver_session_stores(scope.clone());
     Arc::new(OwnedTestLocator {
         locator: stores.for_agent("runtime-tests").transcripts,
-        _backend: backend,
+        _stores: stores,
     })
+}
+
+fn conditioned_driver_session_stores(scope: Scope) -> Arc<DriverSessionStores> {
+    use tinystoragedrivers_connect::sqlite::SqliteConnection;
+    use tinystoragedrivers_document::sqlite::{SqliteDocuments, SqliteStreams};
+
+    fn storage(
+        path: &std::path::Path,
+        scope: &Scope,
+        memory: &tinystoragedrivers_testkit::MemoryBackend,
+        condition: Option<&WriteCondition>,
+    ) -> Result<ScopedStorage> {
+        let connection = SqliteConnection::open(path)
+            .map_err(|error| tinystoragedrivers_types::StorageError::backend(error.to_string()))?;
+        let documents = match condition {
+            Some(condition) => Arc::new(SqliteDocuments::conditioned(
+                connection.clone(),
+                scope.clone(),
+                condition.clone(),
+            )) as Arc<dyn DocumentStore>,
+            None => Arc::new(SqliteDocuments::new(connection.clone(), scope.clone()))
+                as Arc<dyn DocumentStore>,
+        };
+        let streams =
+            Arc::new(SqliteStreams::new(connection, scope.clone())) as Arc<dyn StreamStore>;
+        let ports = memory
+            .for_scope(scope)
+            .map_err(|error| tinystoragedrivers_types::StorageError::backend(error.to_string()))?;
+        Ok(ScopedStorage::new(
+            Storage::new(
+                documents,
+                streams,
+                ports.kv().clone(),
+                ports.blobs().clone(),
+                ports.queues().clone(),
+                ports.secrets().clone(),
+            ),
+            scope.clone(),
+        ))
+    }
+
+    let directory = Arc::new(tempfile::tempdir().expect("SQLite session test directory"));
+    let path = directory.path().join("session.sqlite");
+    let plain_path = path.clone();
+    let memory = Arc::new(tinystoragedrivers_testkit::MemoryBackend::new());
+    let plain_scope = scope.clone();
+    let plain_dir = Arc::clone(&directory);
+    let plain_memory = Arc::clone(&memory);
+    let factory: AgentStorageFactory = Arc::new(move |_| {
+        let _keep_directory = &plain_dir;
+        storage(&plain_path, &plain_scope, &plain_memory, None)
+    });
+    let condition_scope = scope;
+    let condition_dir = Arc::clone(&directory);
+    let condition_memory = memory;
+    let conditioned: ConditionedAgentStorageFactory = Arc::new(move |_, condition| {
+        let _keep_directory = &condition_dir;
+        storage(&path, &condition_scope, &condition_memory, Some(condition))
+    });
+    Arc::new(
+        DriverSessionStores::new(factory)
+            .expect("conditioned SQLite test stores")
+            .with_conditioned_storage_factory(conditioned),
+    )
 }
 
 /// An empty in-memory session locator for behavior tests that do not certify
@@ -258,7 +324,7 @@ pub(crate) fn in_memory() -> Arc<dyn TranscriptLocator> {
 /// A transcript handle plus its backend, which retains the fixture directory.
 struct OwnedTestLocator {
     locator: Arc<dyn TranscriptLocator>,
-    _backend: Arc<dyn StorageBackend>,
+    _stores: Arc<DriverSessionStores>,
 }
 
 impl TranscriptLocator for OwnedTestLocator {
@@ -280,5 +346,14 @@ impl TranscriptLocator for OwnedTestLocator {
         seed: TranscriptMeta,
     ) -> anyhow::Result<Arc<dyn TranscriptHistory>> {
         self.locator.open_stem(stem, seed)
+    }
+
+    fn adopt_legacy(
+        &self,
+        session: &SessionRef,
+        thread_id: &str,
+        seed: &TranscriptMeta,
+    ) -> anyhow::Result<Option<SessionAdoption>> {
+        self.locator.adopt_legacy(session, thread_id, seed)
     }
 }
