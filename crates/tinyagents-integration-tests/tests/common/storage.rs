@@ -80,10 +80,10 @@ pub fn conditioned_sqlite_factories(
         let directory = directory.clone();
         let name = name.clone();
         let scope = scope.clone();
-        Arc::new(move |_| Ok(sqlite_storage(&directory, &name, &scope, None)))
+        Arc::new(move |_: &str| Ok(sqlite_storage(&directory, &name, &scope, None)))
             as AgentStorageFactory
     };
-    let conditioned = Arc::new(move |_, condition: &WriteCondition| {
+    let conditioned = Arc::new(move |_: &str, condition: &WriteCondition| {
         Ok(sqlite_storage(
             &directory,
             &name,
