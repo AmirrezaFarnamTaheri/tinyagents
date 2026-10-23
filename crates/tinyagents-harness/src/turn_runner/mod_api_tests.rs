@@ -1,5 +1,6 @@
 use super::*;
 use crate::progress::AgentProgress;
+use crate::run_queue::QueuedMessage;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Payload {
@@ -38,6 +39,43 @@ fn requeued_payload_can_inherit_running_turn_metadata() {
     assert_eq!(queued.thread, "thread-1");
     assert_eq!(queued.queued_at_ms, 2);
     assert_eq!(queued.inherited.as_deref(), Some("client-context"));
+}
+
+#[test]
+fn turn_request_is_a_queue_message_with_a_rebuilt_host_payload() {
+    let request = TurnRequest {
+        scope: ScopeKey {
+            agent_id: "agent-1".into(),
+            profile_id: Some("profile-1".into()),
+        },
+        thread_id: "thread-1".into(),
+        request_id: "request-1".into(),
+        text: "follow up".into(),
+        payload: Payload {
+            thread: "thread-1".into(),
+            inherited: Some("client-context".into()),
+            queued_at_ms: 1,
+        },
+        host_authored: false,
+        disposition: QueueDisposition::Steer,
+        deadline: None,
+        idle_timeout: None,
+    };
+
+    let recovered = <TurnRequest<Payload> as QueuedMessage>::requeued(
+        "request-2".into(),
+        request.text().into(),
+        "thread-1",
+        2,
+    );
+
+    assert_eq!(request.id(), "request-1");
+    assert_eq!(recovered.request_id, "request-2");
+    assert_eq!(recovered.text, "follow up");
+    assert_eq!(recovered.thread_id, "thread-1");
+    assert_eq!(recovered.payload.queued_at_ms, 2);
+    assert_eq!(recovered.payload.inherited, None);
+    assert_eq!(recovered.disposition, QueueDisposition::Steer);
 }
 
 #[test]

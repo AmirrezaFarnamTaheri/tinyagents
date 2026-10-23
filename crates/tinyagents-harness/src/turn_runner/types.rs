@@ -12,7 +12,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::time::Instant;
 
 use crate::progress::AgentProgress;
-use crate::run_queue::{QueueLane, QueueMode, QueueStatus, RunQueue};
+use crate::run_queue::{QueueLane, QueueMode, QueueStatus, QueuedMessage, RunQueue};
 
 /// Identity that isolates session locks and active turns between agents.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -35,6 +35,36 @@ pub struct TurnRequest<P = serde_json::Value> {
     pub disposition: QueueDisposition,
     pub deadline: Option<Duration>,
     pub idle_timeout: Option<Duration>,
+}
+
+impl<P> QueuedMessage for TurnRequest<P>
+where
+    P: RequeuePayload + Send + 'static,
+{
+    fn id(&self) -> &str {
+        &self.request_id
+    }
+
+    fn text(&self) -> &str {
+        &self.text
+    }
+
+    fn requeued(id: String, text: String, thread_label: &str, queued_at_ms: u64) -> Self {
+        Self {
+            scope: ScopeKey {
+                agent_id: String::new(),
+                profile_id: None,
+            },
+            thread_id: thread_label.to_owned(),
+            request_id: id,
+            text,
+            payload: P::requeued(thread_label, queued_at_ms),
+            host_authored: false,
+            disposition: QueueDisposition::Steer,
+            deadline: None,
+            idle_timeout: None,
+        }
+    }
 }
 
 /// Host-owned identity and fingerprint for the checked-out durable session.
