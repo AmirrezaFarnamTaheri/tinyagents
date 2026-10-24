@@ -2410,6 +2410,7 @@ async fn cancellation_during_grounded_close_prevents_persisting_completion() {
             idle_timeout: std::time::Duration::from_secs(5),
             deadline: None,
             close_timeout: std::time::Duration::from_secs(60),
+            ..TurnRunnerConfig::default()
         },
     ));
     let mut turn = request(QueueDisposition::Interrupt, false);
