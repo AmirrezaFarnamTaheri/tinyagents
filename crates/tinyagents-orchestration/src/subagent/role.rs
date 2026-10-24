@@ -3,87 +3,12 @@
 //!
 //! A [`SubagentRole::Leaf`] child never receives the delegation surface this
 //! crate registers (the job and message tools, plus whichever
-//! [`SubAgentTool`](super::SubAgentTool) names the host lists), and
+//! spawn tools the host lists), and
 //! [`restrict_tools`] guarantees a child's declarations are a subset of the
 //! set it inherits. [`subagent_framing`] is an optional, neutral system
 //! preamble a host may prepend; nothing applies it by default.
 
 use tinyagents_harness::tool::ToolSnapshot;
-
-/// Fleet-control tools whose visibility shapes orchestration prompts and
-/// decisions. The names are stable tool identifiers supplied by the host.
-pub const FLEET_TOOLS: &[&str] = &[
-    "steer_subagent",
-    "wait_subagent",
-    "wait",
-    "wait_loop",
-    "close_subagent",
-    "continue_subagent",
-    "list_subagents",
-];
-
-/// The fleet-control subset visible to one parent agent.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FleetToolSet {
-    available: Vec<&'static str>,
-}
-
-impl FleetToolSet {
-    /// Treats an unavailable parent definition as having the full fleet
-    /// vocabulary, allowing host prompts to retain their prior fallback.
-    pub fn all() -> Self {
-        Self {
-            available: FLEET_TOOLS.to_vec(),
-        }
-    }
-
-    /// Resolves fleet visibility from a definition's tool scope and denylist.
-    /// A trailing `*` denies every fleet name with that prefix.
-    pub fn from_scope(scope: &tinyagents_definition::ToolScope, disallowed: &[String]) -> Self {
-        let denied = |name: &str| {
-            disallowed
-                .iter()
-                .any(|entry| match entry.strip_suffix('*') {
-                    Some(prefix) => name.starts_with(prefix),
-                    None => entry == name,
-                })
-        };
-        let available = FLEET_TOOLS
-            .iter()
-            .copied()
-            .filter(|name| match scope {
-                tinyagents_definition::ToolScope::Wildcard => true,
-                tinyagents_definition::ToolScope::Named(names) => {
-                    names.iter().any(|candidate| candidate == name)
-                }
-            })
-            .filter(|name| !denied(name))
-            .collect();
-        Self { available }
-    }
-
-    /// Resolves fleet visibility from the effective, already-filtered tool
-    /// names for the current turn.
-    pub fn from_visible_tool_names(names: &std::collections::HashSet<String>) -> Self {
-        Self {
-            available: FLEET_TOOLS
-                .iter()
-                .copied()
-                .filter(|name| names.contains(*name))
-                .collect(),
-        }
-    }
-
-    /// Whether the parent can call `tool`.
-    pub fn has(&self, tool: &str) -> bool {
-        self.available.contains(&tool)
-    }
-
-    /// Whether the parent can block on or poll a worker.
-    pub fn can_wait(&self) -> bool {
-        self.has("wait_subagent")
-    }
-}
 
 /// Name of the job query tool `register_subagent_job_tools` from the
 /// feature-gated `tinyagents-harness-tools` crate registers.
@@ -126,7 +51,7 @@ impl From<tinyagents_definition::AgentTier> for SubagentRole {
 }
 
 /// Whether `name` is part of the delegation surface: this crate's fixed tools
-/// or one of the host's [`SubAgentTool`](super::SubAgentTool) names.
+/// or one of the host's registered spawn-tool names.
 pub fn is_delegation_tool(name: &str, host_delegation_tools: &[String]) -> bool {
     name == SUBAGENT_JOBS_TOOL
         || name == SUBAGENT_MESSAGE_TOOL

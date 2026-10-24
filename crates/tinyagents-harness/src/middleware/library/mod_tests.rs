@@ -1738,7 +1738,9 @@ async fn dynamic_prompt_skips_when_none() {
 #[tokio::test]
 async fn redaction_masks_response_and_tool_text() {
     let (mut ctx, _recorder) = ctx_with_recorder();
-    let redaction = Arc::new(RedactionMiddleware::new(["sk-secret", "hunter2"]));
+    // `sk` is a prefix of `sk-secret`: the longer secret must win, or its
+    // tail (`-secret`) would leak.
+    let redaction = Arc::new(RedactionMiddleware::new(["sk", "sk-secret", "hunter2"]));
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
     stack.push(redaction.clone());
 
@@ -2054,6 +2056,24 @@ async fn plan_mode_allowlist_keeps_specific_tools_available() {
         .run_before_tool(&mut ctx, &(), &mut call)
         .await
         .expect("allowlisted tool stays executable in plan mode");
+}
+
+#[test]
+fn common_plan_mode_allowlist_covers_review_exit_and_host_planning_tools() {
+    let names = plan_mode_allowlist();
+    for required in [
+        "plan_exit",
+        "request_plan_review",
+        "todo",
+        "goal_get",
+        "goal_set",
+        "goal_complete",
+        "goal_pause",
+        "goal_resume",
+        "goal_clear",
+    ] {
+        assert!(names.contains(&required), "missing {required}");
+    }
 }
 
 #[tokio::test]

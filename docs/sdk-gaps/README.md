@@ -17,11 +17,11 @@ implementation candidates, with tests last once API and storage surfaces settle.
 
 ## Executive Summary
 
-TinyAgents already has strong primitives for harness runs, graph execution,
-middleware, event streams, model profiles, usage/cost accounting, checkpointers,
-and sub-agent orchestration. The biggest remaining gaps are durable
-orchestration stores, richer streaming events, graph fanout ergonomics, and
-SDK-owned adapters for the lifecycle controls OpenHuman implements around it.
+TinyAgents has strong primitives for harness runs, middleware, event streams,
+model profiles, usage/cost accounting, and sub-agent orchestration. The graph
+runtime, graph checkpointers, and graph fanout APIs were removed in TinyAgents
+#61. Remaining gaps include durable orchestration stores, richer streaming
+events, and SDK-owned adapters for lifecycle controls OpenHuman implements.
 
 OpenHuman can migrate more of `src/openhuman/agent/` if TinyAgents grows:
 
@@ -32,12 +32,10 @@ OpenHuman can migrate more of `src/openhuman/agent/` if TinyAgents grows:
   redaction, and cancellation semantics.
 - Storage compatibility options for SQLite users that already depend on a
   different `rusqlite` / `libsqlite3-sys` version.
-- Higher-level map/reduce and parallel-agent orchestration helpers on top of
-  graph `Send`.
+- Higher-level map/reduce and parallel-agent orchestration helpers.
 - Budget enforcement and provider/model catalog metadata that can drive
   preflight, fallback, and reconciliation.
-- Conformance suites for providers, tools, middleware, graph stores, and
-  checkpointers.
+- Conformance suites for providers, tools, middleware, sessions, and stores.
 
 ## Backlog By Topic
 

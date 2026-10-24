@@ -1,9 +1,8 @@
 //! Reusable storage **conformance** (contract) suites for the harness
 //! [`Store`] and [`NamespacedStore`] traits.
 //!
-//! Mirrors the pattern the graph module established in
-//! `tinyagents_graph::testkit::conformance` and the session crate's
-//! `tinyagents_session::testkit::conformance`: the same assertions are run
+//! Mirrors the session crate's `tinyagents_session::testkit::conformance`:
+//! the same assertions are run
 //! against every backend so a defect in one implementation cannot hide behind
 //! another, and a downstream author implementing either trait can certify
 //! their backend by calling the matching function from a `#[tokio::test]`.

@@ -54,6 +54,7 @@ struct FakeTool {
     external: bool,
     timeout: ToolTimeout,
     prepares_authorization: bool,
+    binding: Option<ToolCallBinding>,
 }
 
 impl FakeTool {
@@ -64,7 +65,13 @@ impl FakeTool {
             external: false,
             timeout: ToolTimeout::Inherit,
             prepares_authorization: false,
+            binding: None,
         }
+    }
+
+    fn with_binding(mut self, binding: ToolCallBinding) -> Self {
+        self.binding = Some(binding);
+        self
     }
 }
 
@@ -95,6 +102,11 @@ impl Tool for FakeTool {
     }
     fn timeout_policy(&self, _args: &Value) -> ToolTimeout {
         self.timeout
+    }
+    fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        self.binding
+            .as_ref()
+            .map(|binding| binding as &(dyn std::any::Any + Send + Sync))
     }
 }
 
@@ -263,6 +275,32 @@ async fn authorization_and_execution_use_the_same_packed_tool_after_rebind() {
 }
 
 #[tokio::test]
+async fn erased_use_skill_exposes_its_shared_registry_handle() {
+    let handle = PackRegistryHandle::default();
+    let tool: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle.clone(), CATALOG));
+    let recovered = pack_registry_handle(tool.as_ref()).expect("registered use_skill handle");
+    let registry = Arc::new(vec![Box::new(FakeTool::plain("a_one")) as Box<dyn Tool>]);
+    recovered.bind(Arc::downgrade(&registry));
+
+    let result = tool
+        .execute(json!({"skill": "alpha", "tool": "a_one", "args": {}}))
+        .await
+        .unwrap();
+    assert_eq!(result.text(), "a_one:{}");
+}
+
+#[test]
+fn unrelated_tool_has_no_pack_registry_handle() {
+    let tool = FakeTool::plain("anything_else");
+    assert!(pack_registry_handle(&tool).is_none());
+
+    let binding = ToolCallBinding::new(|_, _| unreachable!("metadata lookup does not bind"))
+        .with_metadata(String::from("unrelated metadata"));
+    let tool = FakeTool::plain("another_tool").with_binding(binding);
+    assert!(pack_registry_handle(&tool).is_none());
+}
+
+#[tokio::test]
 async fn catalogs_with_the_same_start_pointer_but_different_lengths_conflict() {
     let handle = PackRegistryHandle::default();
     let mut inner: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("executed"))];
@@ -379,13 +417,15 @@ async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_
     ));
     let mut harness: AgentHarness<(), String> = AgentHarness::new();
     harness
-        .register_model(
-            "mock",
-            Arc::new(MockModel::with_responses(vec![
-                response,
-                testkit::text_response("finished"),
-            ])),
-        )
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "mock",
+                Arc::new(MockModel::with_responses(vec![
+                    response,
+                    testkit::text_response("finished"),
+                ])),
+            ),
+        ))
         .register_tool_dispatch(dispatch);
     let parent = tinyagents_harness::context::RunContext::new(
         tinyagents_harness::context::RunConfig::new("outer-run"),
@@ -429,17 +469,19 @@ async fn harness_rule_denial_blocks_the_pinned_inner_tool_before_typed_dispatch(
     });
     let mut harness: AgentHarness<(), String> = AgentHarness::new();
     harness
-        .register_model(
-            "mock",
-            Arc::new(MockModel::with_responses(vec![
-                testkit::tool_call_response(ToolCall::new(
-                    "denied-call",
-                    USE_SKILL,
-                    json!({"skill":"alpha", "tool":"a_one", "args":{}}),
-                )),
-                testkit::text_response("finished"),
-            ])),
-        )
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "mock",
+                Arc::new(MockModel::with_responses(vec![
+                    testkit::tool_call_response(ToolCall::new(
+                        "denied-call",
+                        USE_SKILL,
+                        json!({"skill":"alpha", "tool":"a_one", "args":{}}),
+                    )),
+                    testkit::text_response("finished"),
+                ])),
+            ),
+        ))
         .register_tool_dispatch(Arc::new(UseSkillDispatch::new(outer, selector)));
     let policy = tinyagents_harness::runtime::RunPolicy {
         tool_rules: tinyagents_harness::tool::ToolRulePolicy::new(tinytools::ToolRuleSet::single(
@@ -577,7 +619,8 @@ async fn an_unbound_handle_reports_the_registry_unavailable() {
 /// must be reachable, and rebinding it must repoint the handle.
 #[tokio::test]
 async fn a_tool_in_the_synthesised_set_is_reachable_and_rebinding_repoints() {
-    let (durable, handle) = bound_with_handle(vec![]);
+    let (durable, _) = bound_with_handle(vec![]);
+    let handle = pack_registry_handle(find(&durable, USE_SKILL)).expect("registered handle");
     let first: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![Box::new(FakeTool::plain("a_one"))]);
     handle.bind_synthesized(Arc::downgrade(&first));
     let use_skill = find(&durable, USE_SKILL);
@@ -625,8 +668,8 @@ fn resolve_registry_for_enforces_pack_membership() {
 
 #[tokio::test]
 async fn the_filtered_listing_omits_tools_the_session_cannot_call() {
-    let (_tools, handle) =
-        bound_with_handle(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
+    let (tools, _) = bound_with_handle(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
+    let handle = pack_registry_handle(find(&tools, USE_SKILL)).expect("registered handle");
     let listing = render_pack_filtered(&CATALOG, "alpha", &handle, &|name| name == "a_one", "")
         .expect("one callable tool");
     assert!(listing.contains("## `a_one`"));
@@ -669,9 +712,13 @@ fn no_such_pack_tool_renders_each_shape() {
 }
 
 #[test]
-fn route_sentence_prefers_a_callable_tool_and_falls_back_to_owners() {
+fn route_sentence_keeps_owner_identity_when_a_delegate_tool_is_callable() {
     assert_eq!(
         route_sentence(&["a".to_string(), "b".to_string()], &["o"]),
+        "Call `a` or `b` to delegate; these tools are owned by `o`. The delegate runs them directly. Do not retry this skill."
+    );
+    assert_eq!(
+        route_sentence(&["a".to_string(), "b".to_string()], &[]),
         "Call `a` or `b` instead — that agent owns these tools and runs them directly. Do not retry this skill."
     );
     assert_eq!(
@@ -767,7 +814,9 @@ async fn generic_binding_applies_tool_rules_to_the_selected_packed_tool() {
         ["a_one"],
     ));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("scripted", model);
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("scripted", model),
+    ));
     harness.register_tool(Arc::new(UseSkillTool::new(handle, CATALOG)));
     harness.with_policy(tinyagents_harness::runtime::RunPolicy {
         tool_rules: tinyagents_harness::tool::ToolRulePolicy::new(rules),

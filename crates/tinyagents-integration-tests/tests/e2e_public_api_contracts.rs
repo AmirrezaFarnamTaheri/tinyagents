@@ -1,5 +1,4 @@
-//! End-to-end contract coverage for public support APIs that recursive graph
-//! and harness runs depend on.
+//! End-to-end contract coverage for public harness support APIs.
 //!
 //! These tests intentionally sit in `tests/` rather than module-local unit tests
 //! so the e2e coverage pass exercises the same public surface downstream users
@@ -13,10 +12,6 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value, json};
 
-use tinyagents_graph::{
-    Barrier, BinaryAggregate, ChannelSet, ChannelState, ChannelUpdate, Delta, Ephemeral, LastValue,
-    Messages, NamedBarrier, Topic, Untracked,
-};
 use tinyagents_harness::TinyAgentsError;
 use tinyagents_harness::cache::{
     CacheLayoutEvent, InMemoryResponseCache, PromptCacheLayout, ResponseCache, cache_key,
@@ -183,99 +178,6 @@ async fn stores_round_trip_across_ephemeral_and_file_backends() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[tokio::test]
-async fn channel_state_contracts_handle_merges_barriers_and_conflicts() {
-    let mut set = ChannelSet::new()
-        .with_channel("last", LastValue)
-        .with_channel("topic", Topic)
-        .with_channel("delta", Delta)
-        .with_channel("messages", Messages)
-        .with_channel("ephemeral", Ephemeral)
-        .with_channel("scratch", Untracked)
-        .with_channel("barrier", Barrier::new(2))
-        .with_channel("named", NamedBarrier::new(["left", "right"]))
-        .with_channel(
-            "sum",
-            BinaryAggregate::new(|current, incoming| {
-                Ok(Value::from(
-                    current.as_i64().unwrap_or(0) + incoming.as_i64().unwrap_or(0),
-                ))
-            }),
-        );
-
-    assert!(set.contains("last"));
-    assert!(!set.allows_concurrent("last").unwrap());
-    assert!(set.allows_concurrent("topic").unwrap());
-    assert!(!set.is_ready("barrier").unwrap());
-
-    set.apply_update("last", json!("a")).unwrap();
-    set.apply_update("topic", json!("first")).unwrap();
-    set.apply_update("topic", json!(["second", "third"]))
-        .unwrap();
-    set.apply_update("delta", json!(2)).unwrap();
-    set.apply_update("delta", json!(3)).unwrap();
-    set.apply_update("messages", json!({ "id": "m1", "text": "old" }))
-        .unwrap();
-    set.apply_update("messages", json!({ "id": "m1", "text": "new" }))
-        .unwrap();
-    set.apply_update("ephemeral", json!("one-shot")).unwrap();
-    set.apply_update("scratch", json!("hidden")).unwrap();
-    set.apply_update("barrier", json!("left")).unwrap();
-    set.apply_update("barrier", json!("right")).unwrap();
-    set.apply_update("named", json!({ "left": true })).unwrap();
-    set.apply_update("named", json!({ "right": true })).unwrap();
-    set.apply_update("sum", json!(5)).unwrap();
-    set.apply_update("sum", json!(7)).unwrap();
-
-    assert_eq!(set.get("delta"), Some(&json!(5)));
-    assert_eq!(set.get("sum"), Some(&json!(12)));
-    assert!(set.is_ready("barrier").unwrap());
-    assert!(set.is_ready("named").unwrap());
-    assert!(!set.snapshot().contains_key("scratch"));
-
-    let state = ChannelState::new()
-        .with_channel("last", LastValue)
-        .with_channel("topic", Topic)
-        .with_channel("delta", Delta)
-        .with_channel("messages", Messages)
-        .with_channel("ephemeral", Ephemeral)
-        .with_channel("scratch", Untracked)
-        .with_channel("barrier", Barrier::new(2))
-        .with_channel("named", NamedBarrier::new(["left", "right"]))
-        .with_channel(
-            "sum",
-            BinaryAggregate::new(|current, incoming| {
-                Ok(Value::from(
-                    current.as_i64().unwrap_or(0) + incoming.as_i64().unwrap_or(0),
-                ))
-            }),
-        );
-    let state = state
-        .merge(
-            ChannelUpdate::new()
-                .set("last", json!("step-1"))
-                .set("ephemeral", json!("flash"))
-                .at_step(1),
-        )
-        .unwrap();
-    assert_eq!(state.channels().get("ephemeral"), Some(&json!("flash")));
-    let state = state
-        .merge(ChannelUpdate::new().set("last", json!("step-2")).at_step(2))
-        .unwrap();
-    assert!(state.channels().get("ephemeral").is_none());
-
-    let conflict = state
-        .clone()
-        .merge(ChannelUpdate::new().set("last", json!("a")).at_step(3))
-        .unwrap()
-        .merge(ChannelUpdate::new().set("last", json!("b")).at_step(3))
-        .unwrap_err();
-    assert!(matches!(
-        conflict,
-        TinyAgentsError::InvalidConcurrentUpdate(_)
-    ));
 }
 
 #[tokio::test]

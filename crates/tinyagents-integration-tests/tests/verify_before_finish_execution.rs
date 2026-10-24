@@ -9,6 +9,7 @@ use tinytools::{PermissionLevel, Tool, ToolResult};
 
 use tinyagents_harness::Result;
 use tinyagents_harness::context::RunContext;
+use tinyagents_harness::host::FixedModelResolver;
 use tinyagents_harness::limits::RunLimits;
 use tinyagents_harness::middleware::{
     AgentRun, FinishActivity, Middleware, MiddlewareToolOutcome, ToolHandler,
@@ -130,7 +131,7 @@ fn rig(calls: Vec<ToolCall>) -> Rig {
     ]);
     handle.bind(Arc::downgrade(&packed));
     let mut harness = AgentHarness::new();
-    harness.register_model("mock", model);
+    harness.with_model_resolver(Arc::new(FixedModelResolver::new(model)));
     harness.register_tool(Arc::new(UseSkillTool::new(
         handle,
         PackCatalog::new(PACKS, "[missing]"),

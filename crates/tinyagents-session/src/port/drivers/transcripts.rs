@@ -36,11 +36,11 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tinyagents_harness::store::SchemaAdmission;
-use tinyagents_storage_kit::primitives::{Leases, Repo};
+use tinyagents_storage_kit::primitives::{Lease, Leases, Repo};
 use tinyagents_storage_kit::{Blocking, DocumentStoreExt};
 use tinyagents_storage_kit::{
-    CollectionSpec, ErrorKind, Filter, ID_FIELD, IndexSpec, Key, Query, Sort, StorageError,
-    WriteOptions,
+    CollectionSpec, ErrorKind, Filter, ID_FIELD, IndexSpec, Key, Query, Scope, Sort, StorageError,
+    WriteCondition, WriteOptions,
 };
 use tinystoragedrivers_api::DocumentStore;
 use tokio::sync::{Mutex, OnceCell};
@@ -302,12 +302,17 @@ pub struct DriverTranscriptHistory {
 
 struct HistoryInner {
     docs: Arc<dyn DocumentStore>,
+    scope: Option<Scope>,
+    conditioned_entries: Option<ConditionedEntryOpener>,
     tables: Arc<Tables>,
     declared: Arc<Declared>,
     stem: String,
     seed: TranscriptMeta,
     replay: Mutex<Replay>,
 }
+
+pub(crate) type ConditionedEntryOpener =
+    Arc<dyn Fn(&WriteCondition) -> Result<Arc<dyn DocumentStore>, StorageError> + Send + Sync>;
 
 impl std::fmt::Debug for DriverTranscriptHistory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -436,20 +441,47 @@ impl HistoryInner {
             let Some(entry) = build(&replay, &self.seed)? else {
                 return Ok(false);
             };
-            self.claim_reservation(&mut replay).await?;
+            let claimed = self.claim_reservation(&mut replay).await?;
             let seq = replay.next_seq;
             let mut doc = serde_json::to_value(&entry).map_err(|error| serialization(&error))?;
             if let Value::Object(fields) = &mut doc {
                 fields.insert("stem".into(), json!(self.stem));
                 fields.insert("seq".into(), json!(seq));
             }
-            match self
-                .tables
-                .entries
-                .insert(&entry_id(&self.stem, seq)?, &doc)
-                .await
-            {
+            let reserved = claimed.is_some();
+            let insert = if let Some(lease) = claimed {
+                let opener = self.conditioned_entries.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "session generation {} requires atomic lease-conditioned entry writes",
+                        self.stem
+                    )
+                })?;
+                let scope = self.scope.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "session generation {} has no bound storage scope",
+                        self.stem
+                    )
+                })?;
+                let condition = lease.write_condition(scope.clone())?;
+                let docs = opener(&condition)?;
+                Repo::new(&docs, ENTRIES)?
+                    .with_options(WriteOptions::new().schema(SCHEMA_VERSION))
+                    .insert(&entry_id(&self.stem, seq)?, &doc)
+                    .await
+            } else {
+                self.tables
+                    .entries
+                    .insert(&entry_id(&self.stem, seq)?, &doc)
+                    .await
+            };
+            match insert {
                 Ok(_) => {
+                    // Keep the reservation on a failed insert so retries must
+                    // renew the same epoch and can never fall back to an
+                    // unconditioned write after a takeover.
+                    if reserved {
+                        replay.reservation = None;
+                    }
                     replay.apply(seq, entry);
                     // The entry is durable: report the write as done. A
                     // failed index refresh is retried a few times here, then
@@ -491,13 +523,13 @@ impl HistoryInner {
     /// process took the reservation over in the meantime (this one stalled
     /// past the reservation's lifetime), the generation is theirs and this
     /// handle's writes are refused instead of overwriting it.
-    async fn claim_reservation(&self, replay: &mut Replay) -> anyhow::Result<()> {
+    async fn claim_reservation(&self, replay: &mut Replay) -> anyhow::Result<Option<Lease>> {
         let Some(held) = replay.reservation.as_ref() else {
-            return Ok(());
+            return Ok(None);
         };
-        reservation::claim(&self.tables.leases, &self.stem, held).await?;
-        replay.reservation = None;
-        Ok(())
+        Ok(Some(
+            reservation::claim(&self.tables.leases, &self.stem, held).await?,
+        ))
     }
 
     /// Releases the reservation of a generation this handle never wrote.
@@ -783,6 +815,8 @@ impl TranscriptHistory for DriverTranscriptHistory {
 #[derive(Clone)]
 pub struct DriverTranscriptLocator {
     docs: Arc<dyn DocumentStore>,
+    scope: Option<Scope>,
+    conditioned_entries: Option<ConditionedEntryOpener>,
     tables: Arc<Tables>,
     bridge: Blocking,
     label: String,
@@ -798,6 +832,11 @@ impl std::fmt::Debug for DriverTranscriptLocator {
 }
 
 impl DriverTranscriptLocator {
+    #[cfg(test)]
+    pub(crate) fn documents(&self) -> &Arc<dyn DocumentStore> {
+        &self.docs
+    }
+
     /// Transcripts in `docs`, with synchronous calls run on `bridge`.
     ///
     /// `label` names where `docs` points (driver, database, scope). It is
@@ -815,9 +854,42 @@ impl DriverTranscriptLocator {
         label: impl Into<String>,
         schema_admission: SchemaAdmission,
     ) -> Self {
+        Self::with_conditioned_entry_opener(docs, bridge, label, schema_admission, None, None)
+    }
+
+    /// Transcripts whose first entry in a reserved generation is opened with
+    /// the lease's native atomic write condition.
+    pub(crate) fn new_with_conditioned_entry_opener(
+        docs: Arc<dyn DocumentStore>,
+        bridge: Blocking,
+        label: impl Into<String>,
+        schema_admission: SchemaAdmission,
+        scope: Scope,
+        opener: ConditionedEntryOpener,
+    ) -> Self {
+        Self::with_conditioned_entry_opener(
+            docs,
+            bridge,
+            label,
+            schema_admission,
+            Some(scope),
+            Some(opener),
+        )
+    }
+
+    fn with_conditioned_entry_opener(
+        docs: Arc<dyn DocumentStore>,
+        bridge: Blocking,
+        label: impl Into<String>,
+        schema_admission: SchemaAdmission,
+        scope: Option<Scope>,
+        conditioned_entries: Option<ConditionedEntryOpener>,
+    ) -> Self {
         Self {
             tables: Arc::new(Tables::new(&docs)),
             docs,
+            scope,
+            conditioned_entries,
             bridge,
             label: label.into(),
             declared: Arc::new(Declared {
@@ -842,6 +914,8 @@ impl DriverTranscriptLocator {
         DriverTranscriptHistory {
             inner: Arc::new(HistoryInner {
                 docs: Arc::clone(&self.docs),
+                scope: self.scope.clone(),
+                conditioned_entries: self.conditioned_entries.clone(),
                 tables: Arc::clone(&self.tables),
                 declared: Arc::clone(&self.declared),
                 stem: stem.to_string(),

@@ -4,7 +4,7 @@ The default model-tool-model agent loop: the innermost turn of the recursive
 harness.
 
 This loop is where one model call is driven to completion. Because a whole
-harness can be exposed as a tool (`tinyagents_orchestration::subagent::SubAgentTool`), the
+harness can be exposed as a tool (`tinyagents_harness_tools::subagents::DriverSubAgentTool`), the
 tools this loop executes may themselves be other agents — "a model calling a
 model" is just this loop nested inside one of its own tool calls. Each
 invocation runs inside a `RunContext` that tracks recursion depth, fans
@@ -147,16 +147,34 @@ as Anthropic and some gateways spell it — an empty `max_tokens` reply takes th
 path too) with no visible text, no tool calls, and no structured output — a result useless to every caller. Before finalizing such a
 turn (and before structured extraction, which would otherwise fail on the empty
 completion) the loop retries the model call up to
-`runtime::RunPolicy::truncated_empty_retries` times (default `1`, so two
-attempts total). Each retry drops the useless assistant row, doubles the
-request's `max_tokens` when one was set — clamped at 4x the original cap, and a
-deliberate override of the per-turn output cap that caused the truncation — or
-re-issues unchanged when no budget was set (the failure is stochastic, so a
-plain retry still helps). Each attempt counts as a model call and emits
+`runtime::RunPolicy::truncated_empty_retries` times (default `2`, so three
+attempts total). Each retry drops the useless assistant row. The first retries
+at the same output cap; subsequent retries double `max_tokens` when one was
+set, clamped at 4x the original cap. This deliberately overrides the per-turn
+output cap that caused the truncation. With no cap, the request is reissued
+unchanged: the failure is stochastic, so a plain retry still helps.
+`RunPolicy::truncated_empty_constant_cap` (default `false`) instead keeps every
+retry at the original cap, including later retries that would normally grow.
+The wall-clock and model-call limits still bound these retries.
+When truncated-empty recovery is enabled, blank length-stopped responses are
+neither stored in the response cache nor accepted from existing cache entries,
+so retries at an unchanged cap still reach the provider. Usable answers remain
+cacheable; disabling both truncated-empty retries and nudges retains replay. Each attempt counts as a model call and emits
 `AgentEvent::RetryScheduled`. The retry runs *before*
 `RunPolicy::error_on_empty_response`; only once the retries are exhausted does
 that guard (if enabled) turn the still-blank final into
 `TinyAgentsError::EmptyResponse`.
+
+`RunPolicy::truncated_empty_reasoning_off` (default `false`) sends the call
+after a truncated-empty reply, whether a retry or a nudge, with
+`ReasoningEffort::None`. This overrides the configured reasoning effort for
+that one call; later calls return to the policy's reasoning configuration.
+`RunPolicy::truncated_empty_reasoning_off_sticky_after` (default `0`, disabled)
+instead makes reasoning-off persist for the rest of the run once that many
+truncated-empty replies have occurred, across tool-call steps. The sticky
+threshold applies independently of the one-call setting. These controls can
+combine with constant-cap retries to avoid spending a larger budget on the
+same reasoning-only failure.
 
 A hosted reasoning model on a high effort setting can deliberate past the
 boosted budget too. Once the retries are spent the loop does not finish on the

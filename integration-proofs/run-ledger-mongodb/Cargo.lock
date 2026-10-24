@@ -2324,7 +2324,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-definition"
-version = "2.2.0"
+version = "3.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2337,7 +2337,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-harness"
-version = "2.2.0"
+version = "3.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2387,7 +2387,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-session"
-version = "2.2.0"
+version = "3.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2411,7 +2411,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-storage-kit"
-version = "2.2.0"
+version = "3.0.0"
 dependencies = [
  "data-encoding",
  "serde",
@@ -2425,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-tasks"
-version = "2.2.0"
+version = "3.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2434,6 +2434,7 @@ dependencies = [
  "tinyinference-llm",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

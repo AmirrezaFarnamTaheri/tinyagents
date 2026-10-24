@@ -56,6 +56,24 @@ fn an_agent_gets_the_same_stores_every_time() {
 }
 
 #[test]
+fn in_memory_stores_can_lease_their_stable_agent_handles() {
+    let provider = InMemorySessionStores::new();
+    let opened = provider.for_agent("a");
+    let lease = provider
+        .lease_for_agent("a")
+        .expect("the process-lifetime memory provider pins its handles");
+
+    assert!(Arc::ptr_eq(
+        &opened.turn_states,
+        &lease.stores().turn_states
+    ));
+    assert_eq!(
+        opened.transcripts.destination_key(),
+        lease.stores().transcripts.destination_key()
+    );
+}
+
+#[test]
 fn clearing_in_memory_history_clears_display_partials() {
     let history = InMemoryTranscriptHistory::new("clear-partial", test_meta("clear-partial"));
     history.record_partial(

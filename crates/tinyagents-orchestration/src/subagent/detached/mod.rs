@@ -32,7 +32,8 @@ mod status_map;
 mod types;
 
 pub use completion::{
-    DetachedCompletionTarget, record_detached_completion, spawn_status_watcher_with_completions,
+    DetachedCompletionTarget, pause_record_prefix, record_detached_completion,
+    spawn_status_watcher_with_completions,
 };
 pub use ledger::{
     DETACHED_LEDGER_TIMEOUT_MS, list_subagent_records, orphaned_subagent_reason, record_agent_id,
@@ -47,8 +48,9 @@ pub use ops::{
     wait_detached_or_durable, wait_detached_or_durable_with_owners,
 };
 pub use roster::{
-    resume_ref_for_task, resume_ref_from_record, snapshot_for_owner, task_id_for_session,
-    task_id_for_session_in_records,
+    ParentRosterEntry, format_parent_roster_for_owner, format_roster_for_owner,
+    parent_roster_for_owner, resume_ref_for_task, resume_ref_from_record, snapshot_for_owner,
+    task_id_for_session, task_id_for_session_in_records,
 };
 pub use status::{wait_detached, wait_error_from_registry};
 pub use types::{

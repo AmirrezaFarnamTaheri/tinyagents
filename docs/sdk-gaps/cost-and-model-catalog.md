@@ -85,12 +85,12 @@ TinyAgents has registry primitives. OpenHuman still needs richer diagnostics for
 duplicate components, alias resolution, component health, model/provider/tool
 capabilities, and event listener wiring. Implement:
 
-- Registry snapshot export with models, tools, middleware, graph nodes,
-  checkpointers, task stores, event listeners, and aliases.
+- Registry snapshot export with models, tools, middleware, task stores, event
+  listeners, and aliases.
 - Duplicate and shadowing diagnostics.
 - Health/status probes for registered providers and stores.
 - Machine-readable component dependency graph.
-- Optional DOT/JSON graph export for runtime components, not only graph nodes.
+- Optional DOT/JSON export of runtime component dependencies.
 
 Acceptance criteria:
 

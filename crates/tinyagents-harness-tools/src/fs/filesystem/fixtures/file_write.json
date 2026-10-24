@@ -1,0 +1,23 @@
+{
+  "description": "Write contents to a file in your working directory (the action sandbox). Relative paths resolve against that directory; writes outside it are blocked. Reference the file later by the same relative path so `file_read` resolves to it.",
+  "exposure": "Direct",
+  "name": "file_write",
+  "permission_level": "Write",
+  "schema": {
+    "properties": {
+      "content": {
+        "description": "Content to write to the file",
+        "type": "string"
+      },
+      "path": {
+        "description": "Relative path to the file within the workspace",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path",
+      "content"
+    ],
+    "type": "object"
+  }
+}

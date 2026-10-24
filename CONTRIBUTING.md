@@ -17,12 +17,12 @@ cargo test --workspace
 The bundled example should also run:
 
 ```sh
-cargo run -p tinyagents-integration-tests --example basic_graph
+cargo run -p tinyagents-integration-tests --example openai_chat
 ```
 
 Cargo features are package-local. `tinyagents-harness` exposes `sqlite`,
-`tools`, `multimodal`, and `tracing`; `tinyagents-graph` exposes `sqlite` and
-`tracing`; `tinyagents-registry` and `tinyagents-session` expose `tracing`.
+`tools`, `multimodal`, and `tracing`; `tinyagents-registry` and
+`tinyagents-session` expose `tracing`.
 To build with a feature enabled, pass it on the relevant package:
 
 ```sh
@@ -89,7 +89,7 @@ Use concise imperative commit subjects, for example:
 
 ```text
 Add graph route validation tests
-Document graph runtime safety boundary
+Document harness safety boundary
 ```
 
 Avoid mixing formatting, refactors, and behavior changes unless they are

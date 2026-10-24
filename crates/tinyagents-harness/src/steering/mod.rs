@@ -4,7 +4,7 @@
 //! typed control over a *child* it is currently running: an orchestrating agent
 //! (or human, or graph supervisor) injects [`SteeringCommand`]s into a live
 //! sub-agent loop without killing or restarting it. It is the mid-run
-//! counterpart to `SubAgentSession` reuse in `tinyagents-orchestration` (which
+//! counterpart to durable child-session reuse in `tinyagents-orchestration` (which
 //! resumes a *completed* child) — together they cover both ways an orchestrator
 //! keeps a sub-agent "in play".
 //!

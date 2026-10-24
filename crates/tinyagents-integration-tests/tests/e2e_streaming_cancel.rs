@@ -50,10 +50,12 @@ async fn streaming_invoke_fires_on_model_delta_and_accumulates_final_response() 
     let texts = Arc::new(Mutex::new(Vec::new()));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "stream",
-        Arc::new(StreamingMock::from_text_chunks(["Hel", "lo, ", "world"])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "stream",
+            Arc::new(StreamingMock::from_text_chunks(["Hel", "lo, ", "world"])),
+        ),
+    ));
     harness.push_middleware(Arc::new(DeltaRecorder {
         texts: texts.clone(),
     }));
@@ -89,10 +91,12 @@ async fn streaming_invoke_fires_on_model_delta_and_accumulates_final_response() 
 #[tokio::test]
 async fn pre_cancelled_token_yields_cancelled_on_streaming_path() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "stream",
-        Arc::new(StreamingMock::from_text_chunks(["never", "delivered"])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "stream",
+            Arc::new(StreamingMock::from_text_chunks(["never", "delivered"])),
+        ),
+    ));
 
     // Pre-cancel the token before the run starts.
     let token = CancellationToken::new();

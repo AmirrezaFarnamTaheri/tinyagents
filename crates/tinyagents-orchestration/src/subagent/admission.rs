@@ -44,10 +44,8 @@
 //! one ledger, and a host shares one instance across every tool/driver whose
 //! spawns should count against the same limits.
 //!
-//! Only [`SubAgentTool`](super::SubAgentTool) and
-//! [`SubagentDriver`](super::SubagentDriver) enforce admission. Calling
-//! `SubAgent::invoke_in_parent` / `invoke_hosted_in_parent` directly bypasses
-//! it; hosts that expose those paths must reserve themselves.
+//! [`SubagentDriver`](super::SubagentDriver) enforces admission for every
+//! async spawn. Hosts should not expose a second path around the driver.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -250,9 +248,8 @@ impl SpawnAdmission {
     /// paid its budget. The caller must only use it after confirming the child
     /// exists. The driver treats a request that carries resume state (loaded
     /// from persistence, or supplied by the trusted host through
-    /// `SubagentRequest`) as a continuation; the model can only trigger fresh
-    /// spawns, through [`SubAgentTool`](super::SubAgentTool), which reserves
-    /// with [`Self::try_reserve`]. Calling this for a fresh spawn would bypass
+    /// `SubagentRequest`) as a continuation; fresh model spawns reserve with
+    /// [`Self::try_reserve`]. Calling this for a fresh spawn would bypass
     /// `max_total_per_root`.
     pub fn try_reserve_continuation(
         &self,

@@ -247,6 +247,47 @@ async fn unobserved_ordinary_reservation_returns_typed_uncertainty_with_original
         0
     );
 }
+/// SQLite's shape: its document port does not advertise conditional stream
+/// appends, only its stream port does. Append must check the stream port.
+#[tokio::test]
+async fn an_append_admits_a_stream_capability_its_document_port_does_not_list() {
+    let store = actor(&MemoryStorage::new()).await;
+    let split = faulted(
+        &store,
+        Fault::new(Phase::Probe, Action::DocsLackStreamAppend),
+    );
+    assert!(
+        !split
+            .docs
+            .capabilities()
+            .contains(tinystoragedrivers_types::Capability::ConditionalStreamAppend)
+    );
+    split
+        .append_message("same", message("agent:a", "kept"))
+        .await
+        .expect("the stream port carries the capability the append uses");
+    let messages = store.get_messages("same").await.unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].content, "kept");
+}
+
+#[tokio::test]
+async fn an_append_is_refused_when_the_stream_port_lacks_conditional_appends() {
+    let store = actor(&MemoryStorage::new()).await;
+    let split = faulted(
+        &store,
+        Fault::new(Phase::Probe, Action::StreamsLackStreamAppend),
+    );
+    let error = split
+        .append_message("same", message("agent:a", "refused"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, ConversationError::Driver(ref e) if matches!(e.kind(), ErrorKind::Unsupported(tinystoragedrivers_types::Capability::ConditionalStreamAppend)))
+    );
+    assert!(store.get_messages("same").await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn counterfeit_document_capabilities_do_not_reserve_when_actual_stream_probe_refuses() {
     let store = actor(&MemoryStorage::new()).await;

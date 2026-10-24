@@ -154,8 +154,9 @@ impl NoSuchPackTool<'_> {
 /// `callable_delegates` are delegation tool names the caller has already
 /// confirmed this session can invoke — naming the *tool* rather than the agent
 /// is the difference between guidance and an instruction, and a model left to
-/// guess the call retries. When none can be reached the owning agents are named
-/// instead: strictly worse, but still better than a bare denial.
+/// guess the call retries. When owners are supplied, keep that ownership
+/// metadata alongside the callable route. When none can be reached the owning
+/// agents are named instead: strictly worse, but still better than a bare denial.
 pub fn route_sentence(callable_delegates: &[String], owners: &[&str]) -> String {
     if !callable_delegates.is_empty() {
         let names = callable_delegates
@@ -163,6 +164,16 @@ pub fn route_sentence(callable_delegates: &[String], owners: &[&str]) -> String 
             .map(|t| format!("`{t}`"))
             .collect::<Vec<_>>()
             .join(" or ");
+        if !owners.is_empty() {
+            let owner_names = owners
+                .iter()
+                .map(|owner| format!("`{owner}`"))
+                .collect::<Vec<_>>()
+                .join(" or ");
+            return format!(
+                "Call {names} to delegate; these tools are owned by {owner_names}. The delegate runs them directly. Do not retry this skill."
+            );
+        }
         return format!(
             "Call {names} instead — that agent owns these tools and runs them directly. \
              Do not retry this skill."

@@ -232,19 +232,17 @@ async fn read_only_permission_ceiling_refuses_a_packed_delete_before_execution()
     handle.bind(Arc::downgrade(&tools));
     let dispatcher = Arc::new(UseSkillTool::new(handle, CATALOG));
     let mut harness: AgentHarness<(), ()> = AgentHarness::new();
-    harness
-        .register_model(
-            "mock",
-            Arc::new(MockModel::with_responses(vec![
-                testkit::tool_call_response(ToolCall::new(
-                    "packed-delete",
-                    USE_SKILL,
-                    json!({"skill": "code", "tool": "delete_source"}),
-                )),
-                testkit::text_response("finished"),
-            ])),
-        )
-        .register_tool(dispatcher);
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(
+        Arc::new(MockModel::with_responses(vec![
+            testkit::tool_call_response(ToolCall::new(
+                "packed-delete",
+                USE_SKILL,
+                json!({"skill": "code", "tool": "delete_source"}),
+            )),
+            testkit::text_response("finished"),
+        ])),
+    )));
+    harness.register_tool(dispatcher);
     harness.with_policy(tinyagents_harness::runtime::RunPolicy {
         tool_rules: tinyagents_harness::tool::ToolRulePolicy::default()
             .with_permission_ceiling(PermissionLevel::ReadOnly),

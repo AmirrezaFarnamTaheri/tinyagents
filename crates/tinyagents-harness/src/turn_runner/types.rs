@@ -21,16 +21,6 @@ pub struct ScopeKey {
     pub profile_id: Option<String>,
 }
 
-/// A turn that currently holds a cancellation slot.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LiveTurn {
-    pub scope: ScopeKey,
-    pub thread_id: String,
-    pub request_id: String,
-    /// Whether it is a parallel turn rather than the thread's primary turn.
-    pub parallel: bool,
-}
-
 /// A request after the host has supplied its channel-independent metadata.
 #[derive(Debug, Clone)]
 pub struct TurnRequest<P = serde_json::Value> {
@@ -47,33 +37,40 @@ pub struct TurnRequest<P = serde_json::Value> {
     pub idle_timeout: Option<Duration>,
 }
 
-/// Host payloads that can stand in for the metadata of a steer the harness
-/// recovered and pushed back onto the run queue.
-///
-/// The steering forwarder re-creates a recovered item through
-/// [`QueuedMessage::requeued`], which knows only a fresh id, the text, the
-/// thread label and the clock. [`TurnRequest`] implements that trait for every
-/// payload that can build such a placeholder, so a turn's run queue can be the
-/// harness's own queue. The runner restores the scope and thread of a recovered
-/// item when it dispatches it as a fresh turn and lets the payload adopt the
-/// metadata of the turn that was running.
-pub trait RequeuePayload {
-    /// A placeholder payload for a recovered item.
-    fn requeued(thread_label: &str, queued_at_ms: u64) -> Self;
+/// A request item stored by a runner and shared with its host's running agent
+/// loop. Implementations must preserve the complete request in both directions.
+pub trait TurnQueueItem<P>: Clone + Send + Sync + 'static {
+    /// Wraps an accepted request without changing its identity or payload.
+    fn from_turn_request(request: TurnRequest<P>) -> Self;
 
-    /// Fill what a recovered placeholder lacks from the payload of the turn
-    /// that was running when it was recovered. Payloads that are already
-    /// complete must be left untouched.
-    fn adopt(&mut self, _running: &Self) {}
+    /// Borrows the request represented by this item.
+    fn as_turn_request(&self) -> &TurnRequest<P>;
+
+    /// Consumes this item into the request it represents.
+    fn into_turn_request(self) -> TurnRequest<P>;
 }
 
-impl RequeuePayload for serde_json::Value {
-    fn requeued(_thread_label: &str, _queued_at_ms: u64) -> Self {
-        serde_json::Value::Null
+impl<P> TurnQueueItem<P> for TurnRequest<P>
+where
+    P: Clone + Send + Sync + 'static,
+{
+    fn from_turn_request(request: TurnRequest<P>) -> Self {
+        request
+    }
+
+    fn as_turn_request(&self) -> &TurnRequest<P> {
+        self
+    }
+
+    fn into_turn_request(self) -> TurnRequest<P> {
+        self
     }
 }
 
-impl<P: RequeuePayload + Send + 'static> QueuedMessage for TurnRequest<P> {
+impl<P> QueuedMessage for TurnRequest<P>
+where
+    P: RequeuePayload + Send + 'static,
+{
     fn id(&self) -> &str {
         &self.request_id
     }
@@ -96,6 +93,65 @@ impl<P: RequeuePayload + Send + 'static> QueuedMessage for TurnRequest<P> {
             disposition: QueueDisposition::Steer,
             deadline: None,
             idle_timeout: None,
+        }
+    }
+
+    fn requeued_in_lane(
+        id: String,
+        text: String,
+        thread_label: &str,
+        lane: QueueLane,
+        queued_at_ms: u64,
+    ) -> Self {
+        let mut request = Self::requeued(id, text, thread_label, queued_at_ms);
+        request.disposition = match lane {
+            QueueLane::Steer => QueueDisposition::Steer,
+            QueueLane::Followup => QueueDisposition::Followup,
+            QueueLane::Collect => QueueDisposition::Collect,
+        };
+        request
+    }
+}
+
+// Untyped JSON payloads have no host schema, so only known turn-scoped fields
+// are inherited; request-local values such as attachments stay with their
+// original request.
+impl RequeuePayload for serde_json::Value {
+    fn requeued(thread_id: &str, queued_at_ms: u64) -> Self {
+        serde_json::json!({
+            "thread_id": thread_id,
+            "queued_at_ms": queued_at_ms,
+        })
+    }
+
+    fn adopt(&mut self, running: &Self) {
+        if let (Self::Object(requeued), Self::Object(active)) = (self, running) {
+            for key in [
+                "access",
+                "locale",
+                "attribution",
+                "channel_attribution",
+                "client_id",
+                "model_override",
+                "temperature",
+            ] {
+                if let Some(value) = active.get(key) {
+                    requeued
+                        .entry(key.to_owned())
+                        .or_insert_with(|| value.clone());
+                }
+            }
+        }
+    }
+
+    fn restore_thread_id(&mut self, thread_id: &str) {
+        if let Self::Object(payload) = self
+            && payload.contains_key("thread_id")
+        {
+            payload.insert(
+                "thread_id".into(),
+                serde_json::Value::String(thread_id.into()),
+            );
         }
     }
 }
@@ -183,8 +239,26 @@ pub struct FailureClassification {
     pub details: Option<serde_json::Value>,
 }
 
+/// Creates the host-owned payload for a queued turn and adopts safe metadata
+/// from the active turn when the host needs to synthesize a follow-up request.
+///
+/// Payload implementations decide which fields may be inherited. Request text,
+/// ids, and queue timestamps remain owned by the newly queued request.
+pub trait RequeuePayload: Sized {
+    /// Create an empty payload for a request queued on `thread_id`.
+    fn requeued(thread_id: &str, queued_at_ms: u64) -> Self;
+
+    /// Copy any safe, turn-scoped host metadata from the running payload.
+    fn adopt(&mut self, running: &Self);
+
+    /// Replace a thread identity embedded in the payload with the queue owner's
+    /// routing identity. Payloads without their own thread field may leave this
+    /// as the default no-op.
+    fn restore_thread_id(&mut self, _thread_id: &str) {}
+}
+
 #[async_trait]
-pub trait TurnHost<P = serde_json::Value>: Send + Sync {
+pub trait TurnHost<P = serde_json::Value, Q = TurnRequest<P>>: Send + Sync {
     /// Check out or create the session for this request and verify its fingerprint.
     async fn checkout(&self, request: &TurnRequest<P>) -> Result<TurnSession, String>;
     /// Check out an independent transcript/session snapshot for Parallel mode.
@@ -207,7 +281,7 @@ pub trait TurnHost<P = serde_json::Value>: Send + Sync {
         session: &TurnSession,
         origin: &serde_json::Value,
         cancellation: crate::CancellationToken,
-        queue: Arc<RunQueue<TurnRequest<P>>>,
+        queue: Arc<RunQueue<Q>>,
         progress: mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String>;
     /// Release the session after the run, including on cancellation or failure.
@@ -240,8 +314,11 @@ where
 {
     async fn progress(&self, request: &TurnRequest<P>, event: AgentProgress);
     async fn terminal(&self, request: &TurnRequest<P>, event: TerminalEvent);
-    /// Receive structured classifier output with a failure. Existing sinks
-    /// remain source-compatible and continue receiving the original event.
+    /// Deliver a terminal failure with its structured host classification.
+    ///
+    /// The default keeps existing event sinks source-compatible and forwards
+    /// the wire-neutral terminal event. Hosts that render richer failure copy
+    /// can override this method.
     async fn classified_failure(
         &self,
         request: &TurnRequest<P>,
@@ -257,8 +334,9 @@ where
 pub trait FailureClassifier: Send + Sync {
     fn classify(&self, error: &str) -> (String, String);
 
-    /// Classify an error while optionally retaining neutral copy metadata.
-    /// The default keeps existing implementations compatible.
+    /// Classify an error with optional host-defined presentation details.
+    ///
+    /// The default preserves classifiers that only return a class and message.
     fn classify_failure(&self, error: &str) -> FailureClassification {
         let (class, message) = self.classify(error);
         FailureClassification {
@@ -286,11 +364,6 @@ pub struct TurnRunnerConfig {
     pub idle_timeout: Duration,
     pub deadline: Option<Duration>,
     pub close_timeout: Duration,
-    /// How long a cancelled host run keeps being polled, with its own
-    /// cancellation token already fired, before it is dropped. A host uses the
-    /// window to hand back and persist the rounds it completed. Zero drops the
-    /// run immediately.
-    pub cancel_grace: Duration,
 }
 
 impl Default for TurnRunnerConfig {
@@ -299,7 +372,6 @@ impl Default for TurnRunnerConfig {
             idle_timeout: Duration::from_secs(900),
             deadline: None,
             close_timeout: Duration::from_secs(60),
-            cancel_grace: Duration::ZERO,
         }
     }
 }
@@ -319,17 +391,39 @@ pub enum TurnRunnerError {
 }
 
 #[derive(Clone)]
-struct ActiveTurn<P> {
-    request_id: String,
+pub(crate) struct ActiveTurn<P, Q = TurnRequest<P>> {
+    pub(crate) request_id: String,
+    pub(crate) cancel: crate::CancellationToken,
+    pub(crate) cancellable: bool,
+    pub(crate) generation: u64,
+    pub(crate) queue: Arc<RunQueue<Q>>,
+    pub(crate) payload: P,
+}
+
+#[derive(Clone)]
+struct ActiveParallelTurn {
     cancel: crate::CancellationToken,
-    generation: u64,
-    queue: Arc<RunQueue<TurnRequest<P>>>,
+    cancellable: bool,
+}
+
+/// A live turn owned by a runner, suitable for host-side cancellation and
+/// observability without exposing cancellation tokens or queue internals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveTurn {
+    /// Agent/profile scope that owns this turn.
+    pub scope: ScopeKey,
+    /// Conversation thread supplied by the host.
+    pub thread_id: String,
+    /// Host request identity used to scope cancellation and terminal events.
+    pub request_id: String,
+    /// Whether this turn runs on an independent parallel fork.
+    pub parallel: bool,
 }
 
 type ThreadLockKey = (ScopeKey, String);
 type ThreadLocks = Mutex<HashMap<ThreadLockKey, Weak<Mutex<()>>>>;
 type ParallelQueueKey = (ScopeKey, String, String);
-type ParallelQueueMap<P> = Mutex<HashMap<ParallelQueueKey, Arc<RunQueue<TurnRequest<P>>>>>;
+type ParallelQueueMap<Q> = Mutex<HashMap<ParallelQueueKey, Arc<RunQueue<Q>>>>;
 
 fn queue_lane(disposition: QueueDisposition) -> Option<QueueLane> {
     match disposition {
@@ -340,8 +434,22 @@ fn queue_lane(disposition: QueueDisposition) -> Option<QueueLane> {
     }
 }
 
+fn restore_queue_context<P: RequeuePayload>(
+    requests: &mut [TurnRequest<P>],
+    scope: &ScopeKey,
+    thread_id: &str,
+    running_payload: &P,
+) {
+    for request in requests {
+        request.scope.clone_from(scope);
+        request.thread_id = thread_id.to_owned();
+        request.payload.adopt(running_payload);
+        request.payload.restore_thread_id(thread_id);
+    }
+}
+
 /// Reusable turn lifecycle coordinator, parameterized entirely by host ports.
-pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value> {
+pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value, Q = TurnRequest<P>> {
     host: Arc<H>,
     ingress: Arc<I>,
     replies: Arc<R>,
@@ -350,21 +458,23 @@ pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value> {
     summarizer: Arc<S>,
     config: TurnRunnerConfig,
     locks: ThreadLocks,
-    parallel_queues: ParallelQueueMap<P>,
-    active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<P>>>,
-    parallel_active: Mutex<HashMap<(ScopeKey, String, String), crate::CancellationToken>>,
+    parallel_queues: ParallelQueueMap<Q>,
+    pub(crate) active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<P, Q>>>,
+    parallel_active: Mutex<HashMap<(ScopeKey, String, String), ActiveParallelTurn>>,
     next_generation: std::sync::atomic::AtomicU64,
+    payload: std::marker::PhantomData<fn() -> P>,
 }
 
-impl<H, I, R, E, F, S, P> TurnRunner<H, I, R, E, F, S, P>
+impl<H, I, R, E, F, S, P, Q> TurnRunner<H, I, R, E, F, S, P, Q>
 where
-    H: TurnHost<P> + 'static,
+    H: TurnHost<P, Q> + 'static,
     I: IngressPolicy<P> + 'static,
     R: ReplyStore<P> + 'static,
     E: EventSink<P> + 'static,
     F: FailureClassifier + 'static,
     S: Summarizer<P> + 'static,
-    P: Clone + Send + Sync + RequeuePayload + 'static,
+    P: RequeuePayload + Clone + Send + Sync + 'static,
+    Q: TurnQueueItem<P>,
 {
     pub fn new(
         host: Arc<H>,
@@ -388,6 +498,7 @@ where
             active: Mutex::new(HashMap::new()),
             parallel_active: Mutex::new(HashMap::new()),
             next_generation: std::sync::atomic::AtomicU64::new(1),
+            payload: std::marker::PhantomData,
         }
     }
 
@@ -405,8 +516,9 @@ where
             .is_empty()
     }
 
-    /// [`cancel`](Self::cancel), returning the id of every turn it stopped: the
-    /// primary turn first, then each parallel turn.
+    /// Cancel matching active turns and return their request IDs, with the
+    /// primary turn first followed by parallel turns in request-ID order.
+    /// A stale request ID is a no-op and cannot cancel a newer generation.
     pub async fn cancel_requests(
         &self,
         scope: &ScopeKey,
@@ -414,77 +526,38 @@ where
         request_id: Option<&str>,
     ) -> Vec<String> {
         let key = (scope.clone(), thread_id.to_owned());
+        let mut active = self.active.lock().await;
         let mut cancelled = Vec::new();
-        let active = self.active.lock().await;
         if let Some(turn) = active
-            .get(&key)
-            .filter(|turn| request_id.is_none_or(|id| turn.request_id == id))
+            .get_mut(&key)
+            .filter(|turn| turn.cancellable && request_id.is_none_or(|id| turn.request_id == id))
         {
+            turn.cancellable = false;
             turn.queue.clear().await;
             turn.cancel.cancel();
             cancelled.push(turn.request_id.clone());
         }
         drop(active);
         let mut parallel = self.parallel_active.lock().await;
-        let keys: Vec<_> = parallel
-            .keys()
-            .filter(|(owner, thread, req)| {
-                owner == scope && thread == thread_id && request_id.is_none_or(|id| req == id)
+        let mut keys: Vec<_> = parallel
+            .iter()
+            .filter(|((owner, thread, req), turn)| {
+                turn.cancellable
+                    && owner == scope
+                    && thread == thread_id
+                    && request_id.is_none_or(|id| req == id)
             })
-            .cloned()
+            .map(|(key, _)| key.clone())
             .collect();
+        keys.sort_by(|left, right| left.2.cmp(&right.2));
         for key in &keys {
-            if let Some(token) = parallel.remove(key) {
-                token.cancel();
+            if let Some(turn) = parallel.get_mut(key) {
+                turn.cancellable = false;
+                turn.cancel.cancel();
             }
-            self.parallel_queues.lock().await.remove(key);
             cancelled.push(key.2.clone());
         }
         cancelled
-    }
-
-    /// Every turn that currently holds a cancellation slot, primary and parallel.
-    pub async fn live_turns(&self) -> Vec<LiveTurn> {
-        let mut turns: Vec<LiveTurn> = self
-            .active
-            .lock()
-            .await
-            .iter()
-            .map(|((scope, thread_id), turn)| LiveTurn {
-                scope: scope.clone(),
-                thread_id: thread_id.clone(),
-                request_id: turn.request_id.clone(),
-                parallel: false,
-            })
-            .collect();
-        turns.extend(self.parallel_active.lock().await.keys().map(
-            |(scope, thread_id, request_id)| LiveTurn {
-                scope: scope.clone(),
-                thread_id: thread_id.clone(),
-                request_id: request_id.clone(),
-                parallel: true,
-            },
-        ));
-        turns
-    }
-
-    /// Pending items of the thread's active turn queue, oldest first per lane.
-    pub async fn queue_snapshot(
-        &self,
-        scope: &ScopeKey,
-        thread_id: &str,
-    ) -> Vec<(QueueLane, TurnRequest<P>)> {
-        let key = (scope.clone(), thread_id.to_owned());
-        let queue = self
-            .active
-            .lock()
-            .await
-            .get(&key)
-            .map(|turn| Arc::clone(&turn.queue));
-        match queue {
-            Some(queue) => queue.snapshot().await,
-            None => Vec::new(),
-        }
     }
 
     /// Whether the thread owns a primary user-authored turn cancellation slot.
@@ -501,6 +574,46 @@ where
             .await
             .get(&(scope.clone(), thread_id.to_owned()))
             .map(|turn| turn.request_id.clone())
+    }
+
+    /// Snapshot every active primary and parallel turn in deterministic order.
+    /// The result contains identities only; cancellation remains owned by the
+    /// runner and must go through [`Self::cancel_requests`].
+    pub async fn live_turns(&self) -> Vec<LiveTurn> {
+        let mut live = Vec::new();
+        for ((scope, thread_id), turn) in self.active.lock().await.iter() {
+            live.push(LiveTurn {
+                scope: scope.clone(),
+                thread_id: thread_id.clone(),
+                request_id: turn.request_id.clone(),
+                parallel: false,
+            });
+        }
+        for (scope, thread_id, request_id) in self.parallel_active.lock().await.keys() {
+            live.push(LiveTurn {
+                scope: scope.clone(),
+                thread_id: thread_id.clone(),
+                request_id: request_id.clone(),
+                parallel: true,
+            });
+        }
+        live.sort_by(|left, right| {
+            (
+                left.scope.agent_id.as_str(),
+                left.scope.profile_id.as_deref(),
+                left.thread_id.as_str(),
+                left.parallel,
+                left.request_id.as_str(),
+            )
+                .cmp(&(
+                    right.scope.agent_id.as_str(),
+                    right.scope.profile_id.as_deref(),
+                    right.thread_id.as_str(),
+                    right.parallel,
+                    right.request_id.as_str(),
+                ))
+        });
+        live
     }
 
     pub async fn run(&self, request: TurnRequest<P>) -> Result<TurnResult, TurnRunnerError> {
@@ -557,9 +670,9 @@ where
     async fn run_one(
         &self,
         mut request: TurnRequest<P>,
-        reservation: Option<ActiveTurn<P>>,
-        state_out: &mut Option<ActiveTurn<P>>,
-        next_out: &mut Option<(TurnRequest<P>, ActiveTurn<P>)>,
+        reservation: Option<ActiveTurn<P, Q>>,
+        state_out: &mut Option<ActiveTurn<P, Q>>,
+        next_out: &mut Option<(TurnRequest<P>, ActiveTurn<P, Q>)>,
     ) -> Result<TurnResult, TurnRunnerError> {
         let deadline = TurnDeadline::new(request.deadline.or(self.config.deadline));
         let cancellation = reservation
@@ -610,7 +723,10 @@ where
                         request.thread_id.clone(),
                         request.request_id.clone(),
                     ),
-                    cancellation.clone(),
+                    ActiveParallelTurn {
+                        cancel: cancellation.clone(),
+                        cancellable: true,
+                    },
                 );
             } else if let Some(reserved) = reservation.as_ref() {
                 let mut active = self.active.lock().await;
@@ -626,6 +742,7 @@ where
                 let mut state = reserved.clone();
                 state.request_id = request.request_id.clone();
                 state.cancel = cancellation.clone();
+                state.payload.clone_from(&request.payload);
                 active.insert(key.clone(), state.clone());
                 active_generation = Some(state.generation);
                 *state_out = Some(state);
@@ -634,17 +751,22 @@ where
                 if let Some(lane) = queue_lane(request.disposition)
                     && let Some(current) = active.get(&key)
                 {
-                    current.queue.push(lane, request.clone()).await;
+                    current
+                        .queue
+                        .push(lane, Q::from_turn_request(request.clone()))
+                        .await;
                     return Err(TurnRunnerError::Queued);
                 }
                 let queue = Arc::new(RunQueue::new());
                 let state = ActiveTurn {
                     request_id: request.request_id.clone(),
                     cancel: cancellation.clone(),
+                    cancellable: true,
                     generation: self
                         .next_generation
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                     queue: queue.clone(),
+                    payload: request.payload.clone(),
                 };
                 let previous = active.insert(key.clone(), state.clone());
                 active_generation = Some(state.generation);
@@ -776,6 +898,15 @@ where
                 deadline,
             )
             .await;
+        if result.is_ok()
+            && !self
+                .close_cancellation_window(&request, active_generation, &cancellation)
+                .await
+        {
+            self.host.checkin(&request).await;
+            drop(_session_guard);
+            return self.cancel_generation(&request, active_generation).await;
+        }
         self.host.checkin(&request).await;
         drop(_session_guard);
 
@@ -793,13 +924,8 @@ where
                 if !request.host_authored && request.disposition != QueueDisposition::Parallel {
                     let (collected, next) = match active_generation {
                         Some(generation) => {
-                            self.finalize_generation(
-                                &request.scope,
-                                &request.thread_id,
-                                generation,
-                                &request.payload,
-                            )
-                            .await
+                            self.finalize_generation(&request.scope, &request.thread_id, generation)
+                                .await
                         }
                         None => (Vec::new(), None),
                     };
@@ -828,7 +954,7 @@ where
         }
     }
 
-    async fn parallel_queue_for(&self, key: ParallelQueueKey) -> Arc<RunQueue<TurnRequest<P>>> {
+    async fn parallel_queue_for(&self, key: ParallelQueueKey) -> Arc<RunQueue<Q>> {
         let mut queues = self.parallel_queues.lock().await;
         Arc::clone(
             queues
@@ -857,7 +983,7 @@ where
         }
     }
 
-    async fn retire_generation(
+    pub(crate) async fn retire_generation(
         &self,
         request: &TurnRequest<P>,
         generation: Option<u64>,
@@ -877,8 +1003,20 @@ where
         active.remove(&key);
         let mut queued = Vec::new();
         for lane in [QueueLane::Steer, QueueLane::Followup, QueueLane::Collect] {
-            queued.extend(turn.queue.take(lane, QueueMode::All).await);
+            queued.extend(
+                turn.queue
+                    .take(lane, QueueMode::All)
+                    .await
+                    .into_iter()
+                    .map(TurnQueueItem::into_turn_request),
+            );
         }
+        restore_queue_context(
+            &mut queued,
+            &request.scope,
+            &request.thread_id,
+            &turn.payload,
+        );
         queued
     }
 
@@ -919,21 +1057,23 @@ where
         generation: Option<u64>,
     ) -> Result<T, TurnRunnerError> {
         let classification = self.failures.classify_failure(&error);
+        let class = classification.class.clone();
+        let message = classification.message.clone();
         let queued = self.retire_generation(request, generation).await;
         if request.disposition == QueueDisposition::Parallel {
             self.clear_parallel_tracking(request).await;
         }
         for queued_request in queued {
-            let queued_message = format!("queued turn was not run: {}", classification.message);
+            let queued_message = format!("queued turn was not run: {message}");
             let mut queued_classification = classification.clone();
-            queued_classification.message = queued_message.clone();
+            queued_classification.message.clone_from(&queued_message);
             self.events
                 .classified_failure(
                     &queued_request,
                     TerminalEvent::Failed {
                         request_id: queued_request.request_id.clone(),
                         message: queued_message,
-                        class: classification.class.clone(),
+                        class: class.clone(),
                     },
                     queued_classification,
                 )
@@ -944,22 +1084,24 @@ where
                 request,
                 TerminalEvent::Failed {
                     request_id: request.request_id.clone(),
-                    message: classification.message.clone(),
-                    class: classification.class.clone(),
+                    message: message.clone(),
+                    class,
                 },
-                classification.clone(),
+                classification,
             )
             .await;
-        Err(TurnRunnerError::Failed(classification.message))
+        Err(TurnRunnerError::Failed(message))
     }
 
-    async fn finalize_generation(
+    pub(crate) async fn finalize_generation(
         &self,
         scope: &ScopeKey,
         thread_id: &str,
         owner_generation: u64,
-        running: &P,
-    ) -> (Vec<TurnRequest<P>>, Option<(TurnRequest<P>, ActiveTurn<P>)>) {
+    ) -> (
+        Vec<TurnRequest<P>>,
+        Option<(TurnRequest<P>, ActiveTurn<P, Q>)>,
+    ) {
         let key = (scope.clone(), thread_id.to_owned());
         let mut active = self.active.lock().await;
         if active
@@ -971,13 +1113,21 @@ where
         let Some(current) = active.get(&key).cloned() else {
             return (Vec::new(), None);
         };
-        let collected = current.queue.take(QueueLane::Collect, QueueMode::All).await;
+        let mut collected: Vec<TurnRequest<P>> = current
+            .queue
+            .take(QueueLane::Collect, QueueMode::All)
+            .await
+            .into_iter()
+            .map(TurnQueueItem::into_turn_request)
+            .collect();
+        restore_queue_context(&mut collected, scope, thread_id, &current.payload);
         let next = current
             .queue
             .take(QueueLane::Steer, QueueMode::OneAtATime)
             .await
             .into_iter()
-            .next();
+            .next()
+            .map(TurnQueueItem::into_turn_request);
         let next = if next.is_none() {
             current
                 .queue
@@ -985,23 +1135,26 @@ where
                 .await
                 .into_iter()
                 .next()
+                .map(TurnQueueItem::into_turn_request)
         } else {
             next
         };
         if let Some(mut request) = next {
-            // A steer the harness recovered was rebuilt without its scope and
-            // payload metadata; it belongs to this thread and inherits what the
-            // finished turn knew.
-            request.scope = scope.clone();
-            request.thread_id = thread_id.to_owned();
-            request.payload.adopt(running);
+            restore_queue_context(
+                std::slice::from_mut(&mut request),
+                scope,
+                thread_id,
+                &current.payload,
+            );
             let reserved = ActiveTurn {
                 request_id: request.request_id.clone(),
                 cancel: crate::CancellationToken::new(),
+                cancellable: true,
                 generation: self
                     .next_generation
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                 queue: current.queue,
+                payload: request.payload.clone(),
             };
             active.insert(key, reserved.clone());
             (collected, Some((request, reserved)))
@@ -1019,11 +1172,21 @@ where
         thread_id: &str,
         lane: QueueLane,
         mode: QueueMode,
-    ) -> Vec<TurnRequest<P>> {
+    ) -> Vec<Q> {
         let key = (scope.clone(), thread_id.to_owned());
         let active = self.active.lock().await;
         match active.get(&key) {
-            Some(turn) => turn.queue.take(lane, mode).await,
+            Some(turn) => {
+                let mut requests: Vec<TurnRequest<P>> = turn
+                    .queue
+                    .take(lane, mode)
+                    .await
+                    .into_iter()
+                    .map(TurnQueueItem::into_turn_request)
+                    .collect();
+                restore_queue_context(&mut requests, scope, thread_id, &turn.payload);
+                requests.into_iter().map(Q::from_turn_request).collect()
+            }
             None => Vec::new(),
         }
     }
@@ -1039,6 +1202,17 @@ where
                 collects: 0,
                 total: 0,
             },
+        }
+    }
+
+    /// Non-destructively snapshot the active primary turn's host queue items in
+    /// lane order, preserving FIFO order within each lane.
+    pub async fn queue_snapshot(&self, scope: &ScopeKey, thread_id: &str) -> Vec<(QueueLane, Q)> {
+        let key = (scope.clone(), thread_id.to_owned());
+        let active = self.active.lock().await;
+        match active.get(&key) {
+            Some(turn) => turn.queue.snapshot().await,
+            None => Vec::new(),
         }
     }
 
@@ -1079,7 +1253,7 @@ where
         match active.get(&key) {
             Some(turn) => {
                 turn.queue
-                    .remove_where(|turn| turn.request_id == request_id)
+                    .remove_where(|turn| turn.as_turn_request().request_id == request_id)
                     .await
             }
             None => 0,
@@ -1092,7 +1266,7 @@ where
         session: &TurnSession,
         origin: &serde_json::Value,
         cancellation: crate::CancellationToken,
-        queue: Arc<RunQueue<TurnRequest<P>>>,
+        queue: Arc<RunQueue<Q>>,
         deadline: TurnDeadline,
     ) -> Result<TurnResult, String> {
         let (progress_tx, mut progress_rx) = mpsc::channel(32);
@@ -1127,17 +1301,6 @@ where
                 _ = cancellation.cancelled() => {
                     task_cancellation.cancel();
                     self.host.cancel_children(request).await;
-                    if !self.config.cancel_grace.is_zero() {
-                        // Let the host unwind with its token fired; its result
-                        // is discarded either way.
-                        let unwound = tokio::time::timeout(self.config.cancel_grace, &mut run).await;
-                        tracing::debug!(
-                            thread_id = %request.thread_id,
-                            request_id = %request.request_id,
-                            unwound = unwound.is_ok(),
-                            "turn runner: cancelled run left its grace window"
-                        );
-                    }
                     return Err("turn cancelled".into());
                 }
                 _ = async { if let Some(deadline) = deadline.at { tokio::time::sleep_until(deadline).await } else { std::future::pending().await } }, if deadline.at.is_some() => {
@@ -1238,6 +1401,52 @@ where
         {
             active.remove(&key);
         }
+    }
+
+    async fn close_cancellation_window(
+        &self,
+        request: &TurnRequest<P>,
+        generation: Option<u64>,
+        cancellation: &crate::CancellationToken,
+    ) -> bool {
+        if cancellation.is_cancelled() {
+            return false;
+        }
+        if request.host_authored {
+            return true;
+        }
+        if request.disposition == QueueDisposition::Parallel {
+            let key = (
+                request.scope.clone(),
+                request.thread_id.clone(),
+                request.request_id.clone(),
+            );
+            let mut active = self.parallel_active.lock().await;
+            let Some(turn) = active.get_mut(&key) else {
+                return !cancellation.is_cancelled();
+            };
+            if turn.cancel.is_cancelled() {
+                return false;
+            }
+            turn.cancellable = false;
+            return true;
+        }
+        let Some(generation) = generation else {
+            return true;
+        };
+        let key = (request.scope.clone(), request.thread_id.clone());
+        let mut active = self.active.lock().await;
+        let Some(turn) = active
+            .get_mut(&key)
+            .filter(|turn| turn.generation == generation)
+        else {
+            return !cancellation.is_cancelled();
+        };
+        if turn.cancel.is_cancelled() {
+            return false;
+        }
+        turn.cancellable = false;
+        true
     }
 
     async fn clear_parallel_tracking(&self, request: &TurnRequest<P>) {

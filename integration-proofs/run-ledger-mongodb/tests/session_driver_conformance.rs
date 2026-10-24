@@ -6,13 +6,13 @@
 use std::sync::Arc;
 
 use tinyagents_session::{
-    port::{AgentStorageFactory, DriverSessionStores},
+    port::{AgentStorageFactory, ConditionedAgentStorageFactory, DriverSessionStores},
     run_ledger::{AgentRunListRequest, DriverRunLedger, RunLedgerStore},
     testkit::conformance::{
         run_ledger_conformance, session_store_conformance, session_store_isolation_conformance,
     },
 };
-use tinyagents_storage_kit::{Scope, ScopedStorage};
+use tinyagents_storage_kit::{Scope, ScopedStorage, WriteCondition};
 use tinystoragedrivers_api::{DocumentStore, Storage, StorageBackend, StreamStore};
 use tinystoragedrivers_connect::MongoConnection;
 use tinystoragedrivers_document::mongodb::{MongoDocuments, MongoStreams};
@@ -43,13 +43,24 @@ async fn local_connection(label: &str) -> MongoConnection {
         .expect("local MongoDB replica set is reachable")
 }
 
-fn scoped_storage(connection: &MongoConnection, scope: &Scope) -> ScopedStorage {
-    let documents =
-        Arc::new(MongoDocuments::new(connection.clone(), scope.clone())) as Arc<dyn DocumentStore>;
+fn scoped_storage(
+    connection: &MongoConnection,
+    scope: &Scope,
+    condition: Option<&WriteCondition>,
+) -> Result<ScopedStorage, tinystoragedrivers_types::StorageError> {
+    let documents = match condition {
+        Some(condition) => Arc::new(MongoDocuments::conditioned(
+            connection.clone(),
+            scope.clone(),
+            condition.clone(),
+        )?) as Arc<dyn DocumentStore>,
+        None => Arc::new(MongoDocuments::new(connection.clone(), scope.clone()))
+            as Arc<dyn DocumentStore>,
+    };
     let streams =
         Arc::new(MongoStreams::new(connection.clone(), scope.clone())) as Arc<dyn StreamStore>;
     let memory = MemoryBackend::new().for_scope(scope).unwrap();
-    ScopedStorage::new(
+    Ok(ScopedStorage::new(
         Storage::new(
             documents,
             streams,
@@ -59,7 +70,7 @@ fn scoped_storage(connection: &MongoConnection, scope: &Scope) -> ScopedStorage 
             memory.secrets().clone(),
         ),
         scope.clone(),
-    )
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -71,9 +82,17 @@ async fn mongodb_session_store_round_trip_list_delete_and_agent_isolation() {
     let factory_connection = connection.clone();
     let factory: AgentStorageFactory = Arc::new(move |agent_id| {
         let agent_scope = factory_scope.child(agent_id)?;
-        Ok(scoped_storage(&factory_connection, &agent_scope))
+        scoped_storage(&factory_connection, &agent_scope, None)
     });
-    let stores = DriverSessionStores::new(factory).unwrap();
+    let conditioned_scope = scope.clone();
+    let conditioned_connection = connection.clone();
+    let conditioned: ConditionedAgentStorageFactory = Arc::new(move |agent_id, condition| {
+        let agent_scope = conditioned_scope.child(agent_id)?;
+        scoped_storage(&conditioned_connection, &agent_scope, Some(condition))
+    });
+    let stores = DriverSessionStores::new(factory)
+        .unwrap()
+        .with_conditioned_storage_factory(conditioned);
     session_store_conformance(&stores).await;
     session_store_isolation_conformance(&stores).await;
 }
@@ -83,11 +102,11 @@ async fn mongodb_session_store_round_trip_list_delete_and_agent_isolation() {
 async fn mongodb_run_ledger_contract_and_scope_isolation() {
     let scope = Scope::new("run_ledger_conformance").unwrap();
     let connection = local_connection("run_ledger").await;
-    let storage = scoped_storage(&connection, &scope);
+    let storage = scoped_storage(&connection, &scope, None).unwrap();
     let ledger = Arc::new(DriverRunLedger::new(storage)) as Arc<dyn RunLedgerStore>;
     run_ledger_conformance(ledger.clone()).await;
     let peer_scope = Scope::new("run_ledger_peer").unwrap();
-    let peer_storage = scoped_storage(&connection, &peer_scope);
+    let peer_storage = scoped_storage(&connection, &peer_scope, None).unwrap();
     let peer = Arc::new(DriverRunLedger::new(peer_storage)) as Arc<dyn RunLedgerStore>;
     assert!(
         peer.list_agent_runs(&AgentRunListRequest::default())

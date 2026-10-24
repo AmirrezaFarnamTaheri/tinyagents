@@ -10,7 +10,7 @@
 Parent module: [Registry](README.md).
 
 The registry module is the coordination layer for TinyAgents. It registers
-agents, graphs, tools, models, stores, middleware, and listeners, then provides
+agents, tools, models, stores, middleware, and listeners, then provides
 an event-friendly runtime surface for external systems such as web UIs, CLIs,
 logs, tests, and distributed supervisors.
 
@@ -42,7 +42,6 @@ Primary code references:
 ## Responsibilities
 
 - Register named agents.
-- Register compiled graphs.
 - Register tools.
 - Register model providers.
 - Register model aliases, resolver policies, and agent model defaults.
@@ -53,16 +52,12 @@ Primary code references:
 - Validate duplicate or incompatible registrations.
 - Emit registration, lifecycle, and execution events.
 - Route events to outside listeners.
-- Support parallel agent and graph execution with correlation ids.
 - Provide a test recorder for event assertions.
 
 ## Non-Responsibilities
 
-- It does not execute graph nodes itself.
 - It does not call LLM providers itself.
 - It does not validate tool arguments beyond registry-level schema checks.
-- It does not persist checkpoints unless a checkpointer is registered as a
-  component.
 - It does not force a singleton global registry.
 
 ## Package Shape
@@ -77,7 +72,6 @@ crates/tinyagents-registry/src/
   component.rs
   discovery.rs
   events.rs
-  graph.rs
   listener.rs
   model.rs
   names.rs
@@ -96,7 +90,6 @@ The registry owns named component handles:
 ```rust
 pub struct Registry<State, Ctx = ()> {
     agents: AgentRegistry<State, Ctx>,
-    graphs: GraphRegistry<State, Ctx>,
     models: ModelRegistry<State, Ctx>,
     tools: ToolRegistry<State, Ctx>,
     stores: StoreRegistry,
@@ -115,7 +108,6 @@ pub type SharedRegistry<State, Ctx = ()> = Arc<Registry<State, Ctx>>;
 The registry should be passable into:
 
 - harness runs
-- graph runs
 - tool calls
 - web server request handlers
 - background workers
@@ -132,7 +124,7 @@ ComponentRef
   -> component-owned runtime events
 ```
 
-Registry operations emit registry lifecycle events. Model, tool, graph, and
+Registry operations emit registry lifecycle events. Model, tool, and
 agent execution spans are emitted by the component runtimes.
 
 ## Component Identity
@@ -149,7 +141,6 @@ pub struct ComponentId {
 
 pub enum ComponentKind {
     Agent,
-    Graph,
     Model,
     Tool,
     Store,
@@ -206,7 +197,6 @@ pub struct ComponentMetadata {
 Examples:
 
 - a tool exposes input/output schema
-- a graph exposes node and edge summary
 - an agent exposes model name and tool names
 - a listener exposes supported event filters
 
@@ -248,8 +238,7 @@ Use direct `Arc<dyn Trait>` entries for simple tools and stores.
 
 ## Agent Registration
 
-Agents are executable harness configurations. They may be simple model-tool loops
-or wrappers around compiled graphs.
+Agents are executable harness configurations, typically model-tool loops.
 
 ```rust
 #[async_trait]
@@ -308,48 +297,7 @@ The registry stores these declarations; the harness applies them during a run.
 This keeps model selection inspectable without making the registry call model
 providers.
 
-## Graph Registration
-
-Graphs are compiled graph runtimes.
-
-```rust
-pub struct RegisteredGraph<State, Ctx = ()> {
-    pub metadata: ComponentMetadata,
-    pub graph: Arc<CompiledGraph<State, Ctx>>,
-}
-```
-
-Registration:
-
-```rust
-registry
-    .graphs()
-    .register("support_flow", compiled_graph)
-    .await?;
-```
-
-Graph metadata should include:
-
-- node ids
-- edge count
-- route names
-- start node
-- whether checkpoints are required
-- whether interrupts are possible
 - declared input/output schemas when available
-
-Graph events:
-
-- `graph.registered`
-- `graph.started`
-- `graph.step_started`
-- `graph.node_started`
-- `graph.node_completed`
-- `graph.route_selected`
-- `graph.interrupted`
-- `graph.checkpoint_saved`
-- `graph.completed`
-- `graph.failed`
 
 ## Tool Registration
 
@@ -471,6 +419,6 @@ state, events, checkpoints, usage, and cost rows.
 
 ---
 
-Continues in [`events.md`](events.md) (store/checkpointer registration, the
+Continues in [`events.md`](events.md) (store registration, the
 event model, event bus, and filters) and [`operations.md`](operations.md)
 (lifecycle, discovery, error model, testkit, and milestones).

@@ -59,7 +59,7 @@ pub use drivers::{
 };
 #[cfg(any(test, feature = "testkit"))]
 pub use memory::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
-pub use types::AgentStores;
+pub use types::{AgentStores, SessionStoreLease, SessionStoreLeaseError};
 
 pub use tinyagents_harness::store::{AppendStore, Store};
 
@@ -69,6 +69,23 @@ pub use tinyagents_harness::store::{AppendStore, Store};
 pub type AgentStorageFactory = Arc<
     dyn Fn(
             &str,
+        )
+            -> Result<tinyagents_storage_kit::ScopedStorage, tinystoragedrivers_types::StorageError>
+        + Send
+        + Sync,
+>;
+
+/// Host-owned opener for storage conditioned on an exact durable lease.
+///
+/// The session driver uses this only for the first entry written to a
+/// reserved transcript generation. The returned scope must be the same
+/// agent scope supplied by [`AgentStorageFactory`], and the backend must
+/// enforce the condition atomically on every mutation. Backends that cannot
+/// provide that guarantee must return an error.
+pub type ConditionedAgentStorageFactory = Arc<
+    dyn Fn(
+            &str,
+            &tinyagents_storage_kit::WriteCondition,
         )
             -> Result<tinyagents_storage_kit::ScopedStorage, tinystoragedrivers_types::StorageError>
         + Send
@@ -99,6 +116,15 @@ pub trait SessionStoreProvider: Send + Sync {
         agent_id: &str,
     ) -> Result<AgentStores, tinystoragedrivers_types::StorageError> {
         Ok(self.for_agent(agent_id))
+    }
+
+    /// Opens stores whose scoped storage remains pinned to this provider's
+    /// current binding for the lifetime of the returned handle.
+    fn lease_for_agent(
+        &self,
+        _agent_id: &str,
+    ) -> Result<SessionStoreLease, SessionStoreLeaseError> {
+        Err(SessionStoreLeaseError::Unsupported)
     }
 
     /// Optionally create an independent actor provider over a host-admitted backend.
@@ -304,6 +330,10 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
         agent_id: &str,
     ) -> Result<AgentStores, tinystoragedrivers_types::StorageError> {
         (**self).try_for_agent(agent_id)
+    }
+
+    fn lease_for_agent(&self, agent_id: &str) -> Result<SessionStoreLease, SessionStoreLeaseError> {
+        (**self).lease_for_agent(agent_id)
     }
 
     fn bind_actor(

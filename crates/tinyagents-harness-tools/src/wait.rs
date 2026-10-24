@@ -61,7 +61,7 @@ impl Tool for WaitTool {
     }
 
     fn permission_level(&self) -> PermissionLevel {
-        PermissionLevel::Execute
+        PermissionLevel::None
     }
 
     fn timeout_policy(&self, args: &serde_json::Value) -> ToolTimeout {
@@ -90,7 +90,7 @@ impl Tool for WaitLoopTool {
     }
 
     fn permission_level(&self) -> PermissionLevel {
-        PermissionLevel::Execute
+        PermissionLevel::None
     }
 
     fn timeout_policy(&self, args: &serde_json::Value) -> ToolTimeout {

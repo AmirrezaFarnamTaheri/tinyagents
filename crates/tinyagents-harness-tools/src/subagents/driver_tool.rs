@@ -1,8 +1,9 @@
-//! `SubAgentTool` adapter for the host-planned [`SubagentDriver`] lifecycle.
+//! Async tool adapter for the host-planned [`SubagentDriver`] lifecycle.
 //!
 //! The request factory is host supplied: it owns authorization, child context
-//! construction, durable task identity, and opaque planner options. The driver
-//! then remains the only path that plans, executes, and persists the run.
+//! construction, durable task identity, and opaque planner options. Every
+//! accepted call starts a background job and returns its status immediately;
+//! waiting and completion delivery remain separate host operations.
 
 use std::future::Future;
 use std::marker::PhantomData;
@@ -17,9 +18,9 @@ use tinyagents_harness::tool::ToolDispatch;
 use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope, ToolTimeout};
 
 use tinyagents_orchestration::subagent::DriverJobRegistration;
-use tinyagents_orchestration::subagent::InlineJobGuard;
+use tinyagents_orchestration::subagent::JobSettleGuard;
 use tinyagents_orchestration::subagent::{
-    SubAgentJobRegistry, SubagentDriver, SubagentError, SubagentOutcomeKind, SubagentRequest,
+    SubAgentJobRegistry, SubagentDriver, SubagentError, SubagentRequest,
 };
 
 fn status_tool_result(
@@ -59,10 +60,9 @@ type OwnerScope = dyn Fn(u64) -> String + Send + Sync;
 /// A typed-parent dispatcher that runs through [`SubagentDriver`].
 ///
 /// Hosts construct the validated request with `request_factory`; this keeps
-/// authorization and execution policy in the host planner/executor. A call
-/// requesting background mode is detached only when `delivery_target` returns
-/// a target. Otherwise the child runs inline and the result is returned to the
-/// caller.
+/// authorization and execution policy in the host planner/executor. Every call
+/// starts a detached job and returns its task reference immediately. The
+/// optional delivery target controls whether host completion callbacks run.
 pub struct DriverSubAgentTool<State, Ctx: Send + 'static, H: Send + 'static> {
     name: String,
     description: String,
@@ -105,14 +105,9 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             parameters: json!({
                 "type": "object",
                 "required": ["input"],
-                "properties": {
-                    "input": { "type": "string" },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["background", "inline"],
-                        "description": "Background returns a task id when a delivery target exists; otherwise it runs inline."
-                    }
-                }
+            "properties": {
+                "input": { "type": "string" }
+            }
             }),
             driver,
             request_factory: Arc::new(request_factory),
@@ -231,28 +226,12 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         self
     }
 
-    fn requested_mode(
-        args: &Value,
-    ) -> Result<tinyagents_orchestration::subagent::SubAgentMode, String> {
-        match args.get("mode") {
-            None | Some(Value::Null) => {
-                Ok(tinyagents_orchestration::subagent::SubAgentMode::Background)
-            }
-            Some(Value::String(mode)) if mode == "background" => {
-                Ok(tinyagents_orchestration::subagent::SubAgentMode::Background)
-            }
-            Some(Value::String(mode)) if mode == "inline" => {
-                Ok(tinyagents_orchestration::subagent::SubAgentMode::Inline)
-            }
-            Some(_) => Err("`mode` must be \"background\" or \"inline\"".into()),
-        }
-    }
-
     async fn execute_request(
         &self,
         mut request: SubagentRequest<Ctx, H>,
         target: Option<String>,
         owner: String,
+        parent_run_id: tinyagents_harness::ids::RunId,
     ) -> anyhow::Result<ToolResult>
     where
         Ctx: Send + 'static,
@@ -261,16 +240,20 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         let task_id = request.task_id().to_owned();
         let bridged_job = if let Some(jobs) = &self.jobs {
             let continuing = request.resume().is_some();
-            let (id, steering, run_queue, cancellation, created) =
-                jobs.register_driver_job(DriverJobRegistration {
-                    key: request.task_key().clone(),
-                    agent: request.target().unwrap_or(&self.name).to_owned(),
-                    owner: owner.clone(),
-                    cancellation: request.run_context().cancellation.clone(),
-                    steering: request.run_context().steering.clone(),
-                    run_queue: request.run_context().run_queue.clone(),
-                    continuing,
-                })?;
+            let (id, steering, run_queue, cancellation, created) = jobs
+                .register_driver_job_with_parent_run(
+                    DriverJobRegistration {
+                        key: request.task_key().clone(),
+                        agent: request.target().unwrap_or(&self.name).to_owned(),
+                        owner: owner.clone(),
+                        workspace: request.run_context().workspace.clone(),
+                        cancellation: request.run_context().cancellation.clone(),
+                        steering: request.run_context().steering.clone(),
+                        run_queue: request.run_context().run_queue.clone(),
+                        continuing,
+                    },
+                    parent_run_id.clone(),
+                )?;
             if created {
                 jobs.mark_running(&id);
             }
@@ -286,14 +269,11 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         let job_guard = bridged_job
             .as_ref()
             .filter(|(_, _, created)| *created)
-            .map(|(jobs, id, _)| InlineJobGuard::new(jobs.clone(), id.clone()));
+            .map(|(jobs, id, _)| JobSettleGuard::new(jobs.clone(), id.clone()));
         if let Some((jobs, id, false)) = &bridged_job {
-            let job = if target.is_some() {
-                jobs.get(id.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("registered subagent job disappeared"))?
-            } else {
-                jobs.wait_owned(id.as_str(), &owner).await?
-            };
+            let job = jobs
+                .get(id.as_str())
+                .ok_or_else(|| anyhow::anyhow!("registered subagent job disappeared"))?;
             let status = match job.status {
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Queued => "queued",
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Running => "running",
@@ -312,97 +292,68 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                 job.error,
             ));
         }
-        if let Some(target) = target {
-            let cancellation = request.run_context().cancellation.clone();
-            let driver = Arc::clone(&self.driver);
-            let completion = self.completion.clone();
-            let async_completion = self.async_completion.clone();
-            let detached_task_id = task_id.clone();
-            let completion_target = target.clone();
-            let bridge = bridged_job.clone();
-            let mut job_guard = job_guard;
-            tokio::spawn(async move {
-                match driver.run(request, cancellation).await {
-                    Ok(result) => {
-                        if result.disposition
-                            != tinyagents_orchestration::subagent::SubagentPersistenceDisposition::ObserverCancelled
-                            && let Some(completion) = async_completion
-                        {
-                            completion(completion_target.clone(), Ok(result.clone())).await;
-                        }
-                        if let Some((jobs, id, _)) = &bridge {
-                            jobs.mark_driver_result(id, Ok(result.outcome.clone()));
-                        }
-                        if let Some(guard) = &mut job_guard {
-                            guard.disarm();
-                        }
-                        if result.should_emit_host_effects()
-                            && let Some(completion) = completion
-                        {
-                            completion(&completion_target, Ok(result.outcome));
-                        }
-                    }
-                    Err(error) => {
-                        let error = error.to_string();
-                        if let Some(completion) = async_completion {
-                            completion(completion_target.clone(), Err(error.clone())).await;
-                        }
-                        if let Some((jobs, id, _)) = &bridge {
-                            jobs.mark_driver_result(id, Err(error.clone()));
-                        }
-                        if let Some(guard) = &mut job_guard {
-                            guard.disarm();
-                        }
-                        if let Some(completion) = completion {
-                            completion(&completion_target, Err(error.clone()));
-                        }
-                        tracing::error!(task_id = %detached_task_id, error, "driver-backed subagent failed");
-                    }
-                }
-            });
-            return Ok(ToolResult::json(json!({
-                "task_id": public_task_id,
-                "status": "running",
-                "delivery_target": target,
-            })));
-        }
 
         let cancellation = request.run_context().cancellation.clone();
+        let driver = Arc::clone(&self.driver);
+        let completion = self.completion.clone();
+        let async_completion = self.async_completion.clone();
+        let detached_task_id = task_id.clone();
+        let bridge = bridged_job.clone();
+        let callback_target = target.clone();
         let mut job_guard = job_guard;
-        match self.driver.run(request, cancellation).await {
-            Ok(result) => {
-                let outcome = result.outcome;
-                if let Some((jobs, id, _)) = &bridged_job {
-                    jobs.mark_driver_result(id, Ok(outcome.clone()));
+        tokio::spawn(async move {
+            let attempt_bridge = bridge.clone();
+            let attempt_observer = move |run_id: &tinyagents_harness::ids::RunId| {
+                if let Some((jobs, id, _)) = &attempt_bridge {
+                    jobs.set_attempt_run_id(id, run_id.as_str());
                 }
-                if let Some(guard) = &mut job_guard {
-                    guard.disarm();
-                }
-                let (status, error) = match &outcome.status {
-                    SubagentOutcomeKind::Completed => ("completed", None),
-                    SubagentOutcomeKind::AwaitingInput(_) => ("awaiting_input", None),
-                    SubagentOutcomeKind::Incomplete(incomplete) => {
-                        ("incomplete", Some(incomplete.reason.clone()))
+            };
+            match driver
+                .run_with_attempt_observer(request, cancellation, attempt_observer)
+                .await
+            {
+                Ok(result) => {
+                    if result.disposition
+                        != tinyagents_orchestration::subagent::SubagentPersistenceDisposition::ObserverCancelled
+                        && let (Some(target), Some(callback)) = (&callback_target, &async_completion)
+                    {
+                        callback(target.clone(), Ok(result.clone())).await;
                     }
-                    SubagentOutcomeKind::Cancelled => ("cancelled", Some("cancelled".into())),
-                };
-                Ok(status_tool_result(
-                    public_task_id,
-                    status,
-                    Some(outcome.output),
-                    error,
-                ))
-            }
-            Err(error) => {
-                if let Some((jobs, id, _)) = &bridged_job {
-                    jobs.mark_driver_result(id, Err(error.to_string()));
+                    if let Some((jobs, id, _)) = &bridge {
+                        jobs.mark_driver_result(id, Ok(result.outcome.clone()));
+                    }
+                    if let Some(guard) = &mut job_guard {
+                        guard.disarm();
+                    }
+                    if result.should_emit_host_effects()
+                        && let (Some(target), Some(callback)) = (&callback_target, &completion)
+                    {
+                        callback(target, Ok(result.outcome));
+                    }
                 }
-                if let Some(guard) = &mut job_guard {
-                    guard.disarm();
+                Err(error) => {
+                    let error = error.to_string();
+                    if let (Some(target), Some(callback)) = (&callback_target, &async_completion) {
+                        callback(target.clone(), Err(error.clone())).await;
+                    }
+                    if let Some((jobs, id, _)) = &bridge {
+                        jobs.mark_driver_result(id, Err(error.clone()));
+                    }
+                    if let Some(guard) = &mut job_guard {
+                        guard.disarm();
+                    }
+                    if let (Some(target), Some(callback)) = (&callback_target, &completion) {
+                        callback(target, Err(error.clone()));
+                    }
+                    tracing::error!(task_id = %detached_task_id, error, "driver-backed subagent failed");
                 }
-                Ok(ToolResult::error(format!("subagent driver: {error}")))
             }
+        });
+        let mut response = json!({ "task_id": public_task_id, "status": "running" });
+        if let Some(target) = target {
+            response["delivery_target"] = Value::String(target);
         }
+        Ok(ToolResult::json(response))
     }
 }
 
@@ -437,21 +388,18 @@ where
         _options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
     ) -> anyhow::Result<ToolResult> {
-        let requested = match Self::requested_mode(&arguments) {
-            Ok(mode) => mode,
-            Err(error) => return Ok(ToolResult::error(error)),
-        };
         let request = match (self.request_factory)(state, parent, &arguments, &call_id) {
             Ok(request) => request,
             Err(error) => return Ok(ToolResult::error(format!("subagent request: {error}"))),
         };
-        let target = if requested == tinyagents_orchestration::subagent::SubAgentMode::Background {
-            (self.delivery_target)(&request)
-        } else {
-            None
-        };
-        self.execute_request(request, target, (self.owner_scope)(parent.instance_id()))
-            .await
+        let target = (self.delivery_target)(&request);
+        self.execute_request(
+            request,
+            target,
+            (self.owner_scope)(parent.instance_id()),
+            parent.run_id().clone(),
+        )
+        .await
     }
 }
 

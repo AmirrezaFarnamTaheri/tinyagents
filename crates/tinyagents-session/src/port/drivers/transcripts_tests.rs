@@ -1,7 +1,8 @@
 use super::*;
 use crate::testkit::MemoryStorage;
 use crate::testkit::conformance::transcript_history_conformance;
-use tinyagents_storage_kit::{Precondition, Scope, WriteOptions};
+use tinyagents_storage_kit::{Precondition, Scope, WriteCondition, WriteOptions};
+use tinystoragedrivers_types::{Filter, Query, Sort};
 
 pub(in crate::port::drivers) fn meta(thread_id: &str) -> TranscriptMeta {
     let mut meta = discovered_seed("planner");
@@ -17,18 +18,58 @@ fn message(role: &str, content: &str) -> TranscriptMessage {
     serde_json::from_value(json!({ "role": role, "content": content })).unwrap()
 }
 
-fn docs() -> Arc<dyn DocumentStore> {
-    let storage = MemoryStorage::new();
-    Arc::clone(
-        storage
-            .for_scope(&Scope::new("local").unwrap())
-            .unwrap()
-            .documents(),
-    )
+struct TestDocs {
+    docs: Arc<dyn DocumentStore>,
+    connection: tinystoragedrivers_connect::sqlite::SqliteConnection,
+    scope: Scope,
+    _directory: tempfile::TempDir,
 }
 
-fn locator(docs: &Arc<dyn DocumentStore>) -> DriverTranscriptLocator {
-    DriverTranscriptLocator::new(Arc::clone(docs), Blocking::new().unwrap(), "memory://test")
+impl std::ops::Deref for TestDocs {
+    type Target = Arc<dyn DocumentStore>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.docs
+    }
+}
+
+fn docs() -> TestDocs {
+    use tinystoragedrivers_connect::sqlite::SqliteConnection;
+    use tinystoragedrivers_document::sqlite::SqliteDocuments;
+
+    let directory = tempfile::tempdir().unwrap();
+    let connection = SqliteConnection::open(directory.path().join("transcripts.db")).unwrap();
+    let scope = Scope::new("local").unwrap();
+    let docs =
+        Arc::new(SqliteDocuments::new(connection.clone(), scope.clone())) as Arc<dyn DocumentStore>;
+    TestDocs {
+        docs,
+        connection,
+        scope,
+        _directory: directory,
+    }
+}
+
+fn locator(docs: &TestDocs) -> DriverTranscriptLocator {
+    use tinystoragedrivers_document::sqlite::SqliteDocuments;
+
+    let connection = docs.connection.clone();
+    let scope = docs.scope.clone();
+    let opener: ConditionedEntryOpener = Arc::new(move |condition| {
+        Ok(Arc::new(SqliteDocuments::conditioned(
+            connection.clone(),
+            scope.clone(),
+            condition.clone(),
+        )) as Arc<dyn DocumentStore>)
+    });
+    DriverTranscriptLocator::new_with_conditioned_entry_opener(
+        Arc::clone(&docs.docs),
+        Blocking::new().unwrap(),
+        "memory://test",
+        tinyagents_harness::store::SchemaAdmission::Declare,
+        docs.scope.clone(),
+        opener,
+    )
 }
 
 /// Lets the reservation of `stem` lapse, as if its owner stopped long ago.
@@ -95,11 +136,106 @@ fn on_bridge<T: Send + 'static>(
     Blocking::new().unwrap().run(future).unwrap().unwrap()
 }
 
+/// Expires and takes over a reserved successor while the old handle is
+/// opening its conditioned entry store, after claim and immediately before
+/// the first insert.
+fn take_over_reservation(docs: Arc<dyn DocumentStore>, stem: String) {
+    on_bridge(async move {
+        let id = Key::of(["session", stem.as_str()])?;
+        let lease = docs
+            .get("tsd.leases", id.as_str())
+            .await?
+            .expect("successor reservation exists");
+        let mut body = lease.doc;
+        body["expires_ms"] = json!(0);
+        docs.put(
+            "tsd.leases",
+            id.as_str(),
+            body,
+            Precondition::Version(lease.version),
+        )
+        .await?;
+        Leases::new(&docs)
+            .acquire("session", &stem, "replacement-holder", 30_000)
+            .await?
+            .expect("expired reservation can be taken over");
+        Ok(())
+    });
+}
+
 #[test]
 fn a_handle_meets_the_transcript_history_contract() {
     let docs = docs();
     let history = locator(&docs).open_stem("contract", meta("t")).unwrap();
     transcript_history_conformance(history.as_ref());
+}
+
+#[test]
+fn a_reserved_generation_rejects_entry_insert_after_lease_takeover() {
+    use tinystoragedrivers_connect::sqlite::SqliteConnection;
+    use tinystoragedrivers_document::sqlite::SqliteDocuments;
+
+    let directory = tempfile::tempdir().unwrap();
+    let connection = SqliteConnection::open(directory.path().join("transcripts.db")).unwrap();
+    let scope = Scope::new("local").unwrap();
+    let base =
+        Arc::new(SqliteDocuments::new(connection.clone(), scope.clone())) as Arc<dyn DocumentStore>;
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (conditioned_open_tx, conditioned_open_rx) = std::sync::mpsc::channel();
+    let (takeover_done_tx, takeover_done_rx) = std::sync::mpsc::channel();
+    let takeover_done_rx = std::sync::Mutex::new(takeover_done_rx);
+    let opener_scope = scope.clone();
+    let opener: ConditionedEntryOpener = {
+        let armed = Arc::clone(&armed);
+        Arc::new(move |condition: &WriteCondition| {
+            if armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                conditioned_open_tx.send(()).unwrap();
+                takeover_done_rx.lock().unwrap().recv().unwrap();
+            }
+            Ok(Arc::new(SqliteDocuments::conditioned(
+                connection.clone(),
+                opener_scope.clone(),
+                condition.clone(),
+            )) as Arc<dyn DocumentStore>)
+        })
+    };
+    let locator = DriverTranscriptLocator::new_with_conditioned_entry_opener(
+        Arc::clone(&base),
+        Blocking::new().unwrap(),
+        "sqlite://transcript-reservation-race",
+        tinyagents_harness::store::SchemaAdmission::Declare,
+        scope,
+        opener,
+    );
+    let parent = SessionRef::scoped("reservation-race", "planner");
+    let (successor, history) = locator
+        .begin_generation(&parent, meta("reservation-race"))
+        .unwrap();
+    let stem = session_stem(&successor);
+    armed.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let writer = std::thread::spawn(move || {
+        let rows = vec![message("user", "first successor write")];
+        history.append_turn(turn(&[], &rows, &meta("reservation-race")))
+    });
+    conditioned_open_rx.recv().unwrap();
+    take_over_reservation(Arc::clone(&base), stem.clone());
+    takeover_done_tx.send(()).unwrap();
+    let result = writer.join().unwrap();
+
+    assert!(
+        result.is_err(),
+        "the old reservation holder must not insert after another holder takes over"
+    );
+    assert_eq!(
+        entries(&base, &stem).len(),
+        0,
+        "the stale insert must leave no entry"
+    );
+    assert!(
+        reservation_epoch(&base, &stem) > 1,
+        "the test took over the lease"
+    );
 }
 
 #[test]

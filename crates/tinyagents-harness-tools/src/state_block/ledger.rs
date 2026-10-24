@@ -123,17 +123,45 @@ const SEARCH_COMMANDS: &[&str] = &[
 /// stderr, from a search command or from a compound
 /// command (`;`, `&&`, `|`, or several lines) whose last step is usually such a probe. Those are
 /// not worth a line in the block; a failure that explains itself on stderr (a
-/// traceback), a 127 or a non-search command still is.
+/// traceback), a compound command that printed to stdout and whose last step
+/// is not a search (`cd app && pytest -q`), a 127 or a non-search command still is.
 fn is_search_miss(call: &CallRecord, output: &str) -> bool {
     let Some(command) = call.command.as_deref() else {
         return false;
     };
-    if !matches!(exit_code(output), Some(1 | 2 | 141)) || stderr_line(output).is_some() {
+    let code = exit_code(output);
+    if !matches!(code, Some(1 | 2 | 141)) || stderr_line(output).is_some() {
         return false;
     }
+    let is_search = |step: &str| {
+        step.split_whitespace()
+            .next()
+            .map(executable_name)
+            .is_some_and(|word| SEARCH_COMMANDS.contains(&word.as_str()))
+    };
     let compound = command.trim().contains(['\n', ';', '|']) || command.contains("&&");
-    let first = command.split_whitespace().next().map(executable_name);
-    compound || first.is_some_and(|word| SEARCH_COMMANDS.contains(&word.as_str()))
+    if !compound {
+        return is_search(command);
+    }
+    // A compound command that printed to stdout and ended in something other
+    // than a probe (`cd app && pytest -q`) failed for real.
+    let last_step = command
+        .rsplit(['\n', ';', '|', '&'])
+        .map(str::trim)
+        .find(|step| !step.is_empty());
+    code == Some(141) || !printed_stdout(output) || last_step.is_some_and(is_search)
+}
+
+/// Whether the output's `[stdout]` section (up to any `[stderr]` marker) has
+/// a non-empty line. Unlike [`section_line`], a line that starts with `[`
+/// counts: test runners print `[FAIL] login`.
+fn printed_stdout(output: &str) -> bool {
+    output.split_once("[stdout]").is_some_and(|(_, rest)| {
+        let stdout = rest
+            .split_once("[stderr]")
+            .map_or(rest, |(stdout, _)| stdout);
+        stdout.lines().any(|line| !line.trim().is_empty())
+    })
 }
 
 /// Drops failures older than the horizon.
@@ -200,7 +228,12 @@ pub(super) fn error_line(output: &str) -> String {
 
 /// The first non-empty line of the output's `[stderr]` section.
 fn stderr_line(output: &str) -> Option<&str> {
-    output.split_once("[stderr]").and_then(|(_, rest)| {
+    section_line(output, "[stderr]")
+}
+
+/// The first non-empty line of the output's `marker` section.
+fn section_line<'a>(output: &'a str, marker: &str) -> Option<&'a str> {
+    output.split_once(marker).and_then(|(_, rest)| {
         rest.lines()
             .map(str::trim)
             .find(|line| !line.is_empty() && !line.starts_with('['))

@@ -41,8 +41,10 @@ pub(crate) fn attachment_stash_spec() -> CollectionSpec {
 }
 
 /// The harness's storage declaration and the steps that bring its v1 names
-/// and shapes forward. Harness open runs this owner-local migration against
-/// the already-bound scope before returning the handle.
+/// and shapes forward. [`open_storage`] runs this owner-local migration
+/// against the already-bound scope; the stores' `open` constructors
+/// (`DriverStatusStore`, `DriverEmbeddingCache`, `BlobAttachmentStash`) call
+/// it before returning the handle.
 ///
 /// | v1 | v2 |
 /// |---|---|
@@ -54,7 +56,7 @@ pub(crate) fn attachment_stash_spec() -> CollectionSpec {
 ///
 /// The key-value stores (`harness_store`, `harness_namespaced_store`,
 /// `harness_response_cache`) live in `tsd.kv`, which `tsd` owns, so a document
-/// step cannot write them: the host calls [`import_legacy_kv`] for each.
+/// step cannot write them: [`open_storage`] calls [`import_legacy_kv`] for each.
 ///
 /// The journal entries drop the run id, root run id and event id (see
 /// `HarnessEventJournal::seal_run` for sealing). The host seals a run's journal
@@ -103,33 +105,39 @@ pub fn collections() -> Vec<CollectionSpec> {
 }
 
 /// Open harness storage for one scope, declaring its collections and applying
-/// the harness-owned migrations before returning the scope-bound ports.
+/// the harness-owned migrations before returning the scope-bound ports. After
+/// the first success for a scope, later calls in this process skip the work.
 pub async fn open_storage(
     storage: ScopedStorage,
 ) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
     let owned_storage = storage.clone();
-    tinyagents_storage_kit::with_migration_lease(&storage, "harness", move |lease| async move {
-        let storage = owned_storage;
-        let registry = Registry::compose([storage_schema()])?;
-        for spec in collections() {
-            storage.documents().ensure_collection(&spec).await?;
-        }
-        storage
-            .documents()
-            .ensure_collection(&tinyagents_storage_kit::primitives::kv_collection_spec())
-            .await?;
-        registry.migrate(&storage, &MigrateOptions::new()).await?;
-        lease.renew().await?;
-        for (collection, kind) in [
-            ("harness_store", LegacyKv::Flat),
-            ("harness_namespaced_store", LegacyKv::Namespaced),
-            ("harness_response_cache", LegacyKv::ResponseCache),
-        ] {
-            import_legacy_kv_with_lease(&storage, "harness", collection, kind, &lease).await?;
-        }
-        Ok(storage)
-    })
-    .await
+    tinyagents_storage_kit::with_migration_lease_once(
+        &storage,
+        "harness",
+        move |lease| async move {
+            let storage = owned_storage;
+            let registry = Registry::compose([storage_schema()])?;
+            for spec in collections() {
+                storage.documents().ensure_collection(&spec).await?;
+            }
+            storage
+                .documents()
+                .ensure_collection(&tinyagents_storage_kit::primitives::kv_collection_spec())
+                .await?;
+            registry.migrate(&storage, &MigrateOptions::new()).await?;
+            lease.renew().await?;
+            for (collection, kind) in [
+                ("harness_store", LegacyKv::Flat),
+                ("harness_namespaced_store", LegacyKv::Namespaced),
+                ("harness_response_cache", LegacyKv::ResponseCache),
+            ] {
+                import_legacy_kv_with_lease(&storage, "harness", collection, kind, &lease).await?;
+            }
+            Ok(())
+        },
+    )
+    .await?;
+    Ok(storage)
 }
 
 const BLOB_STEP_IDS: [&str; 5] = [
