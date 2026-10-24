@@ -13,6 +13,7 @@
 //! `orchestration -> {harness, session, tasks, storage ports}`. Lower-level
 //! crates never depend on this composition layer.
 
+pub mod run_progress_ledger;
 pub mod steering;
 pub mod subagent;
 
