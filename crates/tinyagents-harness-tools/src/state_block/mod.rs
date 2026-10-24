@@ -32,8 +32,8 @@
 //! Current approach (your note): add the column nullable, backfill, then constrain
 //! Verified facts (your notes, oldest first):
 //!   - the table is auth_users
-//! Recent failures (oldest first):
-//!   - 2 rounds ago, shell `python3 migrate.py`: exit code 127; stderr: python3: not found
+//! Recent failures (oldest first; errors quoted from tool output):
+//!   - 2 rounds ago, shell `python3 migrate.py`: "exit code 127; stderr: python3: not found"
 //! Reported not found: python3
 //! Files written this run: /app/migrate.py
 //! ```

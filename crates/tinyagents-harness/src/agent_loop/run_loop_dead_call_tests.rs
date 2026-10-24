@@ -1,9 +1,9 @@
 //! The call after a dead one (`RunPolicy::truncated_empty_reasoning_off`).
 
+use super::*;
 use std::sync::Arc;
 
-use crate::context::{RunConfig, RunContext};
-use crate::runtime::{AgentHarness, RunPolicy};
+use crate::runtime::RunPolicy;
 use crate::testkit::ScriptedModel;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelResponse, ReasoningConfig, ReasoningEffort};
@@ -122,6 +122,87 @@ async fn reasoning_off_sticks_for_the_rest_of_the_run_after_repeated_dead_calls(
     assert_eq!(
         efforts_across_steps(2).await,
         vec![high, none, high, none, none]
+    );
+}
+
+#[tokio::test]
+async fn constant_cap_retries_reach_the_provider_instead_of_replaying_cached_blanks() {
+    let model = Arc::new(ScriptedModel::new(vec![
+        dead(2048),
+        crate::testkit::text_response("recovered"),
+    ]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+    harness.with_response_cache(Arc::new(crate::cache::InMemoryResponseCache::new()));
+    harness.with_policy(RunPolicy {
+        truncated_empty_constant_cap: true,
+        truncated_empty_retries: 1,
+        truncated_empty_nudges: 0,
+        ..RunPolicy::default()
+    });
+    let input = vec![Message::user("same question")];
+    for run_id in ["recover", "reuse-answer"] {
+        let ctx = RunContext::new(RunConfig::new(run_id).with_max_turn_output_tokens(2048), ());
+        let run = harness
+            .invoke_in_context(&(), ctx, input.clone())
+            .await
+            .unwrap();
+        assert_eq!(run.text(), Some("recovered".into()));
+    }
+    assert_eq!(
+        model.requests().len(),
+        2,
+        "only the usable answer is cached"
+    );
+}
+
+#[tokio::test]
+async fn truncated_empty_recovery_bypasses_a_blank_cached_before_retries_were_enabled() {
+    let cache = Arc::new(crate::cache::InMemoryResponseCache::new());
+    let input = vec![Message::user("same question")];
+    let seed_model = Arc::new(ScriptedModel::new(vec![dead(2048)]));
+    let mut seed: AgentHarness<()> = AgentHarness::new();
+    seed.register_model("mock", seed_model.clone());
+    seed.with_response_cache(cache.clone());
+    seed.with_policy(RunPolicy {
+        truncated_empty_retries: 0,
+        truncated_empty_nudges: 0,
+        ..RunPolicy::default()
+    });
+    for run_id in ["seed-blank", "replay-with-recovery-disabled"] {
+        let ctx = RunContext::new(RunConfig::new(run_id).with_max_turn_output_tokens(2048), ());
+        seed.invoke_in_context(&(), ctx, input.clone())
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        seed_model.requests().len(),
+        1,
+        "disabled recovery retains exact replay"
+    );
+
+    let model = Arc::new(ScriptedModel::new(vec![crate::testkit::text_response(
+        "fresh answer",
+    )]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+    harness.with_response_cache(cache);
+    harness.with_policy(RunPolicy {
+        truncated_empty_constant_cap: true,
+        truncated_empty_retries: 1,
+        truncated_empty_nudges: 0,
+        ..RunPolicy::default()
+    });
+    let ctx = RunContext::new(
+        RunConfig::new("recover-cached-blank").with_max_turn_output_tokens(2048),
+        (),
+    );
+    let run = harness.invoke_in_context(&(), ctx, input).await.unwrap();
+    assert_eq!(run.text(), Some("fresh answer".into()));
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "the prior blank cache hit is bypassed"
     );
 }
 

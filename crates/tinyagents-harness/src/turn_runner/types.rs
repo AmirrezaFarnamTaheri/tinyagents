@@ -12,7 +12,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::time::Instant;
 
 use crate::progress::AgentProgress;
-use crate::run_queue::{QueueLane, QueueMode, QueueStatus, RunQueue};
+use crate::run_queue::{QueueLane, QueueMode, QueueStatus, QueuedMessage, RunQueue};
 
 /// Identity that isolates session locks and active turns between agents.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -64,6 +64,95 @@ where
 
     fn into_turn_request(self) -> TurnRequest<P> {
         self
+    }
+}
+
+impl<P> QueuedMessage for TurnRequest<P>
+where
+    P: RequeuePayload + Send + 'static,
+{
+    fn id(&self) -> &str {
+        &self.request_id
+    }
+
+    fn text(&self) -> &str {
+        &self.text
+    }
+
+    fn requeued(id: String, text: String, thread_label: &str, queued_at_ms: u64) -> Self {
+        Self {
+            scope: ScopeKey {
+                agent_id: String::new(),
+                profile_id: None,
+            },
+            thread_id: thread_label.to_owned(),
+            request_id: id,
+            text,
+            payload: P::requeued(thread_label, queued_at_ms),
+            host_authored: false,
+            disposition: QueueDisposition::Steer,
+            deadline: None,
+            idle_timeout: None,
+        }
+    }
+
+    fn requeued_in_lane(
+        id: String,
+        text: String,
+        thread_label: &str,
+        lane: QueueLane,
+        queued_at_ms: u64,
+    ) -> Self {
+        let mut request = Self::requeued(id, text, thread_label, queued_at_ms);
+        request.disposition = match lane {
+            QueueLane::Steer => QueueDisposition::Steer,
+            QueueLane::Followup => QueueDisposition::Followup,
+            QueueLane::Collect => QueueDisposition::Collect,
+        };
+        request
+    }
+}
+
+// Untyped JSON payloads have no host schema, so only known turn-scoped fields
+// are inherited; request-local values such as attachments stay with their
+// original request.
+impl RequeuePayload for serde_json::Value {
+    fn requeued(thread_id: &str, queued_at_ms: u64) -> Self {
+        serde_json::json!({
+            "thread_id": thread_id,
+            "queued_at_ms": queued_at_ms,
+        })
+    }
+
+    fn adopt(&mut self, running: &Self) {
+        if let (Self::Object(requeued), Self::Object(active)) = (self, running) {
+            for key in [
+                "access",
+                "locale",
+                "attribution",
+                "channel_attribution",
+                "client_id",
+                "model_override",
+                "temperature",
+            ] {
+                if let Some(value) = active.get(key) {
+                    requeued
+                        .entry(key.to_owned())
+                        .or_insert_with(|| value.clone());
+                }
+            }
+        }
+    }
+
+    fn restore_thread_id(&mut self, thread_id: &str) {
+        if let Self::Object(payload) = self
+            && payload.contains_key("thread_id")
+        {
+            payload.insert(
+                "thread_id".into(),
+                serde_json::Value::String(thread_id.into()),
+            );
+        }
     }
 }
 
@@ -161,6 +250,11 @@ pub trait RequeuePayload: Sized {
 
     /// Copy any safe, turn-scoped host metadata from the running payload.
     fn adopt(&mut self, running: &Self);
+
+    /// Replace a thread identity embedded in the payload with the queue owner's
+    /// routing identity. Payloads without their own thread field may leave this
+    /// as the default no-op.
+    fn restore_thread_id(&mut self, _thread_id: &str) {}
 }
 
 /// Folds progress events into balanced work-liveness signals for the runner.
@@ -340,12 +434,13 @@ pub enum TurnRunnerError {
 }
 
 #[derive(Clone)]
-struct ActiveTurn<Q> {
-    request_id: String,
-    cancel: crate::CancellationToken,
-    cancellable: bool,
-    generation: u64,
-    queue: Arc<RunQueue<Q>>,
+pub(crate) struct ActiveTurn<P, Q = TurnRequest<P>> {
+    pub(crate) request_id: String,
+    pub(crate) cancel: crate::CancellationToken,
+    pub(crate) cancellable: bool,
+    pub(crate) generation: u64,
+    pub(crate) queue: Arc<RunQueue<Q>>,
+    pub(crate) payload: P,
 }
 
 #[derive(Clone)]
@@ -382,6 +477,20 @@ fn queue_lane(disposition: QueueDisposition) -> Option<QueueLane> {
     }
 }
 
+fn restore_queue_context<P: RequeuePayload>(
+    requests: &mut [TurnRequest<P>],
+    scope: &ScopeKey,
+    thread_id: &str,
+    running_payload: &P,
+) {
+    for request in requests {
+        request.scope.clone_from(scope);
+        request.thread_id = thread_id.to_owned();
+        request.payload.adopt(running_payload);
+        request.payload.restore_thread_id(thread_id);
+    }
+}
+
 /// Reusable turn lifecycle coordinator, parameterized entirely by host ports.
 pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value, Q = TurnRequest<P>> {
     host: Arc<H>,
@@ -393,7 +502,7 @@ pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value, Q = TurnRequest<P
     config: TurnRunnerConfig,
     locks: ThreadLocks,
     parallel_queues: ParallelQueueMap<Q>,
-    active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<Q>>>,
+    pub(crate) active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<P, Q>>>,
     parallel_active: Mutex<HashMap<(ScopeKey, String, String), ActiveParallelTurn>>,
     next_generation: std::sync::atomic::AtomicU64,
     payload: std::marker::PhantomData<fn() -> P>,
@@ -407,7 +516,7 @@ where
     E: EventSink<P> + 'static,
     F: FailureClassifier + 'static,
     S: Summarizer<P> + 'static,
-    P: Clone + Send + Sync + 'static,
+    P: RequeuePayload + Clone + Send + Sync + 'static,
     Q: TurnQueueItem<P>,
 {
     pub fn new(
@@ -604,9 +713,9 @@ where
     async fn run_one(
         &self,
         mut request: TurnRequest<P>,
-        reservation: Option<ActiveTurn<Q>>,
-        state_out: &mut Option<ActiveTurn<Q>>,
-        next_out: &mut Option<(TurnRequest<P>, ActiveTurn<Q>)>,
+        reservation: Option<ActiveTurn<P, Q>>,
+        state_out: &mut Option<ActiveTurn<P, Q>>,
+        next_out: &mut Option<(TurnRequest<P>, ActiveTurn<P, Q>)>,
     ) -> Result<TurnResult, TurnRunnerError> {
         let deadline = TurnDeadline::new(request.deadline.or(self.config.deadline));
         let cancellation = reservation
@@ -676,6 +785,7 @@ where
                 let mut state = reserved.clone();
                 state.request_id = request.request_id.clone();
                 state.cancel = cancellation.clone();
+                state.payload.clone_from(&request.payload);
                 active.insert(key.clone(), state.clone());
                 active_generation = Some(state.generation);
                 *state_out = Some(state);
@@ -699,6 +809,7 @@ where
                         .next_generation
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                     queue: queue.clone(),
+                    payload: request.payload.clone(),
                 };
                 let previous = active.insert(key.clone(), state.clone());
                 active_generation = Some(state.generation);
@@ -915,7 +1026,7 @@ where
         }
     }
 
-    async fn retire_generation(
+    pub(crate) async fn retire_generation(
         &self,
         request: &TurnRequest<P>,
         generation: Option<u64>,
@@ -943,6 +1054,12 @@ where
                     .map(TurnQueueItem::into_turn_request),
             );
         }
+        restore_queue_context(
+            &mut queued,
+            &request.scope,
+            &request.thread_id,
+            &turn.payload,
+        );
         queued
     }
 
@@ -1019,12 +1136,15 @@ where
         Err(TurnRunnerError::Failed(message))
     }
 
-    async fn finalize_generation(
+    pub(crate) async fn finalize_generation(
         &self,
         scope: &ScopeKey,
         thread_id: &str,
         owner_generation: u64,
-    ) -> (Vec<TurnRequest<P>>, Option<(TurnRequest<P>, ActiveTurn<Q>)>) {
+    ) -> (
+        Vec<TurnRequest<P>>,
+        Option<(TurnRequest<P>, ActiveTurn<P, Q>)>,
+    ) {
         let key = (scope.clone(), thread_id.to_owned());
         let mut active = self.active.lock().await;
         if active
@@ -1036,13 +1156,14 @@ where
         let Some(current) = active.get(&key).cloned() else {
             return (Vec::new(), None);
         };
-        let collected = current
+        let mut collected: Vec<TurnRequest<P>> = current
             .queue
             .take(QueueLane::Collect, QueueMode::All)
             .await
             .into_iter()
             .map(TurnQueueItem::into_turn_request)
             .collect();
+        restore_queue_context(&mut collected, scope, thread_id, &current.payload);
         let next = current
             .queue
             .take(QueueLane::Steer, QueueMode::OneAtATime)
@@ -1061,7 +1182,13 @@ where
         } else {
             next
         };
-        if let Some(request) = next {
+        if let Some(mut request) = next {
+            restore_queue_context(
+                std::slice::from_mut(&mut request),
+                scope,
+                thread_id,
+                &current.payload,
+            );
             let reserved = ActiveTurn {
                 request_id: request.request_id.clone(),
                 cancel: crate::CancellationToken::new(),
@@ -1070,6 +1197,7 @@ where
                     .next_generation
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                 queue: current.queue,
+                payload: request.payload.clone(),
             };
             active.insert(key, reserved.clone());
             (collected, Some((request, reserved)))
@@ -1091,7 +1219,17 @@ where
         let key = (scope.clone(), thread_id.to_owned());
         let active = self.active.lock().await;
         match active.get(&key) {
-            Some(turn) => turn.queue.take(lane, mode).await,
+            Some(turn) => {
+                let mut requests: Vec<TurnRequest<P>> = turn
+                    .queue
+                    .take(lane, mode)
+                    .await
+                    .into_iter()
+                    .map(TurnQueueItem::into_turn_request)
+                    .collect();
+                restore_queue_context(&mut requests, scope, thread_id, &turn.payload);
+                requests.into_iter().map(Q::from_turn_request).collect()
+            }
             None => Vec::new(),
         }
     }

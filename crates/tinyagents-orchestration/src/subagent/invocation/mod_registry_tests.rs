@@ -215,6 +215,23 @@ async fn a_budget_overrun_that_raced_an_owner_cancel_settles_cancelled() {
 }
 
 #[tokio::test]
+async fn a_timeout_or_error_after_an_owner_cancel_settles_cancelled() {
+    let jobs = SubAgentJobRegistry::new();
+    for result in [
+        Err(TinyAgentsError::Timeout("late".into())),
+        Err(TinyAgentsError::Tool("late".into())),
+        Err(TinyAgentsError::LimitExceeded("late".into())),
+    ] {
+        let (id, _) = jobs.create("worker", 1);
+        jobs.cancel_owned(id.as_str(), 1).expect("cancel");
+        jobs.mark_result(&id, result);
+        let job = jobs.get(id.as_str()).unwrap();
+        assert_eq!(job.status, SubAgentJobStatus::Cancelled, "{job:?}");
+        assert!(job.incomplete_kind.is_none(), "{job:?}");
+    }
+}
+
+#[tokio::test]
 async fn message_request_ids_are_bounded_per_job() {
     let jobs = SubAgentJobRegistry::new();
     let (id, steering) = jobs.create("worker", 1);

@@ -8,6 +8,9 @@
 
 mod types;
 
+#[cfg(test)]
+pub(crate) use types::ActiveTurn;
+
 pub use types::{
     EventSink, FailureClassification, FailureClassifier, IngressDecision, IngressPolicy,
     IngressStage, LiveTurn, QueueDisposition, ReplyStore, RequeuePayload, ScopeKey, Summarizer,

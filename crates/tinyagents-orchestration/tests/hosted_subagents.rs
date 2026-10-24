@@ -131,6 +131,7 @@ async fn authorized_child_reuses_the_parent_host_bundle() {
 async fn parent_denial_cannot_fall_back_to_the_child_harness() {
     let parent_model = Arc::new(ScriptedModel::new(vec![delegation_call()]));
     let local_child_model = Arc::new(ScriptedModel::replies(vec!["local bypass"]));
+    let host_worker_model = Arc::new(ScriptedModel::replies(vec!["host worker"]));
     let mut child_harness = AgentHarness::new();
     child_harness.register_model("local", local_child_model.clone());
 
@@ -142,7 +143,7 @@ async fn parent_denial_cannot_fall_back_to_the_child_harness() {
                     AgentDefinition::new("parent", "Parent", "does not delegate")
                         .with_tools(["worker"]),
                     parent_model,
-                    Arc::new(ScriptedModel::replies(vec!["host worker"])),
+                    host_worker_model.clone(),
                 ),
                 AgentTurnRequest::new(
                     "parent",
@@ -163,6 +164,10 @@ async fn parent_denial_cannot_fall_back_to_the_child_harness() {
     assert!(
         local_child_model.requests().is_empty(),
         "the child cannot substitute its own model authority"
+    );
+    assert!(
+        host_worker_model.requests().is_empty(),
+        "a denied child must not run on the host's worker model either"
     );
 }
 

@@ -435,3 +435,41 @@ fn replay_memo_writes_are_distinguished_from_completion_markers() {
         serde_json::from_value(serde_json::to_value(&deferred).unwrap()).unwrap();
     assert_eq!(decoded, deferred);
 }
+
+/// v1 upgrade alignment: `completed_routes` pairs with `completed_tasks` by
+/// position (a shorter list pads with empty routing), and a non-empty
+/// `pending_activations` wins over the coarser `next_nodes`.
+#[test]
+fn v1_records_align_completed_routes_and_prefer_pending_activations() {
+    use crate::command::RouteTarget;
+    use tinyagents_harness::ids::TaskId;
+
+    let mut cp = Checkpoint::new(0i32, Vec::new());
+    cp.version = 1;
+    cp.next_nodes = vec![NodeId::from("stale")];
+    cp.pending_activations = Some(vec![super::PendingActivation {
+        node: NodeId::from("w"),
+        send_arg: None,
+        task_id: TaskId::from("1:0:w"),
+    }]);
+    cp.completed_tasks = vec![NodeId::from("a"), NodeId::from("b")];
+    cp.completed_routes = vec![vec![RouteTarget::Node(NodeId::from("x"))]];
+    cp.normalize();
+
+    assert_eq!(cp.version, CHECKPOINT_FORMAT_VERSION);
+    assert_eq!(cp.tasks.len(), 1);
+    assert_eq!(cp.tasks[0].node, NodeId::from("w"));
+    assert_eq!(cp.tasks[0].task_id, TaskId::from("1:0:w"));
+    let completed: Vec<_> = cp
+        .completed
+        .iter()
+        .map(|task| (task.node.as_str(), task.routes.clone()))
+        .collect();
+    assert_eq!(
+        completed,
+        vec![
+            ("a", vec![RouteTarget::Node(NodeId::from("x"))]),
+            ("b", Vec::new()),
+        ]
+    );
+}

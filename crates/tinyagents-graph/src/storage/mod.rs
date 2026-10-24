@@ -82,9 +82,9 @@ pub(crate) fn leases_spec() -> CollectionSpec {
 }
 
 /// The graph crate's storage declaration for its checkpointer and the steps
-/// that bring the v1 names and shapes forward. Graph open runs this
-/// owner-local migration against the already-bound scope before returning the
-/// handle.
+/// that bring the v1 names and shapes forward. [`open_storage`] runs this
+/// owner-local migration against the already-bound scope; the checkpointer's
+/// `DriverCheckpointer::open` calls it before returning the handle.
 ///
 /// | v1 | v2 |
 /// |---|---|
@@ -100,8 +100,8 @@ pub(crate) fn leases_spec() -> CollectionSpec {
 /// prefix, so the steps chain through versions 1 to 4.
 ///
 /// `tsd.leases` and `tsd.kv` belong to `tsd`, so a document step cannot write
-/// them: the host calls [`import_legacy_leases`] and
-/// [`import_legacy_task_cache`] once per scope. The goal and todo lists use the
+/// them: [`open_storage`] calls [`import_legacy_leases`] and
+/// [`import_legacy_task_cache`] after the steps. The goal and todo lists use the
 /// harness `Store`, which lives in `tsd.kv` under the store's own owner.
 #[must_use]
 pub fn storage_schema() -> Schema {
@@ -123,12 +123,13 @@ pub fn collections() -> Vec<CollectionSpec> {
 }
 
 /// Open graph storage for one scope, applying graph-owned migrations and
-/// importing the graph's legacy cache and lease records before use.
+/// importing the graph's legacy cache and lease records before use. After the
+/// first success for a scope, later calls in this process skip the work.
 pub async fn open_storage(
     storage: ScopedStorage,
 ) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
     let owned_storage = storage.clone();
-    tinyagents_storage_kit::with_migration_lease(&storage, "graph", move |lease| async move {
+    tinyagents_storage_kit::with_migration_lease_once(&storage, "graph", move |lease| async move {
         let storage = owned_storage;
         let registry = Registry::compose([storage_schema()])?;
         for spec in collections() {
@@ -143,9 +144,10 @@ pub async fn open_storage(
         registry.migrate(&storage, &MigrateOptions::new()).await?;
         import_legacy_leases_with_lease(&storage, &lease).await?;
         import_legacy_task_cache_with_lease(&storage, &lease).await?;
-        Ok(storage)
+        Ok(())
     })
-    .await
+    .await?;
+    Ok(storage)
 }
 
 #[cfg(test)]

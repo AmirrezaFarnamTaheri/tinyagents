@@ -6,6 +6,14 @@ this crate only under its `subagents` feature.
 
 ## Public surface
 
+- `run_progress_ledger::RunProgressLedger` records one foreground turn's
+  progress events and terminal status through the host-installed
+  `RunLedgerStore`; `ProgressLedgerContext` carries parent-call correlation to
+  the host's projection. Storage failures do not interrupt the live turn, and
+  terminal transitions are retried during `finish()` before interruption
+  fallback. See the [module guide](run_progress_ledger/README.md) for its
+  design and operational constraints.
+
 - `subagent::SubAgent` runs an `AgentHarness` as a child with inherited
   lineage, cancellation, events, host authority, and recursion limits.
 - `subagent::SubAgentTool` starts a child asynchronously through typed
