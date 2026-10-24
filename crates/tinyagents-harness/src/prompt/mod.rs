@@ -285,20 +285,6 @@ pub fn render_tool_catalogue(rows: &[(String, String)]) -> String {
         .join("\n")
 }
 
-/// Renders generic retrieved documents in ranked order for context composition.
-pub fn render_retrieved_documents(documents: &[crate::retriever::RetrievedDocument]) -> String {
-    documents
-        .iter()
-        .map(|document| {
-            format!(
-                "[{} score={}]\n{}",
-                document.id, document.score, document.content
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
 fn utf8_prefix(text: &str, max_bytes: usize) -> usize {
     if text.len() <= max_bytes {
         return text.len();

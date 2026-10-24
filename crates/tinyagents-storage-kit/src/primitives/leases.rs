@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use super::LEASES;
 use super::repo::{Repo, RetryPolicy};
 use tinystoragedrivers_api::DocumentStore;
-use tinystoragedrivers_types::{Result, StorageError};
+use tinystoragedrivers_types::{Filter, Result, Scope, StorageError, WriteCondition};
 
 /// Injectable Unix epoch-millisecond clock.
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
@@ -148,6 +148,23 @@ impl Lease {
             expires_ms: body.expires_ms,
             endpoint: body.endpoint,
         }
+    }
+
+    /// Builds an atomic write condition for this exact lease tenure.
+    ///
+    /// The condition is tied to the lease's private document id, holder,
+    /// epoch, unreleased state, and expiry. A later takeover or expiry makes
+    /// every conditioned mutation fail in the backend's atomic write boundary.
+    pub fn write_condition(&self, scope: Scope) -> Result<WriteCondition> {
+        WriteCondition::new(
+            scope,
+            LEASES,
+            self.id.clone(),
+            Filter::eq("holder", self.holder.clone())
+                .and(Filter::eq("epoch", self.epoch))
+                .and(Filter::ne("released", true)),
+        )?
+        .with_valid_until_field("expires_ms")
     }
 }
 
@@ -503,6 +520,10 @@ impl Leases {
             .await
     }
 }
+
+#[cfg(test)]
+#[path = "leases_tests.rs"]
+mod tests;
 
 fn id(owner: &str, key: &str) -> Result<String> {
     super::super::composite_key([owner, key])

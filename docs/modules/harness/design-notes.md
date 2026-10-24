@@ -50,13 +50,13 @@ pub struct RunContext<Ctx = ()> {
 runtime dependency container. This split keeps tests deterministic and prevents
 global singletons.
 
-Nested model calls, tools, sub-agents, and graph nodes must inherit the root run
+Nested model calls, tools, and sub-agents must inherit the root run
 id, selected tags, inherited metadata, event sink, cancellation token, stores,
 usage tracker, cost tracker, and configured budget policy. They may add local
 tags and metadata, but they must not mutate parent config in place.
 
 Nested runs may also receive steering commands. Steering is explicit runtime
-control from a parent orchestrator, human, graph supervisor, middleware, or
+control from a parent orchestrator, human, middleware, or
 test. A steered run must record actor, target, policy, payload summary, and the
 safe boundary where the command was applied. See
 [Sub-agent and orchestrator steering](subagent-steering.md).

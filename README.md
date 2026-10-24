@@ -9,13 +9,10 @@
  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" /></a>
 </p>
 
-TinyAgents is a small, provider-neutral agent harness for Rust, plus a durable
-typed state-graph runtime. It takes its shape from
-[LangChain](https://www.langchain.com/) (models, tools, middleware, structured
-output, streaming, usage/cost) and
-[LangGraph](https://www.langchain.com/langgraph) (`START`/`END`, nodes,
-conditional edges, channels/reducers, checkpoints, interrupts, subgraphs, time
-travel) — rebuilt as ordinary, typed Rust with no hidden magic.
+TinyAgents is a small, provider-neutral agent harness for Rust. It takes its
+shape from [LangChain](https://www.langchain.com/) (models, tools, middleware,
+structured output, streaming, usage/cost) — rebuilt as ordinary, typed Rust
+with no hidden magic.
 
 It is for Rust services that need to call models and tools in a loop, want
 that loop to be resumable and inspectable, and would rather not carry a
@@ -30,24 +27,19 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
   caching, and a Claude Code CLI model adapter with stream-json,
   session, authentication, and MCP endpoint support. Features: `sqlite`,
   `storage-drivers`, `multimodal`, `png-optimize` (opt-in PNG re-compression), `media`,
-  `claude-code` and `langfuse` (both default), `tracing` (forwards to `tinytools-agent/tracing` for its parsing diagnostics; the harness's own instrumentation is always compiled in).
+  `claude-code` and `langfuse` (both default), `json-schema` (opt-in `JsonSchema` for context config types), and `tracing` (forwards to `tinytools-agent/tracing` for its parsing diagnostics; the harness's own instrumentation is always compiled in).
 - **`tinyagents-harness-tools`** — reusable implementations for the harness:
   goals and budgets, per-thread todos, skill tool packs, subagent control
   tools, time and clarification tools, plan exit, per-call binding, and
   per-thread locks. Features: `todos`, `goals`, `skills` (all default), and
   `subagents` (opt-in). See the [crate guide](crates/tinyagents-harness-tools/README.md).
-- **`tinyagents-graph`** — a LangGraph-style durable, typed state graph:
-  `START`/`END`, nodes, conditional edges, `Send` fanout, reducers/channels,
-  checkpoints, interrupts, subgraphs, and time travel. Features: `sqlite`,
-  `tracing`.
-- **`tinyagents-tasks`** — graph-independent detached-task machinery: task
+- **`tinyagents-tasks`** — detached-task machinery: task
   model, `TaskStore` (in-memory and JSONL), `DetachedTaskRegistry`, restart
   reconciliation, the durable completion router (push a finished child to its
   parent, redelivered after a restart), and the `spawn`/`await`/`cancel`/`steer`
   orchestration tools.
-  Re-exported from `tinyagents_graph::orchestration` for compatibility.
 - **`tinyagents-registry`** — a named capability catalog (models, tools,
-  agents, graphs, and routers), plus an offline model price/capability catalog.
+  agents, and routers), plus an offline model price/capability catalog.
 - **`tinyagents-session`** — a SQLite-backed store for session history,
   messages, tool calls, cost, and run lineage, plus JSONL transcripts and the
   `threads` chat thread/message store. Transcript spend separates charged and
@@ -79,55 +71,11 @@ None of the crates are published to crates.io (`publish = false` in every
 ```toml
 [dependencies]
 tinyagents-harness = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-harness" }
-tinyagents-graph = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-graph" }
 tinyagents-registry = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-registry" }
 # The code samples below build `Message` and provider types directly from
 # TinyInference, the message/model crate TinyAgents is built on. It is a
 # separate git dependency, not re-exported by the crates above.
 tinyinference-llm = { git = "https://github.com/tinyhumansai/tinyinference", package = "tinyinference-llm" }
-```
-
-A minimal typed graph — a whole-state agent/tool loop (trimmed from
-[`examples/basic_graph.rs`](crates/tinyagents-integration-tests/examples/basic_graph.rs)):
-
-```rust
-use tinyagents_graph::*;
-use tinyinference_llm::message::Message;
-
-#[derive(Clone, Debug)]
-struct AgentState {
-    messages: Vec<Message>,
-    needs_tool: bool,
-}
-
-let graph = GraphBuilder::<AgentState, AgentState>::overwrite()
-    .add_node("agent", |mut state: AgentState, _ctx: NodeContext| async move {
-        state.messages.push(Message::assistant("checking the local tool"));
-        Ok(NodeResult::Update(state))
-    })
-    .add_node("tool", |mut state: AgentState, _ctx: NodeContext| async move {
-        state.messages.push(Message::tool("echo", "tool result"));
-        state.needs_tool = false;
-        Ok(NodeResult::Update(state))
-    })
-    .set_entry("agent")
-    .add_conditional_edges(
-        "agent",
-        |state: &AgentState| if state.needs_tool { "tool".to_string() } else { "done".to_string() },
-        [("tool", "tool"), ("done", END)],
-    )
-    .add_edge("tool", "agent")
-    .compile()?;
-
-let run = graph.run(AgentState { messages: vec![], needs_tool: true }).await?;
-```
-
-Run it for real:
-
-```sh
-git clone git@github.com:tinyhumansai/tinyagents.git
-cd tinyagents
-cargo run -p tinyagents-integration-tests --example basic_graph
 ```
 
 A one-shot model call through the harness (`export OPENAI_API_KEY=...` then
@@ -141,23 +89,16 @@ use tinyinference_llm::providers::openai::OpenAiModel;
 
 let model = OpenAiModel::from_env()?;
 let mut harness: AgentHarness<()> = AgentHarness::new();
-harness.register_model("openai", Arc::new(model)).set_default_model("openai");
+harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named(
+    "openai",
+    Arc::new(model),
+)));
 
 let run = harness
     .invoke_default(&(), vec![Message::user("What is a Rust trait?")])
     .await?;
 println!("{}", run.text().unwrap_or_default());
 ```
-
-## Graph runtime
-
-`tinyagents-graph` is a durable, typed state graph modeled on LangGraph:
-`START`/`END` markers, nodes, static and conditional edges, `Command`-based
-routing, `Send` fanout, reducers over named channels, checkpointing (with an
-optional `sqlite` backend), interrupts, streaming events, topology export, and
-replay/time travel across superstep boundaries. A node can embed another
-compiled graph as a subgraph, so a whole workflow can appear as a single step
-inside a larger one.
 
 ## Harness
 
@@ -180,14 +121,12 @@ changing the outer transcript or treating a preview as a write.
 `tinyagents_orchestration::subagent::SubAgentJobRegistry`. The `subagents`
 feature in `tinyagents-harness-tools`
 exposes `tinyagents_harness_tools::subagents`, which provides
-`DriverSubAgentTool`, the host-planned typed dispatcher: its `background` mode
-starts a child and returns a stable job id, while `inline` mode waits for the
-final result. That module also provides the `SubAgentJobsTool` and
-`SubAgentMessageTool` declarations over the shared registry. `SubAgentSession`
-covers retained post-completion
-conversations, while `SubagentDriver` coordinates durable lifecycle
-preparation, execution, pause, resume, and persistence. Teams and workflow DAGs
-are intentionally outside this focused crate.
+`DriverSubAgentTool`, the host-planned typed dispatcher. Every call starts an
+asynchronous job and returns its stable job id; `SubAgentJobsTool` provides
+status, wait, cancellation, and steering over the shared registry, while
+`SubAgentMessageTool` delivers messages. `SubagentDriver` coordinates durable
+lifecycle preparation, execution, pause, resume, and persistence. Teams and
+workflow DAGs are intentionally outside this focused crate.
 
 ## Session runtime
 
@@ -235,8 +174,8 @@ All live in
   **`openai_graph_agent`** — provider-backed chat, tool calling, structured
   output, and a graph-driven agent (all need `OPENAI_API_KEY`).
 - **`subconscious_loop`** — an offline, testable autonomous closed-loop
-  harness (see its own
-  [README](crates/tinyagents-integration-tests/examples/subconscious_loop/README.md)).
+  harness (see the source and test in
+  `crates/tinyagents-integration-tests/examples/subconscious_loop/`).
 
 ## Documentation
 

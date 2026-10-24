@@ -3,8 +3,8 @@
 Cross-runtime view of what LangGraph/LangChain (LG), Pydantic AI (PA) and pi
 have that TinyAgents lacks or only partly has, with a layer decision for each.
 Per-runtime detail, API shapes and code excerpts live in
-[`langgraph.md`](langgraph.md), [`pydantic-ai.md`](pydantic-ai.md) and
-[`pi.md`](pi.md); the section numbers in the "Source" column point there.
+[`pydantic-ai.md`](pydantic-ai.md) and [`pi.md`](pi.md). LangGraph references
+in this historical gap inventory describe the external project.
 
 Layer legend: **RT** = TinyAgents runtime (crate named), **OH** = OpenHuman,
 **RT+OH** = primitive in the runtime, policy/UI in OpenHuman.
@@ -20,9 +20,9 @@ that the feature would extend.
 | A2 | Deferred tool calls as a typed, resumable output: `DeferredToolRequests{calls, approvals, metadata}` / `DeferredToolResults` with per-call ids, approve / edit-args / reject / respond decisions, external execution (`CallDeferred`), durable across process restart | PA, LG (HITL middleware) | PA §3.2, LG §3.2 | `HumanApprovalMiddleware` (`Fn(&ToolCall) -> bool`), `Err(Interrupted)`, graph `Interrupt`, delegation `PendingApproval`, `ToolPolicy.access.approval_required` | RT+OH (OpenHuman `security/approval::ApprovalGate` becomes a handler) | 1 | shipped |
 | A3 | Output-validation retry loop: validator raises `ModelRetry`, loop re-asks with the error, bounded by `retries.output`; unified retry/`ToolFailed` vocabulary for tool errors, arg errors and output errors | PA | PA §3.1, §4 | `StructuredOutcome.error`, `structured/repair.rs`, `InvalidArgsPolicy`; docs already promise `StructuredOutputErrorPolicy` | RT harness | 1 | shipped |
 | A4 | Steering and follow-up as two message lanes polled at turn boundaries with `QueueMode` (one-at-a-time / all); follow-ups run "one more turn" after the agent would stop | pi, PA (`ctx.enqueue`) | pi §4.4 | `RunQueue{Steer, Followup, Collect}` (no consumer), `SteeringCommand` | RT harness (+ OpenHuman `agent/harness/run_queue` moves down) | 1 | shipped |
-| A5 | Agent loop compiled to the graph runtime so checkpoints, interrupts, streaming and time travel apply to the loop itself; step iteration (`agent.iter()`) | LG (`create_agent` → `StateGraph`), PA (`iter`, `UserPromptNode`…) | LG §4, PA §4 | `subagent_node`, `docs/modules/harness/state-graph.md` (promised) | RT harness+graph | 2 | partial (`compile_loop`/`LoopIter` are a real `CompiledGraph` with checkpoint+resume tests; the drop-in `GraphLoopDriver` drives the same node bodies without a checkpointer) |
+| A5 | Agent loop compiled to a graph runtime so checkpoints, interrupts, streaming and time travel apply to the loop itself; step iteration (`agent.iter()`) | LG (`create_agent` → `StateGraph`), PA (`iter`, `UserPromptNode`…) | LG §4, PA §4 | Removed with the graph crate in TinyAgents #61; no current implementation | Runtime | 2 | descoped: the graph crate and `GraphLoopDriver` were removed; harness runs use the direct loop |
 | A6 | Prompted / union / output-function structured modes; `EndStrategy` when output tools and function tools co-occur | PA, LG (`AutoStrategy`) | PA §3.8 | `StructuredStrategy::{ProviderSchema, ToolCall}` | RT harness | 3 | shipped |
-| A7 | `interrupt_before/after` selectors, `interrupt(response_schema)`, graceful drain (`RunControl`) | LG | LG §3.8 | documented in `interrupts.md`, `mark_interrupt` export-only, `CancellationToken` | RT graph | 3 | shipped |
+| A7 | `interrupt_before/after` selectors, `interrupt(response_schema)`, graceful drain (`RunControl`) | LG | LG §3.8 | harness steering and cancellation primitives | Runtime | 3 | partial: direct-loop steering is supported; graph selectors and checkpointed interrupt routing are not |
 
 ## B. Tools
 
@@ -42,25 +42,20 @@ that the feature would extend.
 |---|---|---|---|---|---|---|---|
 | C1 | Block-indexed stream events (`text/thinking/toolcall _start/_delta/_end` with `content_index`), error terminals that carry the partial assistant message and stop reason | pi | pi §4.2, `sdk-gaps/streaming.md` §3 | `ModelStreamItem::{MessageDelta, ToolCallDelta, UsageDelta, Completed}` | RT tinyinference+harness | 1 | shipped |
 | C2 | Compact durable frame codec + reducer for partial messages (crash recovery, reconnecting clients) | pi | pi §4.2 | `AgentEvent::ModelDelta` journaled, `HarnessEventJournal` | RT harness | 2 | partial (frame codec/reducer shipped and journaled; `ToolProgress`/`on_tool_delta` still has no real mid-execution caller pending a tinytools progress seam) |
-| C3 | Unified stream envelope with `ns`/`seq`, `tasks` and `checkpoints` stream modes, projections (`stream.messages`, `stream.tool_calls`, `stream.subagents`) | LG | LG §3.5 | `GraphEvent` (no run/task id on step events), `GraphObservation` journal, `StreamMode` (unused) | RT graph+harness; OH keeps format adapters | 2 | shipped (`GraphEventEnvelope{run_id, task_id, ns, seq}`, `StreamMode::{Tasks, Checkpoints}` and `StreamProjection` shipped; `task_id` is `Some(..)` on every per-task/task-scoped event — `TaskScheduled`/`TaskStarted`/`NodeStarted`/`NodeCompleted`/`NodeFailed`/`TaskCompleted`/`NodeRetryScheduled`/`StateUpdated`/`InterruptEmitted`/`ContextForked`/`RouteSelected` — and `None` only for run/step-level events with no single owning task) |
+| C3 | Unified stream envelope with `ns`/`seq`, `tasks` and `checkpoints` stream modes, projections (`stream.messages`, `stream.tool_calls`, `stream.subagents`) | LG | LG §3.5 | harness event streams and session records | RT harness+session; OH keeps format adapters | 2 | partial: direct harness events and session streams are available; graph projections were removed in TinyAgents #61 |
 | C4 | OpenTelemetry GenAI semantic-convention sink | PA | PA §3.12 | Langfuse exporter, `JournalSink` | RT harness optional feature | 3 | OpenHuman |
 
-## D. Graph durability
+## D. Graph runtime scope
 
-| # | Gap | Who has it | Source | Existing seam | Layer | Value | Status |
-|---|---|---|---|---|---|---|---|
-| D1 | Real pending writes: completed parallel siblings are never re-run after an interrupt/failure and their successors run in the right superstep (today's C1/C2 bugs) | LG | [`code-review-graph.md`](code-review-graph.md) C1, C2, R2 | `PendingWrite` (markers only), `completed_tasks` | RT graph | 1 | shipped |
-| D2 | Per-node `RetryPolicy`, `CachePolicy` (task cache with backends), `TimeoutPolicy{run, idle}`, `error_handler`, real `defer` scheduling | LG | LG §3.3 | graph-wide `with_node_retry` / `with_node_timeout`, harness `ResponseCache`, `mark_deferred` (export-only) | RT graph | 2 | shipped |
-| D3 | Checkpoint v2: format version, single task list, channel versions, serialisable `ChannelState`, delta-channel history with snapshot frequency, `Overwrite` | LG (`DeltaChannel`, `Overwrite`) | LG §3.4, code-review-graph I5/I6/R3 | `Checkpoint<State>` full snapshot, `ChannelSet` (not serialisable), `prune` doc mentions deltas | RT graph | 2 | shipped |
-| D4 | Executor-level per-thread lease (in-process + optional durable claim), typed `TaskId` end to end, `Send` fan-out of subgraphs namespaced by task, subgraph failure resumable via parent, restart-safe interrupt ids, panic/cancel safety | LG (task ids, ns) | code-review-graph C3, C4, I1, I4, I7, R4, R5 | `ThreadLockMap`, `ids::new_checkpoint_id`, `run_ledger::try_claim` | RT graph | 1 | shipped |
-| D5 | Durable task memoisation inside a node (`durable_task(ctx, key, fut)`) so side effects before an interrupt are not repeated | LG (functional API) | LG §3.9 | `PendingWrite`, `interrupts.md` "must use idempotency keys" | RT graph | 3 | shipped |
-| D6 | Semantic search on the namespaced store (`IndexConfig{embed, dims, fields}`) | LG | LG §3.7 | `NamespacedStore::search` (substring), `retriever/`, `tinyinference-embeddings` | RT harness; backend choice in OH `memory/` | 3 | OpenHuman |
+The graph-specific durability gaps in this comparison were descoped when the
+TinyAgents graph crate was removed in #61. The current workspace does not ship
+graph execution, graph streams, graph checkpointing, or graph task policies.
 
 ## E. Sessions and context
 
 | # | Gap | Who has it | Source | Existing seam | Layer | Value | Status |
 |---|---|---|---|---|---|---|---|
-| E1 | Conversation entry tree: `id/parent_id`, in-place branching, labels, fork/clone with `parent_session`, `BranchSummaryEntry`, context projection that never reads past the newest compaction | pi | pi §4.3 | `tinyagents-session` keeps linear transcripts; graph exposes `fork_state` | RT session; `/fork`, `/tree`, labels UI in OH | 2 | removed |
+| E1 | Conversation entry tree: `id/parent_id`, in-place branching, labels, fork/clone with `parent_session`, `BranchSummaryEntry`, context projection that never reads past the newest compaction | pi | pi §4.3 | `tinyagents-session` keeps linear transcripts; the former graph `fork_state` API was removed in #61 | RT session; `/fork`, `/tree`, labels UI in OH | 2 | removed |
 | E2 | Compaction rules: cut points at user/assistant boundaries, `keep_recent_tokens`, split turns, iterative summaries, durable `CompactionRecord{first_kept, tokens_before, usage}`, overflow classifier → compact → retry same turn, hook may decline/replace | pi, PA (`Compaction` capability), LG (`SummarizationMiddleware`) | pi §4.5 | `summarization/` (policy, trim, pairing, `Summarizer`), `ContextCompressionMiddleware`, `MicrocompactMiddleware` | RT harness+session; summary prompt wording in OH | 2 | shipped |
 | E3 | Cross-provider handoff transform: record `origin{provider, api, model}` on assistant messages; drop/convert thinking, normalise tool-call ids, downgrade images per target profile | pi | pi §4.6 | `AssistantMessage.id`, `ContentBlock::Thinking` doc note | RT tinyinference+harness | 2 | shipped |
 | E4 | `sanitize_history()` for untrusted client-supplied history (strip system prompts, non-HTTP file URLs, dangling tool calls) | PA | PA §5 | `summarization/trim.rs` orphan handling | RT harness (cheap helper); transport in OH | 3 | OpenHuman |
@@ -71,7 +66,7 @@ that the feature would extend.
 | # | Gap | Who has it | Source | Existing seam | Layer | Value | Status |
 |---|---|---|---|---|---|---|---|
 | F1 | `ModelProfile` as behaviour: `json_schema_transformer`, `default_structured_output_mode`, `prompted_output_template`, `thinking_tags` parsing, per-API compat matrix (~30 flags), `thinking_level_map` | PA, pi | PA §3.6, pi §4.8 | `ModelProfile` + `CapabilitySet` (capability data), `SchemaPreparation`, `ReasoningConfig` | RT tinyinference | 2 | shipped |
-| F2 | Generated model catalog (models.dev) with tiered pricing, `refresh_models()`, availability filtered by resolved auth | pi, PA (`genai-prices`) | pi §4.8 | `ModelCatalogEntry`, 5-model stale seed (`code-review-workspace.md` M7), `ModelPricing` | RT registry+tinyinference | 2 | shipped |
+| F2 | Generated model catalog (models.dev) with tiered pricing, `refresh_models()`, availability filtered by resolved auth | pi, PA (`genai-prices`) | pi §4.8 | `ModelCatalogEntry`, `ModelPricing` | RT registry+tinyinference | 2 | shipped |
 | F3 | Audio / video / document content blocks in the message model, SSRF-guarded URL download | PA | PA §3.9 | `ContentBlock::Image(ImageRef)`, `multimodal/` | RT tinyinference (OpenHuman `agent/multimodal.rs` markers go away) | 2 | partial (`ContentBlock::{Audio,Video,Document}` shipped; SSRF-guarded URL download is OpenHuman -- see below) |
 | F4 | Provider breadth (Google, Vertex, Bedrock, Mistral native protocols), generalised OAuth flows, `CredentialStore` trait | pi (10 APIs, 41 presets, 7 OAuth flows) | pi §2, §4.8 | OpenAI + Anthropic + local in tinyinference, Codex `OAuthFlow` | RT tinyinference (trait); keychain and login UI in OH `security/credentials` | 3 | OpenHuman |
 | F5 | Deferred / background model responses (`DeferredHandle`, `stop_reason: deferred`) | pi | pi §4.9 | none | RT tinyinference | 3 | shipped (vendor `ModelStreamItem::Deferred` + `ChatModel::fetch_deferred`; no adapter overrides it yet) |
@@ -84,7 +79,7 @@ that the feature would extend.
 | G1 | Evals: `Dataset` / `Case` / `Evaluator` trait, `LLMJudge`, span-based evaluators, report | PA (`pydantic_evals`), LG (`agentevals`) | PA §3.7 | `testkit::Trajectory` | RT new crate `tinyagents-evals`; datasets in OH | 2 | OpenHuman |
 | G2 | Schema-driven `TestModel` (auto-calls every tool with generated args), process-wide `deny_network_models()` kill-switch | PA | PA §3.10 | `ScriptedModel`, `StreamingMock`, `FakeTool` | RT harness testkit + tinyinference | 3 | shipped (`SchemaDrivenModel` in harness testkit; `deny_network_models()` in vendor tinyinference) |
 | G3 | Capability bundle: instructions + toolset + middleware + model defaults + exposure, loadable on demand, `from_spec`; what a "skill"/"plugin" is at runtime level | PA v2 (`Capability`) | PA §4 | `Middleware`, `AgentDefinition`, `ToolExposure::Deferred` | RT registry; discovery from disk in OH `skills/` | 2 | shipped |
-| G4 | Backend conformance suites for sessions / stores run against every backend | pi (`session/testing/conformance`), LG | pi §3, `sdk-gaps/durability.md` §17 | graph `testkit/conformance.rs` (checkpointers, task stores) | RT | 3 | shipped |
+| G4 | Backend conformance suites for sessions / stores run against every backend | pi (`session/testing/conformance`), LG | pi §3, `sdk-gaps/durability.md` §17 | session and store tests | RT | 3 | partial: session/store tests exist; the graph testkit and graph checkpointer conformance suite were removed in TinyAgents #61 |
 
 ## Stays in OpenHuman
 

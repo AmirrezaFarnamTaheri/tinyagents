@@ -22,6 +22,11 @@ pub(super) enum Action {
     FailBefore,
     Unsupported,
     Barrier,
+    /// The document port does not advertise conditional stream appends, as
+    /// SQLite documents do not (only its stream port does).
+    DocsLackStreamAppend,
+    /// The stream port does not advertise conditional stream appends.
+    StreamsLackStreamAppend,
 }
 #[derive(Debug)]
 pub(super) struct Fault {
@@ -94,7 +99,12 @@ struct Documents {
 #[async_trait]
 impl DocumentStore for Documents {
     fn capabilities(&self) -> Capabilities {
-        self.inner.capabilities()
+        let capabilities = self.inner.capabilities();
+        if matches!(self.fault.action, Action::DocsLackStreamAppend) {
+            capabilities.without(tinystoragedrivers_types::Capability::ConditionalStreamAppend)
+        } else {
+            capabilities
+        }
     }
     async fn ensure_collection(&self, _: &CollectionSpec) -> tinystoragedrivers_types::Result<()> {
         panic!("actor attempted DDL")
@@ -198,7 +208,12 @@ struct Streams {
 #[async_trait]
 impl StreamStore for Streams {
     fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
-        self.inner.capabilities()
+        let capabilities = self.inner.capabilities();
+        if matches!(self.fault.action, Action::StreamsLackStreamAppend) {
+            capabilities.without(tinystoragedrivers_types::Capability::ConditionalStreamAppend)
+        } else {
+            capabilities
+        }
     }
 
     async fn append(&self, s: &str, v: Value) -> tinystoragedrivers_types::Result<u64> {

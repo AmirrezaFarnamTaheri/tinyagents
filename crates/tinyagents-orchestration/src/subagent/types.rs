@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use tinyagents_harness::tool::ToolSnapshot;
 use tinyagents_harness::{CancellationToken, context::RunContext};
-use tinyagents_tasks::NotifyMode;
+use tinyagents_tasks::{DeliveryFence, NotifyMode};
 use tinyinference_llm::{message::Message, usage::UsageTotals};
 
 use super::{ResultPolicy, SubAgentPolicy, SubagentRole};
@@ -22,6 +22,7 @@ pub struct SubagentRequest<C = (), H = ()> {
     host_request: H,
     input: String,
     resume: Option<SubagentResume>,
+    turn_fence: Option<Arc<dyn DeliveryFence>>,
 }
 
 /// One-way planner view of a validated request.
@@ -139,6 +140,7 @@ impl<C, H> SubagentRequest<C, H> {
             host_request,
             input: input.into(),
             resume,
+            turn_fence: None,
         })
     }
 
@@ -188,6 +190,7 @@ impl<C, H> SubagentRequest<C, H> {
             host_request,
             input: input.into(),
             resume,
+            turn_fence: None,
         })
     }
 
@@ -213,6 +216,7 @@ impl<C, H> SubagentRequest<C, H> {
             host_request,
             input: input.into(),
             resume,
+            turn_fence: None,
         })
     }
 
@@ -290,6 +294,18 @@ impl<C, H> SubagentRequest<C, H> {
         self.resume.as_ref()
     }
 
+    /// Supplies a host-owned durable turn fence for this child lifecycle. The
+    /// generic driver keeps the guard alive and cancels execution on loss; the
+    /// executor uses the same authority to bind its transcript writer.
+    pub fn with_turn_fence(mut self, fence: Arc<dyn DeliveryFence>) -> Self {
+        self.turn_fence = Some(fence);
+        self
+    }
+
+    pub(crate) fn turn_fence(&self) -> Option<Arc<dyn DeliveryFence>> {
+        self.turn_fence.clone()
+    }
+
     pub(crate) fn set_resume(&mut self, resume: Option<SubagentResume>) {
         self.resume = resume;
     }
@@ -360,8 +376,8 @@ pub struct PreparedSubagent<C = ()> {
     /// The tool set the child inherited. When set, the driver intersects
     /// [`Self::tools`] with it so a child can never widen what it inherited.
     pub tool_ceiling: Option<ToolSnapshot>,
-    /// Names of the host's own [`SubAgentTool`](super::SubAgentTool)s, which a
-    /// leaf must not keep (the crate cannot know custom tool names).
+    /// Names of the host's own spawn tools, which a leaf must not keep (the
+    /// crate cannot know custom tool names).
     pub delegation_tools: Vec<String>,
     /// Authored capability scope to intersect with the supplied declarations.
     pub tool_scope: Option<tinyagents_definition::ToolScope>,
@@ -490,6 +506,9 @@ pub struct SubagentExecution<C = ()> {
     pub task_key: SubagentTaskKey,
     /// Cooperative cancellation shared with the lifecycle owner.
     pub cancellation: CancellationToken,
+    /// Host-owned thread-turn authority retained across every executor await.
+    /// When set, the driver stops dispatch and persistence after ownership loss.
+    pub turn_fence: Option<Arc<dyn DeliveryFence>>,
 }
 
 /// A neutral reference to a host-owned artifact.

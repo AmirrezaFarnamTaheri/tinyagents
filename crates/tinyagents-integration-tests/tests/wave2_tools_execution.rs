@@ -217,13 +217,15 @@ fn tool_message_ids(messages: &[Message]) -> Vec<String> {
 #[tokio::test]
 async fn tool_result_call_id_is_overwritten_with_the_admitted_id() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
-            tool_calls_response(vec![ToolCall::new("call_abc", "wrong_id", json!({}))]),
-            text_response("done"),
-        ])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                tool_calls_response(vec![ToolCall::new("call_abc", "wrong_id", json!({}))]),
+                text_response("done"),
+            ])),
+        ),
+    ));
     harness.register_tool(Arc::new(WrongCallIdTool));
 
     let run = harness
@@ -244,14 +246,16 @@ async fn tool_result_call_id_is_overwritten_with_the_admitted_id() {
 async fn concurrent_admission_failure_emits_no_tool_started() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![tool_calls_response(vec![
-            ToolCall::new("c1", "echo_a", json!({})),
-            ToolCall::new("c2", "echo_b", json!({})),
-            ToolCall::new("c3", "echo_c", json!({})),
-        ])])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![tool_calls_response(vec![
+                ToolCall::new("c1", "echo_a", json!({})),
+                ToolCall::new("c2", "echo_b", json!({})),
+                ToolCall::new("c3", "echo_c", json!({})),
+            ])])),
+        ),
+    ));
     for name in ["echo_a", "echo_b", "echo_c"] {
         harness.register_tool(Arc::new(EchoTool {
             name: name.to_string(),
@@ -294,13 +298,15 @@ async fn concurrent_admission_failure_emits_no_tool_started() {
 async fn serial_tool_error_becomes_a_model_visible_result() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
-            tool_calls_response(vec![ToolCall::new("c1", "flaky", json!({}))]),
-            text_response("recovered"),
-        ])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                tool_calls_response(vec![ToolCall::new("c1", "flaky", json!({}))]),
+                text_response("recovered"),
+            ])),
+        ),
+    ));
     harness.register_tool(Arc::new(ErringTool {
         name: "flaky".into(),
         recoverable: true,
@@ -332,16 +338,18 @@ async fn serial_tool_error_becomes_a_model_visible_result() {
 async fn concurrent_tool_error_becomes_a_model_visible_result() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
-            tool_calls_response(vec![
-                ToolCall::new("c1", "flaky", json!({})),
-                ToolCall::new("c2", "echo_a", json!({})),
-            ]),
-            text_response("recovered"),
-        ])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                tool_calls_response(vec![
+                    ToolCall::new("c1", "flaky", json!({})),
+                    ToolCall::new("c2", "echo_a", json!({})),
+                ]),
+                text_response("recovered"),
+            ])),
+        ),
+    ));
     harness.register_tool(Arc::new(ErringTool {
         name: "flaky".into(),
         recoverable: true,
@@ -370,12 +378,14 @@ async fn concurrent_tool_error_becomes_a_model_visible_result() {
 async fn fatal_tool_error_emits_tool_failed_and_clears_active_calls() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![tool_calls_response(vec![
-            ToolCall::new("c1", "fatal", json!({})),
-        ])])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![tool_calls_response(vec![
+                ToolCall::new("c1", "fatal", json!({})),
+            ])])),
+        ),
+    ));
     harness.register_tool(Arc::new(ErringTool {
         name: "fatal".into(),
         recoverable: false,
@@ -422,17 +432,19 @@ async fn fatal_tool_error_emits_tool_failed_and_clears_active_calls() {
 async fn duplicate_call_ids_do_not_clear_each_others_active_entry() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
-            // A provider that reuses one id across two calls in the same turn.
-            tool_calls_response(vec![
-                ToolCall::new("dup", "echo_a", json!({})),
-                ToolCall::new("dup", "flaky", json!({})),
-            ]),
-            text_response("done"),
-        ])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                // A provider that reuses one id across two calls in the same turn.
+                tool_calls_response(vec![
+                    ToolCall::new("dup", "echo_a", json!({})),
+                    ToolCall::new("dup", "flaky", json!({})),
+                ]),
+                text_response("done"),
+            ])),
+        ),
+    ));
     harness.register_tool(Arc::new(EchoTool {
         name: "echo_a".into(),
         calls: calls.clone(),
@@ -477,13 +489,15 @@ async fn duplicate_call_ids_do_not_clear_each_others_active_entry() {
 #[tokio::test]
 async fn unknown_tool_recovery_emits_started_and_completed() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
-            tool_calls_response(vec![ToolCall::new("c1", "missing", json!({}))]),
-            text_response("recovered"),
-        ])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                tool_calls_response(vec![ToolCall::new("c1", "missing", json!({}))]),
+                text_response("recovered"),
+            ])),
+        ),
+    ));
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::ReturnToolError,
         ..RunPolicy::default()
@@ -521,12 +535,14 @@ async fn before_tool_rejection_surfaces_as_a_middleware_error() {
     // error, is what surfaces while budget remains.
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![tool_calls_response(vec![
-            ToolCall::new("c1", "echo_a", json!({})),
-        ])])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![tool_calls_response(vec![
+                ToolCall::new("c1", "echo_a", json!({})),
+            ])])),
+        ),
+    ));
     harness.register_tool(Arc::new(EchoTool {
         name: "echo_a".into(),
         calls: calls.clone(),
@@ -551,18 +567,20 @@ async fn before_tool_rejection_surfaces_as_a_middleware_error() {
 async fn injected_arguments_are_stripped_before_validation() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
-            tool_calls_response(vec![ToolCall::new(
-                "c1",
-                "injected",
-                // The model forges the hidden key it was never shown.
-                json!({ "query": "hi", "thread_id": "forged" }),
-            )]),
-            text_response("done"),
-        ])),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                tool_calls_response(vec![ToolCall::new(
+                    "c1",
+                    "injected",
+                    // The model forges the hidden key it was never shown.
+                    json!({ "query": "hi", "thread_id": "forged" }),
+                )]),
+                text_response("done"),
+            ])),
+        ),
+    ));
     harness.register_tool(Arc::new(InjectedArgTool { seen: seen.clone() }));
 
     harness

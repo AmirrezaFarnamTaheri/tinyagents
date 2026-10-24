@@ -1,7 +1,7 @@
 //! Renewable owner-local leases for storage open and migration.
 
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -198,6 +198,55 @@ where
         work,
     )
     .await
+}
+
+/// [`with_migration_lease`] for an owner's open path: once `work` has
+/// succeeded for this documents port, scope and owner, later calls in the same
+/// process return at once without taking the lease. A failed run is not
+/// remembered, so the next call retries. The owner's migrations stay safe to
+/// rerun; this only spares repeated opens the lease round trips.
+pub async fn with_migration_lease_once<F, Fut>(
+    storage: &ScopedStorage,
+    owner: &str,
+    work: F,
+) -> Result<()>
+where
+    F: FnOnce(MigrationLease) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    let docs = Arc::downgrade(storage.documents());
+    let done = |list: &Vec<Migrated>| {
+        list.iter()
+            .any(|(d, scope, o)| Weak::ptr_eq(d, &docs) && scope == storage.scope() && o == owner)
+    };
+    if done(&migrated()) {
+        return Ok(());
+    }
+    with_migration_lease(storage, owner, work).await?;
+    let mut list = migrated();
+    if !done(&list) {
+        list.retain(|(d, _, _)| d.strong_count() > 0);
+        list.push((docs, storage.scope().clone(), owner.to_owned()));
+    }
+    Ok(())
+}
+
+type Migrated = (
+    Weak<dyn crate::DocumentStore>,
+    tinystoragedrivers_types::Scope,
+    String,
+);
+
+// ponytail: process-global list scanned linearly, one entry per (documents
+// port, scope, owner) opened. The `Weak` keeps a dropped port's allocation, so
+// its address cannot be reused for a false hit; dead entries are pruned on
+// insert. Key it by port in a map if a host opens thousands of scopes.
+static MIGRATED: std::sync::Mutex<Vec<Migrated>> = std::sync::Mutex::new(Vec::new());
+
+fn migrated() -> std::sync::MutexGuard<'static, Vec<Migrated>> {
+    MIGRATED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 async fn with_migration_lease_using<T, F, Fut>(

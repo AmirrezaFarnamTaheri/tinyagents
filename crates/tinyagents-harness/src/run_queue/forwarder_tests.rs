@@ -11,6 +11,7 @@ struct Item {
     id: String,
     text: String,
     thread: String,
+    lane: Option<QueueLane>,
 }
 
 impl QueuedMessage for Item {
@@ -25,7 +26,20 @@ impl QueuedMessage for Item {
             id,
             text,
             thread: thread_label.to_string(),
+            lane: None,
         }
+    }
+
+    fn requeued_in_lane(
+        id: String,
+        text: String,
+        thread_label: &str,
+        lane: QueueLane,
+        queued_at_ms: u64,
+    ) -> Self {
+        let mut item = Self::requeued(id, text, thread_label, queued_at_ms);
+        item.lane = Some(lane);
+        item
     }
 }
 
@@ -34,6 +48,7 @@ fn item(id: &str, text: &str) -> Item {
         id: id.into(),
         text: text.into(),
         thread: "thread-test".into(),
+        lane: None,
     }
 }
 
@@ -75,6 +90,7 @@ async fn residual_collect_requeues_to_its_original_lane() {
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].text, "recovered context");
     assert_eq!(recovered[0].thread, "thread-test");
+    assert_eq!(recovered[0].lane, Some(QueueLane::Collect));
     let events = events.lock().unwrap();
     assert!(matches!(
         events.as_slice(),
@@ -211,9 +227,10 @@ async fn collect_reaches_the_next_model_boundary_as_additional_context() {
     forward_collects(&queue, &handle, "thread-test", &sink).await;
     let model = Arc::new(ScriptedModel::replies(vec!["done"]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness
-        .register_model("scripted", model.clone())
-        .set_default_model("scripted");
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "scripted",
+        model.clone(),
+    )));
     harness
         .invoke_in_context(
             &(),
@@ -413,6 +430,61 @@ async fn native_message_guard_requeues_full_residual_and_leaves_non_user_items()
         [ForwardEvent::Requeued { requeued: 1, item_id: None, text: Some(text), .. }]
             if text == "deferred"
     ));
+}
+
+#[tokio::test]
+async fn native_forwarder_requeues_residual_without_stripping_guarded_queue_items() {
+    use crate::run_queue::{QueueAdmission, QueueAdmissionError, QueueAdmissionPermit};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Debug)]
+    struct Admission(AtomicBool);
+    impl QueueAdmission for Admission {
+        fn acquire(&self) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
+            self.0
+                .load(Ordering::SeqCst)
+                .then(|| Arc::new(()) as Arc<dyn QueueAdmissionPermit>)
+                .ok_or(QueueAdmissionError::Rejected)
+        }
+    }
+
+    let queue = Arc::new(RunQueue::<TaMessage>::new());
+    let admission = Arc::new(Admission(AtomicBool::new(true)));
+    queue
+        .push_guarded(
+            QueueLane::Steer,
+            TaMessage::user("lifecycle guarded"),
+            admission,
+        )
+        .await;
+    queue
+        .push(QueueLane::Steer, TaMessage::user("forwarded then restored"))
+        .await;
+    let handle = SteeringHandle::allow_all();
+    let (sink, _) = recorder();
+    let guard = MessageSteeringForwarderGuard::new(
+        handle.clone(),
+        Some(queue.clone()),
+        None,
+        "native".into(),
+        sink.clone(),
+    );
+
+    forward_message_steers(&queue, &handle, "native", &sink).await;
+    drop(guard);
+
+    let mut restored = queue
+        .take_admitted(QueueLane::Steer, crate::run_queue::QueueMode::All)
+        .await
+        .into_iter()
+        .map(|item| item.value.text())
+        .collect::<Vec<_>>();
+    restored.sort_unstable();
+    assert_eq!(
+        restored,
+        vec!["forwarded then restored", "lifecycle guarded"],
+        "legacy forwarding may process ordinary items but must retain guarded payloads and their admission"
+    );
 }
 
 #[tokio::test]

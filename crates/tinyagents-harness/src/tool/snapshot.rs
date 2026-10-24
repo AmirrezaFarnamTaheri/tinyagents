@@ -1,4 +1,9 @@
-use std::collections::BTreeMap;
+use std::{
+    any::TypeId,
+    collections::{BTreeMap, HashMap},
+    fmt,
+    sync::Arc,
+};
 
 use tinytools::ToolSpec;
 
@@ -19,14 +24,57 @@ pub enum ToolSnapshotError {
     Decode(String),
 }
 
+/// Type-erased host-owned state carried alongside a tool snapshot.
+///
+/// Extensions are retained by in-memory snapshot copies and are excluded from
+/// the serialized tool declarations.
+pub trait ToolSnapshotExtension: std::any::Any + fmt::Debug + Send + Sync {
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+impl<T: std::any::Any + fmt::Debug + Send + Sync> ToolSnapshotExtension for T {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct ToolSnapshotExtensions {
+    values: HashMap<TypeId, Arc<dyn ToolSnapshotExtension>>,
+}
+
+impl fmt::Debug for ToolSnapshotExtensions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ToolSnapshotExtensions")
+            .field("len", &self.values.len())
+            .finish()
+    }
+}
+
+impl ToolSnapshotExtensions {
+    pub fn insert<T: ToolSnapshotExtension>(&mut self, value: T) {
+        self.values.insert(TypeId::of::<T>(), Arc::new(value));
+    }
+
+    pub fn get<T: ToolSnapshotExtension>(&self) -> Option<&T> {
+        self.values
+            .get(&TypeId::of::<T>())?
+            .as_ref()
+            .as_any()
+            .downcast_ref::<T>()
+    }
+}
+
 /// An immutable, model-visible tool declaration set for one session turn.
 ///
 /// It records declarations only; choosing which tools are permitted and wiring
-/// their executors remains a host/driver responsibility.
+/// their executors remains a host/driver responsibility. Typed extensions stay
+/// in memory and do not appear in the serialized transcript value.
 #[derive(Clone, Debug, Default)]
 pub struct ToolSnapshot {
     specs: Vec<ToolSpec>,
     exact: bool,
+    extensions: ToolSnapshotExtensions,
 }
 
 impl ToolSnapshot {
@@ -50,6 +98,7 @@ impl ToolSnapshot {
         Ok(Self {
             specs: names.into_values().collect(),
             exact: false,
+            extensions: ToolSnapshotExtensions::default(),
         })
     }
 
@@ -69,6 +118,17 @@ impl ToolSnapshot {
         &self.specs
     }
 
+    /// Attaches an immutable, host-defined value keyed by its Rust type.
+    pub fn with_extension<T: ToolSnapshotExtension>(mut self, extension: T) -> Self {
+        self.extensions.insert(extension);
+        self
+    }
+
+    /// Reads a host-defined extension without serializing it into tool specs.
+    pub fn extension<T: ToolSnapshotExtension>(&self) -> Option<&T> {
+        self.extensions.get::<T>()
+    }
+
     /// A narrowed copy holding only the declarations `keep` accepts, with the
     /// one-off ([`Self::exact`]) marker preserved. The source is untouched.
     pub fn retaining(&self, keep: impl Fn(&ToolSpec) -> bool) -> Self {
@@ -80,6 +140,7 @@ impl ToolSnapshot {
                 .cloned()
                 .collect(),
             exact: self.exact,
+            extensions: self.extensions.clone(),
         }
     }
 
@@ -103,6 +164,9 @@ impl ToolSnapshot {
         &self,
         recorded: &ToolSnapshot,
     ) -> Result<(Self, usize), ToolSnapshotError> {
+        if self.exact {
+            return Ok((self.clone(), 0));
+        }
         let retained: Vec<ToolSpec> = recorded
             .specs
             .iter()
@@ -113,7 +177,8 @@ impl ToolSnapshot {
             return Ok((self.clone(), 0));
         }
         let count = retained.len();
-        let merged = Self::new(self.specs.iter().cloned().chain(retained).collect())?;
+        let mut merged = Self::new(self.specs.iter().cloned().chain(retained).collect())?;
+        merged.extensions = self.extensions.clone();
         Ok((merged, count))
     }
 }

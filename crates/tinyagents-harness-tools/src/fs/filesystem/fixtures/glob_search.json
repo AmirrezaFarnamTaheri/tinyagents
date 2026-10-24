@@ -1,0 +1,27 @@
+{
+  "description": "Find files matching a glob pattern (e.g. `src/**/*.rs`), searching the action sandbox unless `path` says otherwise. Returns paths newest-first, ready to pass straight to `file_read` / `grep`.",
+  "exposure": "Direct",
+  "name": "glob",
+  "permission_level": "ReadOnly",
+  "schema": {
+    "properties": {
+      "max_results": {
+        "description": "Cap on returned paths (default 500).",
+        "minimum": 1,
+        "type": "integer"
+      },
+      "path": {
+        "description": "Directory to search within. Defaults to the working directory (action sandbox). Must be a location you're allowed to read; relative paths resolve against the working directory.",
+        "type": "string"
+      },
+      "pattern": {
+        "description": "Glob pattern, e.g. `**/*.rs` or `src/**/*.{ts,tsx}` (single brace expansion not supported — list patterns separately). Matched against paths relative to the search directory.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "pattern"
+    ],
+    "type": "object"
+  }
+}

@@ -55,4 +55,4 @@ jobs:
         run: .github/scripts/start-session-mongo-replset.sh 27017
 
       - name: Run MongoDB driver conformance
-        run: cargo test --manifest-path integration-proofs/run-ledger-mongodb/Cargo.toml --features mongodb-storage-tests --test session_driver_conformance -- --ignored
+        run: cargo test --locked --manifest-path integration-proofs/run-ledger-mongodb/Cargo.toml --features mongodb-storage-tests --test session_driver_conformance -- --ignored

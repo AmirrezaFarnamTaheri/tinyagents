@@ -3,10 +3,10 @@
 //! The todo list holds the concrete steps the run is working through: an
 //! ordered list of [`TodoItem`]s, each `pending`, `in_progress`,
 //! `completed` or `cancelled`. This module owns the data model and markdown
-//! rendering ([`types`]), the step order (`sequence`: one step at a time,
-//! top to bottom), harness-[`Store`](tinyagents_harness::store::Store)-backed
-//! persistence that keeps it ([`store`]), the model-facing tool ([`tool`]),
-//! and the middleware that holds a run to its plan ([`middleware`]).
+//! rendering (`types`), the step order (`sequence`: one step at a time,
+//! top to bottom), harness `Store`-backed persistence that keeps it (`store`),
+//! the model-facing tool (`tool`), and the middleware that holds a run to its
+//! plan (`middleware`).
 //!
 //! The model writes the whole list once, then ticks steps off with
 //! `{"complete": N}`; nothing else hangs off an item — no ids, no approvals,

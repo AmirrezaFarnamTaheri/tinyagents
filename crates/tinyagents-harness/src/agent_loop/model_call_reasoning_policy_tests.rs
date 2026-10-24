@@ -103,7 +103,10 @@ async fn reasoning_past_the_requested_budget_finishes_without_client_interruptio
         "complete answer",
     )]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::clone(&model) as _);
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::clone(&model) as _,
+    )));
     harness.with_policy(RunPolicy {
         default_reasoning: Some(ReasoningConfig {
             effort: Some(ReasoningEffort::High),

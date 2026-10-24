@@ -50,7 +50,9 @@ pub use shared::{
     CanonicalSharedToolAdapter, EarlyExit, EarlyExitHook, ToolExecScope, ToolExecution,
 };
 pub use signature::*;
-pub use snapshot::{ToolSnapshot, ToolSnapshotError};
+pub use snapshot::{
+    ToolSnapshot, ToolSnapshotError, ToolSnapshotExtension, ToolSnapshotExtensions,
+};
 pub use timeout::*;
 
 /// Name of the generic skill disclosure and indirect-call tool.

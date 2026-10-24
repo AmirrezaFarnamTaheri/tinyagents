@@ -5,7 +5,9 @@
 //! defect in one cannot hide behind another. The run ledger is certified on the
 //! memory and sqlite drivers. `TranscriptHistory` genuinely has two
 //! implementations — the production driver-backed one and the in-memory test
-//! double — and both are certified here.
+//! double — and both are certified here. The driver-backed transcript suite
+//! uses SQLite because generation writes require native lease-conditioned
+//! document handles.
 
 mod common;
 
@@ -58,7 +60,12 @@ fn contract_meta() -> TranscriptMeta {
 #[test]
 fn driver_transcript_history_satisfies_the_conformance_suite() {
     use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
-    let stores = DriverSessionStores::new(storage::fixed_factory(storage::memory())).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let (factory, conditioned_factory) =
+        storage::conditioned_sqlite_factories(dir.path(), "transcripts.sqlite");
+    let stores = DriverSessionStores::new(factory)
+        .unwrap()
+        .with_conditioned_storage_factory(conditioned_factory);
     let history = stores
         .for_agent("contract")
         .transcripts

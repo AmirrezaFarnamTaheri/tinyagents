@@ -109,6 +109,18 @@ async fn wait_execute_returns_callback_message() {
     assert!(res.output().contains("time to check"));
 }
 
+#[test]
+fn delayed_wait_tools_are_available_to_read_only_turns() {
+    assert_eq!(
+        WaitTool::new().permission_level(),
+        tinytools::PermissionLevel::None
+    );
+    assert_eq!(
+        WaitLoopTool::new().permission_level(),
+        tinytools::PermissionLevel::None
+    );
+}
+
 /// Wire shape is a contract with prompts and recorded transcripts: names and
 /// schemas must stay byte-identical across moves.
 #[test]

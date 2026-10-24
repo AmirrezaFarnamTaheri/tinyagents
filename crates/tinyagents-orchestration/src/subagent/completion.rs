@@ -44,6 +44,7 @@ impl From<&AppliedResult> for CompletionResult {
 pub(crate) struct CompletionOrigin {
     task_id: String,
     parent_key: String,
+    parent_epoch: u64,
     agent_id: String,
     notify_mode: NotifyMode,
 }
@@ -53,8 +54,11 @@ impl CompletionOrigin {
     pub(crate) fn new<C>(
         task_key: &SubagentTaskKey,
         prepared: &PreparedSubagent<C>,
-    ) -> Option<Self> {
-        let notify_mode = prepared.notify_mode?;
+        router: &CompletionRouter,
+    ) -> Result<Option<Self>, super::SubagentError> {
+        let Some(notify_mode) = prepared.notify_mode else {
+            return Ok(None);
+        };
         // The thread outlives a restart; the parent run id does not, so it is
         // only the fallback for a thread-less parent.
         let parent_key = prepared
@@ -62,23 +66,34 @@ impl CompletionOrigin {
             .clone()
             .or_else(|| task_key.thread_id.clone())
             .unwrap_or_else(|| task_key.parent_run_id.clone());
-        Some(Self {
+        let parent_epoch = router
+            .admit_child_generation(&parent_key)
+            .map_err(|error| super::SubagentError::Persistence(error.to_string()))?
+            .ok_or_else(|| {
+                super::SubagentError::Persistence(format!(
+                    "parent lifecycle is closed: {parent_key:?}"
+                ))
+            })?;
+        Ok(Some(Self {
             task_id: task_key.task_id.clone(),
             parent_key,
+            parent_epoch,
             agent_id: prepared.agent_key.clone(),
             notify_mode,
-        })
+        }))
     }
 
     fn record(&self, status: CompletionStatus, result: CompletionResult) -> CompletionRecord {
-        CompletionRecord::new(
+        let mut record = CompletionRecord::new(
             self.task_id.clone(),
             self.parent_key.clone(),
             self.agent_id.clone(),
             status,
             result,
         )
-        .with_notify_mode(self.notify_mode)
+        .with_notify_mode(self.notify_mode);
+        record.parent_epoch = self.parent_epoch;
+        record
     }
 
     /// The record for a finished lifecycle, or `None` when the outcome is not a

@@ -2,9 +2,8 @@
 
 Steering is runtime control sent to an already-created agent run. It is broader
 than a prompt edit and narrower than mutating arbitrary state. TinyAgents should
-support steering at both the harness level and graph level so parent
-orchestrators, humans, tests, and UIs can guide long-running work without
-breaking run hierarchy, checkpoints, or observability.
+support harness-level steering so parent orchestrators, humans, tests, and UIs
+can guide long-running work without breaking run hierarchy or observability.
 
 ## Steering Relationships
 
@@ -13,19 +12,18 @@ Supported steering relationships:
 - parent orchestrator agent steers a sub-agent
 - human steers a sub-agent
 - human steers a parent orchestrator agent
-- graph supervisor node steers child sub-agent tasks
 - middleware steers an agent loop under explicit policy
 - test harness steers fake agents deterministically
 
 Every steering operation must preserve `root_run_id`, `parent_run_id`,
-`thread_id`, `agent_id`, `task_id` when graph-backed, source actor, source
-scope, and checkpoint or event offsets when available.
+`thread_id`, `agent_id`, `task_id` when present, source actor, source scope,
+and event offsets when available.
 
 ## Non-Goals
 
 - Steering is not hidden prompt injection.
 - Steering is not direct mutation of another run's private memory.
-- Steering is not a way to bypass model, tool, graph, store, or budget
+- Steering is not a way to bypass model, tool, store, or budget
   allowlists.
 - Steering is not an untracked side channel; every accepted steering instruction
   emits events and appears in run inspection.
@@ -47,15 +45,12 @@ pub struct SteeringCommand {
 pub enum SteeringTarget {
     AgentRun(RunId),
     SubAgentRun { parent_run_id: RunId, child_run_id: RunId },
-    GraphTask { run_id: RunId, task_id: TaskId },
-    GraphNode { run_id: RunId, node_id: NodeId },
     Thread(ThreadId),
 }
 
 pub enum SteeringActor {
     Human { user_id: String },
     ParentAgent { run_id: RunId, agent_id: ComponentId },
-    GraphSupervisor { run_id: RunId, node_id: NodeId },
     Middleware { name: String },
     Test,
 }
@@ -85,8 +80,7 @@ commands.
 
 ## Harness-Level Steering
 
-Harness-level steering applies to direct model calls and model-tool loops that
-are not graph-backed.
+Harness-level steering applies to direct model calls and model-tool loops.
 
 Required behavior:
 
@@ -171,25 +165,6 @@ opts in with `SteeringPolicy::allow_all_with_model_switch()` or
 - The orchestration `steer_agent` tool does not expose `switch_model`; it is a
   host-level control for now.
 
-## Graph-Level Steering
-
-Graph-backed steering is a command against graph state and task scheduling. It
-should use the graph runtime whenever the target run has checkpoints, active
-tasks, interrupts, child sub-agents, or subgraphs.
-
-Graph-level steering can lower to:
-
-- `Command::resume` for an interrupt
-- `Command::goto` for an explicit redirect
-- `Command::update` for a reducer-mediated state update
-- `Command::parent` for child-to-parent handoff
-- task cancellation through graph policy
-- a queued steering event delivered to a child sub-agent node
-
-Graph steering must be checkpoint-aware. If a child task is paused, a steering
-command targets the child namespace and resumes only that child unless policy
-explicitly escalates to the parent run.
-
 ## Parent Orchestrator Steering
 
 A parent orchestrator may steer sub-agents it created when policy grants that
@@ -202,21 +177,20 @@ orchestrator -> spawn research_subagent
 orchestrator -> steer research_subagent: "focus only on billing evidence"
 orchestrator -> steer critic_subagent: "compare answer against policy version 3"
 orchestrator -> wait research_subagent, critic_subagent
-orchestrator -> merge child outputs through graph reducers
+orchestrator -> merge child outputs under host policy
 ```
 
 Rules:
 
 - the parent can steer only descendants in its run tree by default
-- sibling agents cannot steer each other unless a graph supervisor grants it
+- sibling agents cannot steer each other unless host policy grants it
 - steering cannot expand a child's tool/model allowlist beyond the child
   policy
 - parent steering is visible to the child as a structured instruction with
   provenance, not as anonymous user text
 - the child may reject steering that violates its policy and must emit a
   rejection event
-- parent steering and child output both merge through normal graph or harness
-  state contracts
+- parent steering and child output follow the harness run contracts
 
 ### Child Limit Coordination
 
@@ -225,18 +199,11 @@ hallucinate indefinitely or loop forever. Harness-level caps such as
 `RunLimits::max_model_calls`, `max_tool_calls`, wall-clock deadlines, and
 `max_depth` are enforced by the child run.
 
-When a parent calls a sub-agent through `SubAgentTool`, child limit exhaustion is
-reported back as an error `ToolResult` instead of crashing the parent run. The
-tool result content must tell the parent orchestrator that the delegated
-sub-agent stopped because it hit a configured limit, not because it completed
-the task. The parent can then narrow the task, split it across more workers,
-retry with a different budget, or report the partial failure.
-
-Direct sub-agent APIs (`SubAgent::invoke`, `invoke_with_events`,
-`invoke_in_parent`, and `SubAgentSession::send`) still return the original
-classified error. That lets application code decide whether a direct child
-limit should fail the caller, be retried, or be converted into a graph/state
-transition.
+`DriverSubAgentTool` runs child work asynchronously and immediately returns a
+job reference. A child limit is recorded as an incomplete job with its typed
+reason; the host can query or await that job separately and decide whether to
+retry, narrow the task, or report the partial result. The driver does not run
+child work inline in the parent model tool call.
 
 ### Agent-origin text is fenced, capped and labelled
 
@@ -261,23 +228,21 @@ Human steering modes:
   boundary
 - policy edit: narrow model/tool/budget limits for a run
 - pause/cancel: stop a run or child task cooperatively
-- redirect: send a graph-backed run to a review, retry, or finalize node
-- state update: apply a reducer-mediated correction to graph state
+- redirect: change the host-defined next action for a run
 
 Human steering must be auditable:
 
 - actor id
-- target run/task/node
+- target run/task
 - timestamp
 - accepted/rejected/deferred status
 - policy that allowed the action
-- model/tool/graph operation affected
+- model/tool operation affected
 - redacted payload for UI and event export
 
 Human steering of sub-agents should not require steering the parent first. A UI
-must be able to target a specific child run or graph task using run-tree
-metadata. The parent is notified through events and rollups, not by opaque
-shared state.
+must be able to target a specific child run using run-tree metadata. The parent
+is notified through events and rollups, not by opaque shared state.
 
 ## Delivery And Conflict Rules
 
@@ -295,7 +260,7 @@ Conflict rules:
 - human `ConstrainTools` can narrow but not widen a parent-granted tool set.
 - parent `AddInstruction` appends to the child steering context unless a policy
   allows replacement.
-- simultaneous redirects require a graph policy: first accepted, highest
+- simultaneous redirects require an explicit policy: first accepted, highest
   priority, or explicit conflict error.
 - stale steering commands that refer to a completed checkpoint are rejected
   unless they target a new fork.
@@ -313,9 +278,9 @@ Required events:
 - `steering.superseded`
 - `steering.failed`
 
-Events must include root run id, parent run id, target run id, target task/node
-when graph-backed, actor, kind, correlation id, policy id, checkpoint id when
-available, and redacted payload summary.
+Events must include root run id, parent run id, target run id, target task when
+available, actor, kind, correlation id, policy id, and redacted payload
+summary.
 
 ## Testkit
 
@@ -327,5 +292,4 @@ The testkit should include:
 - rejected steering because of missing authority
 - rejected tool allowlist expansion
 - deterministic ordering of simultaneous steering commands
-- graph-backed targeted child resume
 - harness-loop steering delivered at the next safe boundary

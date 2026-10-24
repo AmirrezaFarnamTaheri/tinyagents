@@ -97,7 +97,22 @@ impl DriverStatusStore {
     /// The collection every store uses.
     pub const COLLECTION: &'static str = crate::storage::RUN_STATUS;
 
-    /// Store statuses in [`Self::COLLECTION`].
+    /// Open the scope's harness storage (running the harness's migrations once
+    /// per scope, see [`crate::storage::open_storage`]) and store statuses in it. Prefer
+    /// this over [`Self::new`].
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::TinyAgentsError::Storage`] when the migration fails.
+    pub async fn open(storage: tinyagents_storage_kit::ScopedStorage) -> Result<Self> {
+        let storage = crate::storage::open_storage(storage)
+            .await
+            .map_err(map_error)?;
+        Ok(Self::new(Arc::clone(storage.documents())))
+    }
+
+    /// Store statuses in [`Self::COLLECTION`]. The caller must have opened
+    /// the scope's harness storage first; prefer [`Self::open`].
     pub fn new(docs: Arc<dyn DocumentStore>) -> Self {
         Self {
             docs,

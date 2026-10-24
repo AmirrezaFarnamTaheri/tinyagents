@@ -122,14 +122,14 @@ async fn shared_target_finish_activity_distinguishes_preview_from_write() {
         )];
         call.finish_reason = Some("tool_calls".into());
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.register_model(
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
             "mock",
             Arc::new(ScriptedModel::new(vec![
                 call,
                 ModelResponse::assistant("draft"),
                 ModelResponse::assistant("checked"),
-            ])),
-        );
+            ])) as _,
+        )));
         harness.register_tool(Arc::new(metadata_adapter(PermissionLevel::ReadOnly, false)));
         harness.with_policy(RunPolicy {
             limits: RunLimits::default().with_max_model_calls(10),

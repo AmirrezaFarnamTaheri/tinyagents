@@ -4,14 +4,12 @@
 //! that outlives any single run: parent and child runs, sub-agents, and
 //! nested executions read and write the same namespaced values, so a
 //! deeply nested call can persist a result that a sibling or a later turn picks
-//! up. It is the harness-side persistence layer, distinct from graph
-//! checkpointing.
+//! up.
 //!
 //! The store is the persistence layer for harness runtime data: events, model
 //! call records, tool call records, message history, artifacts, and memory. It
-//! is intentionally separate from graph checkpointing (which belongs to the
-//! graph module) and from prompt/model context assembly (which belongs to the
-//! model and prompt modules).
+//! is intentionally separate from prompt/model context assembly (which belongs
+//! to the model and prompt modules).
 //!
 //! # Primary types
 //! - [`Store`] — the core async trait every backend implements.

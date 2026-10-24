@@ -1,0 +1,23 @@
+{
+  "description": "Read the contents of a file in your working directory (the action sandbox). Relative paths resolve against that directory; paths outside it are blocked. To read a file written by `shell`, confirm its location with `pwd` and use the same relative path. Long files are returned one page at a time; continue with the exact `offset` reported at the end of the page.",
+  "exposure": "Direct",
+  "name": "file_read",
+  "permission_level": "ReadOnly",
+  "schema": {
+    "properties": {
+      "offset": {
+        "description": "Byte offset to start reading from. Use the offset a paged read reports to continue it.",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "path": {
+        "description": "Relative path to the file within the workspace",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "type": "object"
+  }
+}

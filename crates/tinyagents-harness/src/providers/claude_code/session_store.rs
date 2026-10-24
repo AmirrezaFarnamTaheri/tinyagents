@@ -305,21 +305,40 @@ pub struct DeliveryClaim {
 }
 
 impl DeliveryClaim {
+    /// Ends the claim after delivery. The turns are now in the thread's
+    /// delivered list, so later claims skip them without touching these keys:
+    /// the lease rows are deleted, not left behind one per delivered turn.
     pub async fn commit(mut self) {
-        self.release_reservations().await;
+        for reservation in self.end() {
+            if let Err(error) = self
+                .store
+                .leases
+                .compact(
+                    CLAIM_OWNER,
+                    &reservation.key,
+                    &reservation.holder,
+                    reservation.epoch,
+                )
+                .await
+            {
+                tracing::warn!("failed to drop Claude Code delivery reservation: {error}");
+            }
+        }
     }
 
     pub async fn release(mut self) {
-        self.release_reservations().await;
+        let reservations = self.end();
+        release_reservations(&self.store.leases, &reservations).await;
     }
 
-    async fn release_reservations(&mut self) {
+    /// Stops the heartbeat, frees the in-process reservation and hands back
+    /// the storage leases for the caller to end.
+    fn end(&mut self) -> Vec<LeaseReservation> {
         if let Some(heartbeat) = self.heartbeat.take() {
             heartbeat.abort();
         }
         self.store.release_in_flight(&self.thread_id, &self.claimed);
-        let reservations = std::mem::take(&mut self.reservations);
-        release_reservations(&self.store.leases, &reservations).await;
+        std::mem::take(&mut self.reservations)
     }
 }
 

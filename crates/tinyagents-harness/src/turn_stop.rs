@@ -14,9 +14,133 @@
 //! content-free by construction: a typed breaker cause carries only stable
 //! class and operation identifiers, never the quoted tool output or target.
 
+use crate::close::{CloseToolResult, interpolate_once};
 use serde::de::Error as _;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+/// Host-provided prose and line templates for deterministic stop summaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StopCopy {
+    pub opening_template: &'static str,
+    pub what_happened_heading: &'static str,
+    pub success_template: &'static str,
+    pub failure_template: &'static str,
+    pub hidden_calls_template: &'static str,
+    pub proceed_prompt: &'static str,
+}
+
+/// English renderer copy for stopped-turn summaries.
+pub const ENGLISH_STOP_COPY: StopCopy = StopCopy {
+    opening_template: "I stopped this turn early because {reason}.\n",
+    what_happened_heading: "\n**What happened**\n",
+    success_template: "- `{name}` succeeded{count}",
+    failure_template: "- `{name}` failed{count}{error}",
+    hidden_calls_template: "- …and {count} more tool call(s)",
+    proceed_prompt: "\nTell me how you'd like to proceed, or ask me to try again.",
+};
+
+/// Summary row grouped by operation and scrubbed result text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StopSummaryGroup {
+    pub name: String,
+    pub success: bool,
+    pub error: Option<String>,
+    pub count: usize,
+}
+
+/// Group repeated results after the host has scrubbed failure text.
+pub fn group_stop_results<F>(
+    results: &[CloseToolResult],
+    mut scrubbed_error_line: F,
+) -> Vec<StopSummaryGroup>
+where
+    F: FnMut(&str) -> String,
+{
+    let mut groups: Vec<StopSummaryGroup> = Vec::new();
+    for result in results {
+        let error = if result.success {
+            None
+        } else {
+            Some(scrubbed_error_line(&result.content)).filter(|line| !line.is_empty())
+        };
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|g| g.name == result.name && g.success == result.success && g.error == error)
+        {
+            group.count += 1;
+        } else {
+            groups.push(StopSummaryGroup {
+                name: result.name.clone(),
+                success: result.success,
+                error,
+                count: 1,
+            });
+        }
+    }
+    groups
+}
+
+/// Render a bounded stop summary with caller-selected product copy.
+pub fn render_stop_summary_with_copy(
+    reason: &str,
+    groups: &[StopSummaryGroup],
+    copy: &StopCopy,
+) -> String {
+    use std::fmt::Write as _;
+    let mut out = interpolate_once(copy.opening_template, &[("{reason}", reason)]);
+    if !groups.is_empty() {
+        out.push_str(copy.what_happened_heading);
+        let shown_from = groups.len().saturating_sub(8);
+        for group in groups.iter().skip(shown_from) {
+            let name = truncate_stop_name(&group.name, 60);
+            let count = if group.count == 1 {
+                String::new()
+            } else {
+                format!(" {} times", group.count)
+            };
+            let line = if group.success {
+                interpolate_once(
+                    copy.success_template,
+                    &[("{name}", &name), ("{count}", &count)],
+                )
+            } else {
+                let error = group
+                    .error
+                    .as_ref()
+                    .map(|e| format!(": {e}"))
+                    .unwrap_or_default();
+                interpolate_once(
+                    copy.failure_template,
+                    &[("{name}", &name), ("{count}", &count), ("{error}", &error)],
+                )
+            };
+            let _ = writeln!(out, "{line}");
+        }
+        let hidden: usize = groups
+            .iter()
+            .take(shown_from)
+            .map(|group| group.count)
+            .sum();
+        if hidden > 0 {
+            let hidden = hidden.to_string();
+            let _ = writeln!(
+                out,
+                "{}",
+                interpolate_once(copy.hidden_calls_template, &[("{count}", &hidden)])
+            );
+        }
+    }
+    out.push_str(copy.proceed_prompt);
+    out
+}
+
+fn truncate_stop_name(text: &str, max_chars: usize) -> String {
+    match text.char_indices().nth(max_chars) {
+        Some((idx, _)) => format!("{}...", text[..idx].trim_end()),
+        None => text.to_owned(),
+    }
+}
 
 /// Which mechanism stopped the turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
