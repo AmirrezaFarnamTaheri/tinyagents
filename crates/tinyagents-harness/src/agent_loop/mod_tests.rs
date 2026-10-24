@@ -1139,6 +1139,7 @@ async fn truncated_empty_retry_does_not_replay_a_cached_blank() {
 
     let model = Arc::new(crate::testkit::ScriptedModel::new(vec![
         truncated_empty_response(2048),
+        truncated_empty_response(2048),
         text_response("recovered", 4, 3),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
@@ -1147,7 +1148,7 @@ async fn truncated_empty_retry_does_not_replay_a_cached_blank() {
         Arc::clone(&model) as _,
     )));
     harness.with_policy(RunPolicy {
-        // This test pins the cap ladder; keep reasoning on so the ladder runs.
+        // The first retry keeps its cap; only the second may grow it.
         ..RunPolicy::default()
     });
     harness.with_response_cache(Arc::new(InMemoryResponseCache::new()));
@@ -1161,8 +1162,12 @@ async fn truncated_empty_retry_does_not_replay_a_cached_blank() {
         .await
         .expect("length-truncated empty completion should reach the provider again");
     assert_eq!(run.text(), Some("recovered".to_string()));
-    assert_eq!(model.requests().len(), 2);
-    assert_eq!(model.requests()[1].max_tokens, Some(4096));
+    let caps: Vec<_> = model
+        .requests()
+        .iter()
+        .map(|request| request.max_tokens)
+        .collect();
+    assert_eq!(caps, [Some(2048), Some(2048), Some(4096)]);
 }
 
 #[tokio::test]

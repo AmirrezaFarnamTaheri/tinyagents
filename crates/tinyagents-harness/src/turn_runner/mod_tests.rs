@@ -1,5 +1,5 @@
 use super::*;
-use crate::run_queue::{QueueLane, QueueMode, RunQueue};
+use crate::run_queue::{QueueLane, QueueMode, QueuedMessage, RunQueue};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -190,6 +190,212 @@ fn request(disposition: QueueDisposition, host_authored: bool) -> TurnRequest {
         deadline: None,
         idle_timeout: Some(std::time::Duration::from_secs(5)),
     }
+}
+
+#[tokio::test]
+async fn taking_rebuilt_queue_requests_restores_the_active_scope() {
+    let runner = runner(
+        Arc::new(Host::default()),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    );
+    let scope = ScopeKey {
+        agent_id: "agent-a".into(),
+        profile_id: Some("profile-a".into()),
+    };
+    let queue = Arc::new(RunQueue::new());
+    let mut recovered = request(QueueDisposition::Steer, false);
+    recovered.scope = ScopeKey {
+        agent_id: String::new(),
+        profile_id: None,
+    };
+    queue.push_now(QueueLane::Steer, recovered);
+    runner.active.lock().await.insert(
+        (scope.clone(), "thread-a".into()),
+        ActiveTurn {
+            request_id: "active".into(),
+            cancel: crate::CancellationToken::new(),
+            generation: 7,
+            queue,
+            payload: serde_json::Value::Null,
+        },
+    );
+
+    let recovered = runner
+        .take_queued(&scope, "thread-a", QueueLane::Steer, QueueMode::OneAtATime)
+        .await;
+
+    assert_eq!(recovered[0].scope, scope);
+}
+
+#[tokio::test]
+async fn taking_rebuilt_queue_requests_restores_the_owner_thread_id() {
+    let runner = runner(
+        Arc::new(Host::default()),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    );
+    let scope = ScopeKey {
+        agent_id: "agent-a".into(),
+        profile_id: Some("profile-a".into()),
+    };
+    let queue = Arc::new(RunQueue::new());
+    let mut recovered = <TurnRequest as QueuedMessage>::requeued(
+        "recovered".into(),
+        "follow up".into(),
+        "subagent-task-label",
+        42,
+    );
+    recovered.disposition = QueueDisposition::Steer;
+    queue.push_now(QueueLane::Steer, recovered);
+    runner.active.lock().await.insert(
+        (scope.clone(), "thread-a".into()),
+        ActiveTurn {
+            request_id: "active".into(),
+            cancel: crate::CancellationToken::new(),
+            generation: 7,
+            queue,
+            payload: serde_json::json!({
+                "access": "full",
+                "locale": "fr",
+                "attachments": ["prior-turn-file"],
+            }),
+        },
+    );
+
+    let recovered = runner
+        .take_queued(&scope, "thread-a", QueueLane::Steer, QueueMode::OneAtATime)
+        .await;
+
+    assert_eq!(recovered[0].thread_id, "thread-a");
+    assert_eq!(recovered[0].payload["access"], "full");
+    assert_eq!(recovered[0].payload["locale"], "fr");
+    assert_eq!(recovered[0].payload["thread_id"], "thread-a");
+    assert_eq!(recovered[0].payload["queued_at_ms"], 42);
+    assert!(recovered[0].payload["attachments"].is_null());
+}
+
+#[tokio::test]
+async fn finalizing_a_rebuilt_queue_request_restores_the_active_scope() {
+    let runner = runner(
+        Arc::new(Host::default()),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    );
+    let scope = ScopeKey {
+        agent_id: "agent-a".into(),
+        profile_id: Some("profile-a".into()),
+    };
+    let queue = Arc::new(RunQueue::new());
+    let mut recovered = <TurnRequest as QueuedMessage>::requeued(
+        "recovered".into(),
+        "follow up".into(),
+        "subagent-task-label",
+        42,
+    );
+    recovered.disposition = QueueDisposition::Steer;
+    queue.push_now(QueueLane::Steer, recovered);
+    runner.active.lock().await.insert(
+        (scope.clone(), "thread-a".into()),
+        ActiveTurn {
+            request_id: "active".into(),
+            cancel: crate::CancellationToken::new(),
+            generation: 7,
+            queue,
+            payload: serde_json::json!({"access": "full"}),
+        },
+    );
+
+    let (_, next) = runner.finalize_generation(&scope, "thread-a", 7).await;
+
+    let (next, _) = next.expect("queued steer is reserved");
+    assert_eq!(next.scope, scope);
+    assert_eq!(next.thread_id, "thread-a");
+    assert_eq!(next.payload["access"], "full");
+    assert_eq!(next.payload["queued_at_ms"], 42);
+}
+
+#[tokio::test]
+async fn finalizing_rebuilt_collect_requests_restores_the_active_scope() {
+    let runner = runner(
+        Arc::new(Host::default()),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    );
+    let scope = ScopeKey {
+        agent_id: "agent-a".into(),
+        profile_id: Some("profile-a".into()),
+    };
+    let queue = Arc::new(RunQueue::new());
+    let mut recovered = request(QueueDisposition::Collect, false);
+    recovered.scope = ScopeKey {
+        agent_id: String::new(),
+        profile_id: None,
+    };
+    queue.push_now(QueueLane::Collect, recovered);
+    runner.active.lock().await.insert(
+        (scope.clone(), "thread-a".into()),
+        ActiveTurn {
+            request_id: "active".into(),
+            cancel: crate::CancellationToken::new(),
+            generation: 7,
+            queue,
+            payload: serde_json::Value::Null,
+        },
+    );
+
+    let (collected, _) = runner.finalize_generation(&scope, "thread-a", 7).await;
+
+    assert_eq!(collected[0].scope, scope);
+}
+
+#[tokio::test]
+async fn retiring_rebuilt_queue_requests_restores_the_active_scope() {
+    let runner = runner(
+        Arc::new(Host::default()),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    );
+    let scope = ScopeKey {
+        agent_id: "agent-a".into(),
+        profile_id: Some("profile-a".into()),
+    };
+    let queue = Arc::new(RunQueue::new());
+    for lane in [QueueLane::Steer, QueueLane::Followup, QueueLane::Collect] {
+        let mut recovered = request(QueueDisposition::Steer, false);
+        recovered.request_id = format!("{lane:?}");
+        recovered.scope = ScopeKey {
+            agent_id: String::new(),
+            profile_id: None,
+        };
+        queue.push_now(lane, recovered);
+    }
+    runner.active.lock().await.insert(
+        (scope.clone(), "thread-a".into()),
+        ActiveTurn {
+            request_id: "active".into(),
+            cancel: crate::CancellationToken::new(),
+            generation: 7,
+            queue,
+            payload: serde_json::Value::Null,
+        },
+    );
+
+    let mut owner = request(QueueDisposition::Interrupt, false);
+    owner.scope = scope.clone();
+    let retired = runner.retire_generation(&owner, Some(7)).await;
+
+    assert_eq!(retired.len(), 3);
+    assert!(
+        retired
+            .iter()
+            .all(|request| { request.scope == scope && request.thread_id == "thread-a" })
+    );
 }
 
 #[tokio::test]

@@ -90,6 +90,22 @@ pub trait QueuedMessage: Send + 'static {
     /// minted, `thread_label` is the forwarder's thread label, and `queued_at_ms`
     /// is the wall clock in epoch milliseconds.
     fn requeued(id: String, text: String, thread_label: &str, queued_at_ms: u64) -> Self;
+
+    /// Build a recovered item while preserving the lane it was drained from.
+    /// Existing implementations keep their previous behavior by default.
+    fn requeued_in_lane(
+        id: String,
+        text: String,
+        thread_label: &str,
+        lane: QueueLane,
+        queued_at_ms: u64,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        let _ = lane;
+        Self::requeued(id, text, thread_label, queued_at_ms)
+    }
 }
 
 /// A delivery or requeue the forwarder performed, for host observability.
@@ -195,7 +211,7 @@ impl<T: QueuedMessage> QueueAdapter for BorrowedQueue<'_, T> {
         let id = uuid::Uuid::new_v4().to_string();
         self.0.push_now(
             lane,
-            T::requeued(id.clone(), message.text(), thread_label, now_ms()),
+            T::requeued_in_lane(id.clone(), message.text(), thread_label, lane, now_ms()),
         );
         Some(id)
     }

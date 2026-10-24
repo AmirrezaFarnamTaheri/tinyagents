@@ -35,11 +35,25 @@ impl DriverConversationStore {
         for spec in Self::append_collection_specs() {
             self.docs.validate_collection_spec(&spec).await?;
         }
-        for capability in [
-            Capability::ValidatedBatch,
-            Capability::ConditionalStreamAppend,
+        // Each capability is checked on the port that uses it: the intent and
+        // metadata commit is a checked document batch, the message write a
+        // conditional stream append. A backend may advertise them on separate
+        // ports (SQLite does), so neither port speaks for the other.
+        for (capability, available) in [
+            (
+                Capability::ValidatedBatch,
+                self.docs
+                    .capabilities()
+                    .contains(Capability::ValidatedBatch),
+            ),
+            (
+                Capability::ConditionalStreamAppend,
+                self.streams
+                    .capabilities()
+                    .contains(Capability::ConditionalStreamAppend),
+            ),
         ] {
-            if !self.docs.capabilities().contains(capability) {
+            if !available {
                 return Err(StorageError::unsupported(
                     capability,
                     "conversation append requires checked documents and conditional streams",

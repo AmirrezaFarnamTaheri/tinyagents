@@ -17,6 +17,7 @@ pub mod state_block;
 pub mod thread_locks;
 mod time;
 mod time_parse;
+mod wait;
 
 #[cfg(feature = "exec")]
 pub mod exec;
@@ -40,6 +41,7 @@ pub mod todos;
 pub use ask_clarification::AskClarificationTool;
 pub use plan_exit::{PLAN_EXIT_MARKER, ParkedPlanReviewLookup, PlanExitHost, PlanExitTool};
 pub use time::{CurrentTimeTool, ResolveTimeTool, register_time_tools, time_tools};
+pub use wait::{WaitLoopTool, WaitTool};
 
 #[cfg(test)]
 #[path = "time_parse_tests.rs"]
