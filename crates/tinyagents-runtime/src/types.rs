@@ -241,6 +241,43 @@ pub struct SessionStateView<'a> {
     /// `true` only when this call loaded and decoded a durable transcript
     /// before `before_turn` ran.
     pub resumed: bool,
+    /// Last established host identity binding, if this session uses a resolver.
+    pub identity: Option<&'a SessionIdentity>,
+}
+
+/// Logical naming inputs passed to the host identity resolver.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionIdentityRequest {
+    pub thread_id: Option<String>,
+    pub session_key: String,
+    /// Logical parent lineage, never authorization.
+    pub parent: Option<SessionRef>,
+    /// Child key paired with `parent`, never an actor or tenant selector.
+    pub child_key: Option<String>,
+}
+
+/// Host-authorized agent identity and pinned session stores.
+#[derive(Clone)]
+pub struct ResolvedSessionStores {
+    pub agent_id: String,
+    pub stores: tinyagents_session::port::SessionStoreLease,
+}
+
+/// Runtime-created identity binding established after host admission.
+#[derive(Clone)]
+pub struct SessionIdentity {
+    pub(crate) session: SessionRef,
+    pub(crate) agent_id: String,
+    pub(crate) stores: tinyagents_session::port::SessionStoreLease,
+}
+
+impl SessionIdentity {
+    pub fn session(&self) -> &SessionRef {
+        &self.session
+    }
+    pub fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
 }
 
 /// The shape of a successful logical transcript transition.
@@ -277,6 +314,23 @@ pub struct CommitReceipt<C = ()> {
     pub options: TranscriptTurnOptions<C>,
     /// `None` when the host selected no durable transcript target.
     pub transcript: Option<TranscriptCommitReceipt>,
+}
+
+/// Separate facts captured at execution time for post-commit host adapters.
+#[derive(Clone, Debug)]
+pub struct PostCommitObservation<C: Clone + Send + Sync + 'static = ()> {
+    /// The durable commit and its session result.
+    pub receipt: CommitReceipt<C>,
+    /// The original request input before host hooks can replace it.
+    pub input: Message,
+    /// Provider usage captured for the committed turn.
+    pub usage: Option<tinyagents_session::transcript::TurnUsage>,
+    /// Tool results captured at the harness execution boundary.
+    pub tool_outcomes: Vec<tinyagents_harness::turn_outcome::ToolCallOutcome>,
+    /// Host-selected conversation identity.
+    pub thread_id: Option<String>,
+    /// Resolved agent identity, when one was supplied by the host.
+    pub agent_id: Option<String>,
 }
 
 impl<C: Clone> TurnOptions<C> {

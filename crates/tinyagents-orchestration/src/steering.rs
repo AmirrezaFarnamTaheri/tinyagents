@@ -32,7 +32,7 @@ pub enum SteerError {
     UnsupportedLane,
     /// The `request_id` exceeds [`RecentRequestIds::MAX_REQUEST_ID_BYTES`].
     RequestIdTooLong,
-    /// An [`SteerAccess::Owner`] steer's text exceeds [`MAX_STEER_TEXT_BYTES`].
+    /// An owner supplied a message larger than the bounded steer payload.
     TextTooLong,
     /// The registry failed internally (its lock was poisoned by a panic); the
     /// subagent may still be live, so this is not [`Self::Unknown`].
@@ -72,12 +72,9 @@ pub struct SteerReceipt {
 /// Whose authority a steer is made under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SteerAccess<'a> {
-    /// Only the owning parent session may steer. The text is a parent
-    /// agent's, so it is length-capped, fenced and labelled as agent-origin
-    /// (see [`fence_agent_message`]), never presented as the user's.
+    /// Only the owning parent session may steer.
     Owner(&'a str),
-    /// A trusted control surface (a real user): no ownership check, and the
-    /// text is framed as the user's.
+    /// A trusted control surface: no ownership check.
     Trusted,
 }
 
@@ -114,9 +111,6 @@ pub fn queue_lane_name(lane: QueueLane) -> &'static str {
 
 /// The steering command a lane maps to; `None` for a lane a detached subagent
 /// does not accept.
-///
-/// The text is framed as the user's, or as the parent agent's when it is a
-/// [`fence_agent_message`] fence ([`lane_prefix`]).
 pub fn steering_command_for_lane(lane: QueueLane, text: &str) -> Option<SteeringCommand> {
     match lane {
         QueueLane::Steer | QueueLane::Collect => Some(SteeringCommand::InjectMessage(
@@ -136,11 +130,32 @@ fn send_registered(handle: &SteeringHandle, text: &str, lane: QueueLane) -> bool
     }
 }
 
+fn live_handle_or_fallback<M>(
+    registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
+    task_id: &TaskId,
+    access: SteerAccess<'_>,
+) -> Result<Option<SteeringHandle>, SteerError>
+where
+    M: Clone + Send + Sync + 'static,
+{
+    let result = match access {
+        SteerAccess::Owner(owner) => registry.steering_handle(task_id, owner),
+        SteerAccess::Trusted => registry.steering_handle_trusted(task_id),
+    };
+    match result {
+        Ok(handle) => Ok(Some(handle)),
+        Err(
+            DetachedTaskRegistryError::NoSteeringHandle | DetachedTaskRegistryError::AlreadyDone,
+        ) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// Inject `text` into the running subagent `task_id`.
 ///
-/// Rejects an unsupported lane or unknown / unowned task, then prefers the
-/// live steering handle and falls back to the host when the child is finished
-/// or has no live handle. The text is never logged here.
+/// Rejects an unsupported lane or unknown or unowned task, then prefers the
+/// live steering handle and falls back to the host when the handle is absent
+/// or the retained task has finished. The text is never logged here.
 pub async fn steer_detached<M, F>(
     registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
     task_id: &str,
@@ -153,6 +168,11 @@ where
     M: Clone + Send + Sync + 'static,
     F: SteerFallback<M>,
 {
+    if matches!(access, SteerAccess::Owner(_))
+        && text.len() > tinyagents_harness::steering::MAX_STEER_TEXT_BYTES
+    {
+        return Err(SteerError::TextTooLong);
+    }
     let receipt =
         steer_detached_with_request_id(registry, task_id, access, text, lane, None, fallback)
             .await?;
@@ -168,9 +188,7 @@ where
 /// never consumes its id and can be retried. A terminal task with retained
 /// metadata is delivered through the host fallback. A `request_id`
 /// longer than [`RecentRequestIds::MAX_REQUEST_ID_BYTES`] is rejected with
-/// [`SteerError::RequestIdTooLong`]. An [`SteerAccess::Owner`] steer longer
-/// than [`MAX_STEER_TEXT_BYTES`] is rejected with [`SteerError::TextTooLong`];
-/// a shorter one is delivered fenced, labelled as the parent agent's.
+/// [`SteerError::RequestIdTooLong`].
 ///
 /// # Delivery semantics
 ///
@@ -210,6 +228,9 @@ where
         SteerAccess::Owner(_) => fence_agent_message(&text),
         SteerAccess::Trusted => text,
     };
+    // A task may turn terminal between the retained snapshot and this live
+    // handle check. Resolve that race before claiming the request id.
+    let handle = live_handle_or_fallback(registry, &key, access)?;
     if let Some(request_id) = request_id
         && !registry.claim_steer_request(&key, request_id)?
     {
@@ -219,22 +240,14 @@ where
             duplicate: true,
         });
     }
-    let handle = match access {
-        SteerAccess::Owner(owner) => registry.steering_handle(&key, owner),
-        SteerAccess::Trusted => registry.steering_handle_trusted(&key),
-    };
     match handle {
-        Ok(handle) if !snapshot.status.is_terminal() && send_registered(&handle, &text, lane) => {
+        Some(handle) if send_registered(&handle, &text, lane) => {
             return Ok(SteerReceipt {
                 route: Some(SteerRoute::Registry),
                 duplicate: false,
             });
         }
-        Err(
-            DetachedTaskRegistryError::NoSteeringHandle | DetachedTaskRegistryError::AlreadyDone,
-        )
-        | Ok(_) => {}
-        Err(error) => return Err(error.into()),
+        Some(_) | None => {}
     }
     fallback.enqueue(snapshot.metadata, lane, text).await;
     Ok(SteerReceipt {

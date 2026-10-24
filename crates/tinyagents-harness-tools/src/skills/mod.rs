@@ -36,7 +36,7 @@ pub use handle::PackRegistryHandle;
 pub use render::{
     NoSuchPackTool, named_tool, render_pack_filtered, route_sentence, scope_use_skill_spec,
 };
-pub use tool::{USE_SKILL, UseSkillTool};
+pub use tool::{USE_SKILL, UseSkillTool, pack_registry_handle};
 pub(crate) use types::PinnedPackCall;
 pub use types::{PackSelection, ToolPack};
 

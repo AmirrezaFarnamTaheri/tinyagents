@@ -9,11 +9,6 @@
 //!    that the run's completion is observable both through a wired
 //!    [`HarnessStatusStore`] and through the journaled events.
 //!
-//! 2. A graph run with a [`JournalGraphSink`] (wired through
-//!    [`CompiledGraph::with_event_journal`]). The test asserts the
-//!    [`GraphObservation`]s are replayable from offset `0` and carry their
-//!    run/step coordinates.
-//!
 //! All assertions are structural (event kinds, offsets, ids, redaction) — never
 //! model prose — so the test is deterministic.
 
@@ -21,7 +16,6 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use tinyagents_graph::*;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::events::{AgentEvent, RecordingListener};
 use tinyagents_harness::ids::{ExecutionStatus, RunId};
@@ -86,14 +80,15 @@ async fn harness_run_journals_redacted_replayable_events() {
     // varied lifecycle: run/model/tool boundaries plus completion.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model(
-            MODEL_NAME,
-            Arc::new(MockModel::with_responses(vec![
-                tool_call_response("call-1", "lookup", json!({ "q": "x" })),
-                text_response("done"),
-            ])),
-        )
-        .set_default_model(MODEL_NAME)
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                MODEL_NAME,
+                Arc::new(MockModel::with_responses(vec![
+                    tool_call_response("call-1", "lookup", json!({ "q": "x" })),
+                    text_response("done"),
+                ])),
+            ),
+        ))
         .register_tool(Arc::new(FakeTool::returning("lookup", "tool-output")));
 
     // Durable journal + a plain recorder (live broadcast) to cross-check.
@@ -204,14 +199,15 @@ async fn harness_run_with_capture_exports_generation_and_tool_io() {
     // the tool-create Input/Output panels — the fix for tinyhumansai/tinyagents#6.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model(
-            "capture-model",
-            Arc::new(MockModel::with_responses(vec![
-                tool_call_response("call-1", "lookup", json!({ "q": "weather" })),
-                text_response("all done"),
-            ])),
-        )
-        .set_default_model("capture-model")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "capture-model",
+                Arc::new(MockModel::with_responses(vec![
+                    tool_call_response("call-1", "lookup", json!({ "q": "weather" })),
+                    text_response("all done"),
+                ])),
+            ),
+        ))
         .register_tool(Arc::new(FakeTool::returning("lookup", "tool-output")))
         .with_policy(RunPolicy {
             capture: PayloadCapture::all(),
@@ -303,150 +299,4 @@ async fn harness_run_with_capture_exports_generation_and_tool_io() {
             .all(|g| g["body"]["parentObservationId"] == run_span_id),
         "every generation nests under the run span"
     );
-}
-
-/// A two-node line graph over `i32` with overwrite semantics: `a -> b`.
-fn line_graph() -> tinyagents_graph::CompiledGraph<i32, i32> {
-    GraphBuilder::<i32, i32>::overwrite()
-        .add_node("a", |_s, _c: NodeContext| async move {
-            Ok(NodeResult::Update(1))
-        })
-        .add_node("b", |s, _c: NodeContext| async move {
-            Ok(NodeResult::Update(s + 1))
-        })
-        .set_entry("a")
-        .add_edge("a", "b")
-        .set_finish("b")
-        .compile()
-        .expect("graph compiles")
-}
-
-#[tokio::test]
-async fn graph_run_journals_replayable_observations_with_coords() {
-    let journal = Arc::new(InMemoryGraphEventJournal::new());
-    // `with_event_journal` wires a JournalGraphSink as the run's event sink.
-    let graph = line_graph().with_event_journal(journal.clone());
-
-    let run = graph.run(0).await.expect("graph run succeeds");
-    let run_id = run.status.run_id.as_str().to_string();
-
-    let obs = journal
-        .read_from(&run_id, 0)
-        .await
-        .expect("replay graph journal");
-    assert!(
-        obs.len() >= 3,
-        "expected several graph observations, got {}",
-        obs.len()
-    );
-
-    // Dense, monotonic offsets from 0; run/graph coordinates are stamped.
-    for (i, o) in obs.iter().enumerate() {
-        assert_eq!(o.offset, i as u64, "dense offsets from 0");
-        assert_eq!(o.run_id.as_str(), run_id);
-        assert_eq!(o.root_run_id.as_str(), run_id);
-        assert_eq!(&o.graph_id, graph.graph_id());
-    }
-
-    // Step coordinates are carried: the executor runs at least one superstep.
-    assert!(
-        obs.iter().any(|o| o.step >= 1),
-        "observations should carry superstep coordinates"
-    );
-
-    // The run lifecycle bookends the stream.
-    assert!(
-        matches!(obs.first().unwrap().event, GraphEvent::RunStarted { .. }),
-        "first observation is RunStarted"
-    );
-    assert!(
-        obs.iter()
-            .any(|o| matches!(o.event, GraphEvent::RunCompleted { .. })),
-        "completion is observable from the graph journal"
-    );
-
-    // Replay from a mid-stream offset returns exactly the tail.
-    let tail = journal.read_from(&run_id, 2).await.expect("replay tail");
-    assert_eq!(tail.len(), obs.len() - 2);
-    assert_eq!(tail.first().unwrap().offset, 2);
-
-    // Reading an unknown run is empty, not an error.
-    assert!(
-        journal.read_from("nope", 0).await.unwrap().is_empty(),
-        "unknown run replays empty"
-    );
-}
-
-#[tokio::test]
-async fn graph_observations_export_to_langfuse_trace_and_spans() {
-    // Run a real graph, journal it, then feed the durable observations through
-    // the graph Langfuse exporter and assert the offline batch structure.
-    let journal = Arc::new(InMemoryGraphEventJournal::new());
-    let graph = line_graph().with_event_journal(journal.clone());
-
-    let run = graph.run(0).await.expect("graph run succeeds");
-    let run_id = run.status.run_id.as_str().to_string();
-    let observations = journal
-        .read_from(&run_id, 0)
-        .await
-        .expect("replay graph journal");
-
-    // The exporter reuses the harness Langfuse transport (proxy mode here).
-    let exporter = GraphLangfuseExporter::new(
-        LangfuseClient::proxy("https://backend.test", "tok").expect("client"),
-    );
-    let batch = exporter
-        .build_ingestion_batch(LangfuseTraceConfig::default(), &observations)
-        .expect("build batch");
-    let events = batch["batch"].as_array().expect("batch array");
-
-    // The trace is created first and its id defaults to the run's root run id,
-    // aligning with the harness agent exporter for a unified trace.
-    assert_eq!(events[0]["type"], "trace-create");
-    assert_eq!(events[0]["body"]["id"], run_id);
-
-    // Node health telemetry rides on the trace: two nodes ran and completed.
-    let health = &events[0]["body"]["metadata"]["health"];
-    assert_eq!(health["total_completed"], 2);
-    assert_eq!(health["total_failed"], 0);
-    assert_eq!(health["run_failed"], false);
-
-    // Each node handler becomes a span, parented to its superstep span.
-    let node_a = format!("{run_id}:node:a:1");
-    let node_b = format!("{run_id}:node:b:2");
-    let has_node_span = |id: &str| {
-        events
-            .iter()
-            .any(|e| e["type"] == "span-create" && e["body"]["id"] == id)
-    };
-    assert!(has_node_span(&node_a), "node a span present");
-    assert!(has_node_span(&node_b), "node b span present");
-
-    // No node failed, so no span carries an ERROR level.
-    assert!(
-        !events
-            .iter()
-            .any(|e| e["type"] == "span-create" && e["body"]["level"] == "ERROR"),
-        "healthy run has no ERROR spans"
-    );
-
-    // The graph run is a structural span under the trace, and every step nests
-    // beneath it. Its id follows the `{trace}:run:{run}` scheme the harness
-    // exporter parents its agent run spans to, so a graph run and the sub-agent
-    // runs its nodes spawn reconstruct a single nested tree under one trace.
-    let graph_run_span = format!("{run_id}:run:{run_id}");
-    let run_span = events
-        .iter()
-        .find(|e| e["body"]["id"] == graph_run_span)
-        .expect("graph run span");
-    assert_eq!(run_span["type"], "span-create");
-    assert!(run_span["body"].get("parentObservationId").is_none());
-    let step_1 = events
-        .iter()
-        .find(|e| e["body"]["id"] == format!("{run_id}:step:1"))
-        .expect("step 1 span");
-    assert_eq!(step_1["body"]["parentObservationId"], graph_run_span);
-    // A harness agent run spawned by a graph node carries parent_run_id == the
-    // graph run id, so its harness run span resolves to exactly this parent id
-    // and nests under the graph run rather than floating at the trace root.
 }

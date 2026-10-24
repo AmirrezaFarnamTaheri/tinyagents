@@ -6,6 +6,14 @@ the mutable model history, a stable prefix, and append-only transcript state.
 Tool declarations are prepared afresh for every driver call. It has no host configuration, credentials,
 prompt construction, tool authorization, model selection, or event system.
 
+Sub-agent turns are leaf turns by default: registration refuses spawn tools
+even when the child request or tool allowlist includes them. A host may opt a
+turn into nested spawning by setting `ToolAdmission::nested_spawn_depth` to a
+validated `NestedSpawnDepth`. The runtime admits a spawn tool only when it is
+also present in the ordinary tool allowlist and another child fits within the
+supplied depth ceiling. The host remains responsible for enforcing that same
+ceiling when it executes the spawn.
+
 ## Host responsibilities
 
 The host supplies three narrow seams:

@@ -93,7 +93,9 @@ pub mod view;
 #[cfg(test)]
 mod writer;
 
-pub use adoption::SessionAdoption;
+pub use adoption::{
+    SessionAdoption, repair_orphaned_tool_head, repair_orphaned_tool_head_messages,
+};
 pub use background::append_background_message_in;
 pub use display::BACKGROUND_METADATA_KEY;
 pub(crate) use display::{display_from_session, display_message_of, partial_display_message};

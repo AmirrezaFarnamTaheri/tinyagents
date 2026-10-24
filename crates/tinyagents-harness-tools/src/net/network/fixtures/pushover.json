@@ -1,0 +1,30 @@
+{
+  "description": "Send a Pushover notification to your device. Requires PUSHOVER_TOKEN and PUSHOVER_USER_KEY in .env file.",
+  "exposure": "Direct",
+  "name": "pushover",
+  "permission_level": "ReadOnly",
+  "schema": {
+    "properties": {
+      "message": {
+        "description": "The notification message to send",
+        "type": "string"
+      },
+      "priority": {
+        "description": "Message priority: -2 (lowest/silent), -1 (low/no sound), 0 (normal), 1 (high), 2 (emergency/repeating)",
+        "type": "integer"
+      },
+      "sound": {
+        "description": "Notification sound override (e.g., 'pushover', 'bike', 'bugle', 'cashregister', etc.)",
+        "type": "string"
+      },
+      "title": {
+        "description": "Optional notification title",
+        "type": "string"
+      }
+    },
+    "required": [
+      "message"
+    ],
+    "type": "object"
+  }
+}

@@ -1485,6 +1485,45 @@ fn absent_host_capabilities_fail_closed() {
     assert_eq!(error, SubagentError::MissingCapability("planner"));
 }
 
+#[test]
+fn awaiting_user_subagent_session_remains_reusable_for_same_task_key() {
+    let selector = SubagentSessionSelector {
+        parent_session: "parent-session".into(),
+        parent_thread_id: Some("parent-thread".into()),
+        agent_id: "researcher".into(),
+        model: Some("mock".into()),
+        sandbox_mode: "none".into(),
+        action_root: None,
+        task_key: "research".into(),
+    };
+    let session = DurableSubagentSession {
+        subagent_session_id: "child-session".into(),
+        parent_session: selector.parent_session.clone(),
+        parent_thread_id: selector.parent_thread_id.clone(),
+        worker_thread_id: Some("child-thread".into()),
+        agent_id: selector.agent_id.clone(),
+        display_name: None,
+        model: selector.model.clone(),
+        sandbox_mode: selector.sandbox_mode.clone(),
+        action_root: selector.action_root.clone(),
+        task_key: selector.task_key.clone(),
+        lifecycle_key: None,
+        task_title: "Research".into(),
+        current_task_id: Some("task-1".into()),
+        status: DurableSubagentStatus::AwaitingUser,
+        reusable: true,
+        latest_history: None,
+        latest_error: None,
+        created_at: "now".into(),
+        updated_at: "now".into(),
+        last_used_at: "now".into(),
+    };
+    assert!(
+        session.matches_selector(&selector),
+        "a paused child awaiting a reply must be resumed for the same task key"
+    );
+}
+
 fn admission_policy(
     parent: Option<usize>,
     total: Option<usize>,

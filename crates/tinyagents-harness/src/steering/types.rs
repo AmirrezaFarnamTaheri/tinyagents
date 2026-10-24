@@ -56,8 +56,8 @@ pub enum SteeringTarget {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "command")]
 #[non_exhaustive]
-// Keep `InjectMessage(Message)` source-compatible; boxing it only to silence
-// this layout lint would change the public Rust constructor's payload type.
+// Keep `InjectMessage(Message)` source-compatible: boxing it would break the
+// public command API, and commands are short-lived control messages.
 #[allow(clippy::large_enum_variant)]
 pub enum SteeringCommand {
     /// Cooperatively pause the run: the loop stops issuing further model and

@@ -70,6 +70,7 @@ async fn callback_adapter_implements_runtime_session_hooks() {
         transcript_target: None,
         committed_turns: 4,
         resumed: true,
+        identity: None,
     };
     let mut request = SessionTurnRequest::new(Message::user("original"));
     let mut options = TurnOptions::default();
@@ -138,6 +139,7 @@ async fn callback_adapter_propagates_hook_errors_through_runtime_trait() {
         transcript_target: None,
         committed_turns: 0,
         resumed: false,
+        identity: None,
     };
     let mut request = SessionTurnRequest::new(Message::user("x"));
     let mut options = TurnOptions::default();

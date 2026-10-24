@@ -183,7 +183,10 @@ async fn text_dialect_recovery_policy_on_stream_and_unary() {
             });
         }
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.register_model("mock", Arc::new(model));
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(model),
+        )));
         harness.register_tool(tool.clone());
         harness.with_policy(RunPolicy {
             text_dialect_recovery: policy,

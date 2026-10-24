@@ -48,12 +48,37 @@ impl ScopedStorage {
 /// Adapter for opening a scope-bound storage bundle from a port backend.
 pub trait StorageBackend: Send + Sync {
     fn for_scope(&self, scope: &tinystoragedrivers_types::Scope) -> error::Result<ScopedStorage>;
+
+    /// Opens a scope whose mutations atomically require `condition` to hold.
+    /// Implementations that cannot provide this guarantee fail closed.
+    fn for_scope_conditioned(
+        &self,
+        scope: &tinystoragedrivers_types::Scope,
+        condition: &tinystoragedrivers_types::WriteCondition,
+    ) -> error::Result<ScopedStorage> {
+        let _ = (scope, condition);
+        Err(tinystoragedrivers_types::StorageError::unsupported(
+            tinystoragedrivers_types::Capability::ConditionalWrites,
+            "atomic condition-bound writes are unsupported by this backend",
+        ))
+    }
 }
 
 impl<T: PortStorageBackend> StorageBackend for T {
     fn for_scope(&self, scope: &tinystoragedrivers_types::Scope) -> error::Result<ScopedStorage> {
         Ok(ScopedStorage::new(
             PortStorageBackend::for_scope(self, scope)?,
+            scope.clone(),
+        ))
+    }
+
+    fn for_scope_conditioned(
+        &self,
+        scope: &tinystoragedrivers_types::Scope,
+        condition: &tinystoragedrivers_types::WriteCondition,
+    ) -> error::Result<ScopedStorage> {
+        Ok(ScopedStorage::new(
+            PortStorageBackend::for_scope_conditioned(self, scope, condition)?,
             scope.clone(),
         ))
     }

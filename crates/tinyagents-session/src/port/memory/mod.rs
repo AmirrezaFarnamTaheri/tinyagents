@@ -16,7 +16,7 @@ use tinyagents_harness::store::{InMemoryAppendStore, InMemoryStore};
 use super::helpers::{
     COMPLETED_RETENTION, MAX_GENERATIONS, completed_newest_first, is_terminal, newest_first,
 };
-use super::{AgentStores, SessionStoreProvider, TurnStates};
+use super::{AgentStores, SessionStoreLease, SessionStoreProvider, TurnStates};
 use crate::testkit::InMemoryTranscriptHistory;
 use crate::transcript::{
     SessionRef, ThreadTranscript, ThreadTranscripts, TranscriptHistory, TranscriptLocator,
@@ -63,6 +63,13 @@ impl SessionStoreProvider for InMemorySessionStores {
                 }
             })
             .clone()
+    }
+
+    fn lease_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Result<SessionStoreLease, super::SessionStoreLeaseError> {
+        Ok(SessionStoreLease::pinned(self.for_agent(agent_id)))
     }
 
     fn recover(&self) -> anyhow::Result<()> {

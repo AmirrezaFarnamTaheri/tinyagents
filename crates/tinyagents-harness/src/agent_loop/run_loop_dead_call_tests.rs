@@ -27,7 +27,10 @@ async fn efforts(reasoning_off: bool) -> Vec<Option<ReasoningEffort>> {
         crate::testkit::text_response("done").with_usage(Usage::new(4, 3)),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::clone(&model) as _);
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::clone(&model) as _,
+    )));
     harness.with_policy(RunPolicy {
         default_reasoning: Some(ReasoningConfig::effort(ReasoningEffort::High)),
         truncated_empty_reasoning_off: reasoning_off,
@@ -86,7 +89,10 @@ async fn efforts_across_steps(sticky_after: u32) -> Vec<Option<ReasoningEffort>>
         crate::testkit::text_response("done").with_usage(Usage::new(4, 3)),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::clone(&model) as _);
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::clone(&model) as _,
+    )));
     harness.register_tool(Arc::new(crate::testkit::FakeTool::new("probe")));
     harness.with_policy(RunPolicy {
         default_reasoning: Some(ReasoningConfig::effort(ReasoningEffort::High)),
@@ -132,7 +138,10 @@ async fn constant_cap_retries_reach_the_provider_instead_of_replaying_cached_bla
         crate::testkit::text_response("recovered"),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", model.clone());
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::clone(&model) as _,
+    )));
     harness.with_response_cache(Arc::new(crate::cache::InMemoryResponseCache::new()));
     harness.with_policy(RunPolicy {
         truncated_empty_constant_cap: true,
@@ -162,7 +171,10 @@ async fn truncated_empty_recovery_bypasses_a_blank_cached_before_retries_were_en
     let input = vec![Message::user("same question")];
     let seed_model = Arc::new(ScriptedModel::new(vec![dead(2048)]));
     let mut seed: AgentHarness<()> = AgentHarness::new();
-    seed.register_model("mock", seed_model.clone());
+    seed.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::clone(&seed_model) as _,
+    )));
     seed.with_response_cache(cache.clone());
     seed.with_policy(RunPolicy {
         truncated_empty_retries: 0,
@@ -185,7 +197,10 @@ async fn truncated_empty_recovery_bypasses_a_blank_cached_before_retries_were_en
         "fresh answer",
     )]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", model.clone());
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::clone(&model) as _,
+    )));
     harness.with_response_cache(cache);
     harness.with_policy(RunPolicy {
         truncated_empty_constant_cap: true,
@@ -246,7 +261,10 @@ async fn only_the_tool_calls_of_a_dead_call_retry_are_marked_as_such() {
     ]));
     let flags = Arc::new(RetryFlags::default());
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::clone(&model) as _);
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::clone(&model) as _,
+    )));
     harness.register_tool(Arc::new(crate::testkit::FakeTool::new("probe")));
     harness.push_middleware(flags.clone());
     harness.with_policy(RunPolicy {

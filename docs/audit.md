@@ -81,51 +81,6 @@ candidate filter:
   select a capable hinted model over an incapable default after middleware adds
   required capabilities.
 
-### Resolved: runtime `Command::goto` targets are validated before persistence
-
-Runtime command routing now fails before a bad target can become the next active
-set or be written into a checkpoint:
-
-- `crates/tinyagents-graph/src/compiled/mod.rs`: command targets are validated in `route()` before
-  scheduler activation. `END` is allowed, `START` is rejected, and every other
-  target must name a compiled node.
-- `crates/tinyagents-graph/src/compiled/test.rs`: unit coverage rejects unknown targets, rejects
-  `START`, and proves invalid command routes fail before checkpoint persistence.
-- `tests/graph_durable.rs`: integration coverage proves a threaded durable run
-  with an invalid command target writes no poisoned checkpoint.
-- `docs/modules/graph/routing.md`: documents the runtime validation contract.
-
-### Resolved: embedded subgraph runs inherit the parent thread id
-
-Subgraph node adapters now propagate the parent thread id into embedded child
-runs when the parent run is threaded:
-
-- `crates/tinyagents-graph/src/subgraph/mod.rs`: shared-state and adapter subgraph nodes call the
-  child with `run_with_thread` when `NodeContext::thread_id` is present,
-  preserving the existing unthreaded `run` behavior otherwise.
-- `crates/tinyagents-graph/src/subgraph/test.rs`: unit coverage proves an embedded child with a
-  checkpointer persists under the parent thread and embedding-node namespace.
-- `tests/graph_durable.rs`: integration coverage proves the public durable graph
-  surface writes both parent and child checkpoints for a threaded subgraph run.
-- `docs/modules/graph/subgraphs.md`: documents the inherited thread and
-  namespace persistence contract.
-
-### Resolved: interrupts fail closed without resumable durability
-
-The executor now returns a resume error instead of an interrupted execution when
-a node emits an interrupt without the durability required to resume it:
-
-- `crates/tinyagents-graph/src/compiled/mod.rs`: interrupt handling requires both a configured
-  checkpointer and a thread id before persisting the interrupt checkpoint and
-  returning `ExecutionStatus::Interrupted`.
-- `crates/tinyagents-graph/src/compiled/test.rs`: unit coverage proves interrupts without a
-  checkpointer and interrupts without a thread id return errors rather than
-  unresumable paused executions.
-- `tests/graph_durable.rs`: integration coverage proves the public run surface
-  rejects an interrupt emitted without a thread id.
-- `docs/modules/graph/interrupts.md`: documents that interrupted results are
-  only returned after the checkpoint needed for resume is persisted.
-
 ### Resolved: event sink listeners are notified outside the sink lock
 
 The harness event sink no longer holds its mutex while invoking listener

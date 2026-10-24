@@ -80,7 +80,10 @@ fn tool_turn(ids: &[&str]) -> ModelResponse {
 
 fn harness(responses: Vec<ModelResponse>, capture: PayloadCapture) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::new(ScriptedModel::new(responses)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::new(ScriptedModel::new(responses)),
+    )));
     harness.register_tool(Arc::new(EchoTool));
     harness.with_policy(RunPolicy {
         capture,
@@ -189,7 +192,10 @@ async fn message_payloads_follow_the_capture_policy() {
 #[tokio::test]
 async fn a_failed_turn_is_still_closed() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::new(FailingModel));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::new(FailingModel),
+    )));
     let recorder = EventRecorder::new();
     let ctx = RunContext::new(RunConfig::new("fail"), ()).with_events(recorder.sink());
     let partial = harness
@@ -483,7 +489,7 @@ async fn a_mixed_structured_turn_closes_before_queued_messages_are_drained() {
         "",
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
         "mock",
         Arc::new(ToolStructuredScript {
             profile: tinyinference_llm::model::ModelProfile {
@@ -494,7 +500,7 @@ async fn a_mixed_structured_turn_closes_before_queued_messages_are_drained() {
             },
             responses: std::sync::Mutex::new(vec![mixed, last].into()),
         }),
-    );
+    )));
     harness.register_tool(Arc::new(EchoTool));
     harness.with_policy(RunPolicy {
         end_strategy: crate::runtime::EndStrategy::Exhaustive,
@@ -560,12 +566,12 @@ async fn messages_appended_by_after_agent_middleware_are_announced() {
         }
     }
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
         "mock",
         Arc::new(crate::testkit::ScriptedModel::new(vec![
             crate::testkit::text_response("done"),
         ])),
-    );
+    )));
     harness.push_middleware(Arc::new(Appender));
     let recorder = EventRecorder::new();
     let ctx = RunContext::new(RunConfig::new("aa-append"), ()).with_events(recorder.sink());

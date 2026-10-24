@@ -4,9 +4,9 @@
 //!
 //! # Why this exists
 //!
-//! [`CapabilityRegistry`](crate::CapabilityRegistry) and the harness
-//! [`ModelRegistry`](tinyagents_harness::ModelRegistry) resolve a model *by
-//! name* and the agent loop can fail over across a
+//! [`CapabilityRegistry`](crate::CapabilityRegistry) stores models by name and
+//! the harness model resolver adapts execution through its host port; the agent
+//! loop can fail over across a
 //! [`FallbackPolicy`] — but neither owns
 //! the *policy* that maps a host's **workload tiers** (`chat-v1`, `reasoning-v1`,
 //! `vision-v1`, …) onto concrete models, nor the per-tier capability gates and

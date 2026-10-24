@@ -1,22 +1,17 @@
 use super::*;
-use crate::testkit::MemoryStorage;
 use std::sync::Arc;
 
+use super::super::{leases_spec, reservation::RESERVATION_TTL_MS};
 use crate::port::drivers::transcripts::tests::meta;
 use crate::transcript::TranscriptMessage;
-use tinyagents_storage_kit::{Blocking, DocumentStore, Scope};
+use crate::transcript::test_locator::conditioned_driver_locator;
+use tinyagents_storage_kit::Blocking;
+use tinyagents_storage_kit::primitives::Leases;
 
 const THREAD: &str = "t";
 
 fn locator() -> DriverTranscriptLocator {
-    let storage = MemoryStorage::new();
-    let docs: Arc<dyn DocumentStore> = Arc::clone(
-        storage
-            .for_scope(&Scope::new("local").unwrap())
-            .unwrap()
-            .documents(),
-    );
-    DriverTranscriptLocator::new(docs, Blocking::new().unwrap(), "memory://adoption")
+    conditioned_driver_locator()
 }
 
 /// A root of `THREAD` under `stem`, written with `meta` (as an import does).
@@ -218,15 +213,18 @@ fn a_reserved_stem_reports_nothing_adopted() {
     let session = SessionRef::scoped(THREAD, "planner");
     // A concurrent writer holds the session's stem.
     let stem = session_stem(&session);
-    let docs = Arc::clone(&locator.docs);
-    let tables = Arc::clone(&locator.tables);
-    let declared = Arc::clone(&locator.declared);
-    run_on(&locator.bridge, async move {
-        declared.ensure(&docs).await?;
-        Ok(reservation::reserve(&docs, &tables.leases, &stem).await)
-    })
-    .unwrap()
-    .unwrap();
+    let docs = Arc::clone(locator.documents());
+    Blocking::new()
+        .unwrap()
+        .run(async move {
+            docs.ensure_collection(&leases_spec()).await?;
+            Leases::new(&docs)
+                .acquire("session", &stem, "concurrent-adopter", RESERVATION_TTL_MS)
+                .await
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap();
     assert!(
         locator
             .adopt_legacy(&session, THREAD, &meta(THREAD))
@@ -289,7 +287,7 @@ fn a_root_missing_from_the_index_is_still_folded() {
         &["two"],
     );
     // The second write was durable but every index refresh after it failed.
-    let docs = Arc::clone(&locator.docs);
+    let docs = Arc::clone(locator.documents());
     Blocking::new()
         .unwrap()
         .run(async move {

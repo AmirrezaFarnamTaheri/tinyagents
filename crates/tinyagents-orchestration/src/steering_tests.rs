@@ -1,9 +1,8 @@
 use super::*;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
-use std::future::Ready;
 use tinyagents_harness::CancellationToken;
 use tinyagents_harness::ids::TaskId;
 use tinyagents_harness::run_queue::QueueLane;
@@ -29,17 +28,7 @@ impl SubagentIdentity for Meta {
 }
 
 type Registry = DetachedTaskRegistry<Meta, DetachedSubagentStatus>;
-
-struct RecordingFallback(Arc<std::sync::Mutex<Option<(String, QueueLane, String)>>>);
-
-impl SteerFallback<Meta> for RecordingFallback {
-    type Future = Ready<()>;
-
-    fn enqueue(self, metadata: Meta, lane: QueueLane, text: String) -> Self::Future {
-        *self.0.lock().unwrap() = Some((metadata.agent_id().to_string(), lane, text));
-        std::future::ready(())
-    }
-}
+type RecordedSteer = (Option<&'static str>, String, QueueLane, String);
 
 fn registry(steering: SteeringRegistry) -> Registry {
     DetachedTaskRegistry::new(steering, 256, DetachedSubagentStatus::is_terminal)
@@ -87,10 +76,10 @@ fn lane_names_and_commands_are_literal() {
 }
 
 #[tokio::test]
-async fn steer_rejects_followup_unknown_unowned_and_falls_back_for_terminal() {
+async fn steer_rejects_followup_unknown_and_unowned() {
     let steering = SteeringRegistry::default();
     let reg = registry(steering.clone());
-    let tx = add(&reg, "t1", "p1", None);
+    let _tx = add(&reg, "t1", "p1", None);
 
     let (calls, fb) = counting();
     assert_eq!(
@@ -132,32 +121,71 @@ async fn steer_rejects_followup_unknown_unowned_and_falls_back_for_terminal() {
         .await,
         Err(SteerError::NotOwned)
     );
-    tx.send(DetachedSubagentStatus::Failed { error: "e".into() })
-        .unwrap();
+}
+
+#[tokio::test]
+async fn terminal_child_uses_fallback_with_metadata_and_does_not_drain_stale_handle() {
+    let steering = SteeringRegistry::default();
+    let reg = registry(steering.clone());
+    let tx = add(&reg, "t1", "p1", Some("thread-1"));
     let handle = SteeringHandle::allow_all();
     steering.register(TaskId::new("t1"), handle.clone());
-    let delivered = Arc::new(std::sync::Mutex::new(None));
+    tx.send(DetachedSubagentStatus::Failed {
+        error: "finished".into(),
+    })
+    .unwrap();
+
+    let delivered: Arc<Mutex<Option<RecordedSteer>>> = Arc::default();
     let captured = delivered.clone();
+    let fallback = move |metadata: Meta, lane: QueueLane, text: String| {
+        *captured.lock().unwrap() =
+            Some((metadata.thread, metadata.agent_id().to_string(), lane, text));
+        std::future::ready(())
+    };
+
     assert_eq!(
         steer_detached(
             &reg,
             "t1",
-            SteerAccess::Trusted,
-            "x".into(),
-            QueueLane::Steer,
-            RecordingFallback(captured)
+            SteerAccess::Owner("p1"),
+            "continue with the result".into(),
+            QueueLane::Collect,
+            fallback,
         )
         .await,
         Ok(SteerRoute::Fallback)
     );
     assert_eq!(
         *delivered.lock().unwrap(),
-        Some(("researcher".to_string(), QueueLane::Steer, "x".to_string()))
+        Some((
+            Some("thread-1"),
+            "researcher".into(),
+            QueueLane::Collect,
+            "<parent_agent_message>\n\"continue with the result\"\n</parent_agent_message>".into(),
+        ))
     );
     assert!(
         handle.drain().is_empty(),
         "terminal children never use stale handles"
     );
+}
+
+#[tokio::test]
+async fn terminal_transition_after_snapshot_selects_fallback() {
+    let steering = SteeringRegistry::default();
+    let reg = registry(steering);
+    let tx = add(&reg, "t1", "p1", None);
+    let task_id = TaskId::new("t1");
+
+    let snapshot = reg.snapshot(&task_id, "p1").unwrap();
+    assert!(!snapshot.status.is_terminal());
+    tx.send(DetachedSubagentStatus::Failed { error: "e".into() })
+        .unwrap();
+
+    assert!(matches!(
+        live_handle_or_fallback(&reg, &task_id, SteerAccess::Owner("p1")),
+        Ok(None)
+    ));
 }
 
 #[tokio::test]
@@ -393,6 +421,7 @@ async fn owner_steer_over_the_cap_is_refused_but_trusted_is_not() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     let delivered = Arc::new(std::sync::Mutex::new(None));
+    let delivered_by_fallback = Arc::clone(&delivered);
     assert_eq!(
         steer_detached(
             &reg,
@@ -400,7 +429,11 @@ async fn owner_steer_over_the_cap_is_refused_but_trusted_is_not() {
             SteerAccess::Trusted,
             long.clone(),
             QueueLane::Steer,
-            RecordingFallback(delivered.clone())
+            move |metadata: Meta, lane, text| {
+                *delivered_by_fallback.lock().unwrap() =
+                    Some((metadata.agent_id().to_owned(), lane, text));
+                std::future::ready(())
+            }
         )
         .await,
         Ok(SteerRoute::Fallback)

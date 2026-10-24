@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::TaskId;
 use tinyagents_tasks::{
     CompletionRecord, CompletionResult, CompletionRouter, CompletionStatus, NotifyMode,
@@ -21,6 +22,18 @@ use super::ledger::record_status_with_retries;
 use super::types::DetachedSubagentStatus;
 
 const LOG_PREFIX: &str = "[detached-completion]";
+const PAUSE_RECORD_PREFIX: &str = "\u{1}subagent-pause:";
+
+/// Stable prefix for independently deliverable pause notices belonging to a
+/// task. Hosts may use it to withdraw notices when the task is collected.
+pub fn pause_record_prefix(task_id: &str) -> String {
+    let encoded_task: String = task_id
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("{PAUSE_RECORD_PREFIX}{encoded_task}:")
+}
 
 /// Where a detached child's completion goes and how it announces itself.
 #[derive(Clone)]
@@ -35,6 +48,8 @@ pub struct DetachedCompletionTarget {
     pub label: Option<String>,
     /// How the parent is told.
     pub notify_mode: NotifyMode,
+    /// Lifecycle generation captured when the child was admitted.
+    pub parent_epoch: u64,
 }
 
 impl DetachedCompletionTarget {
@@ -50,7 +65,31 @@ impl DetachedCompletionTarget {
             agent_id: agent_id.into(),
             label: None,
             notify_mode: NotifyMode::default(),
+            parent_epoch: 0,
         }
+    }
+
+    /// Creates a target only when the parent lifecycle is open and captures
+    /// the generation that every later pause and terminal record must retain.
+    pub fn try_new(
+        router: Arc<CompletionRouter>,
+        parent_key: impl Into<String>,
+        agent_id: impl Into<String>,
+    ) -> Result<Self, TinyAgentsError> {
+        let parent_key = parent_key.into();
+        let parent_epoch = router.admit_child_generation(&parent_key)?.ok_or_else(|| {
+            TinyAgentsError::Graph(format!(
+                "detached child parent lifecycle is closed: {parent_key:?}"
+            ))
+        })?;
+        Ok(Self {
+            router,
+            parent_key,
+            agent_id: agent_id.into(),
+            label: None,
+            notify_mode: NotifyMode::default(),
+            parent_epoch,
+        })
     }
 
     /// Sets the human label.
@@ -90,7 +129,46 @@ impl DetachedCompletionTarget {
         )
         .with_notify_mode(self.notify_mode);
         record.label = self.label.clone();
+        record.parent_epoch = self.parent_epoch;
         Some(record)
+    }
+
+    /// Creates a separate deliverable notice for a child pause. The unique
+    /// record id leaves `task_id` available for the child's eventual terminal
+    /// completion and permits the same child to pause more than once.
+    pub fn pause_record_for(&self, task_id: &str, notice: impl Into<String>) -> CompletionRecord {
+        let record_id = format!(
+            "{}{}",
+            pause_record_prefix(task_id),
+            uuid::Uuid::new_v4().simple()
+        );
+        let mut record = CompletionRecord::new(
+            record_id,
+            self.parent_key.clone(),
+            self.agent_id.clone(),
+            CompletionStatus::Incomplete,
+            CompletionResult::text(notice),
+        )
+        .with_notify_mode(self.notify_mode);
+        record.label = self.label.clone();
+        record.parent_epoch = self.parent_epoch;
+        record
+    }
+
+    /// Records an independently deliverable pause notice with the same retry
+    /// policy as terminal detached completions.
+    pub async fn record_pause(&self, task_id: &str, notice: impl Into<String>) -> bool {
+        let record = self.pause_record_for(task_id, notice);
+        match self.router.record_with_retries(record, 3).await {
+            Ok(outcome) => {
+                tracing::debug!(task_id, outcome = ?outcome, "{LOG_PREFIX} recorded pause notice");
+                true
+            }
+            Err(error) => {
+                tracing::warn!(task_id, error = %error, "{LOG_PREFIX} could not record pause notice");
+                false
+            }
+        }
     }
 }
 
@@ -141,8 +219,9 @@ pub fn spawn_status_watcher_with_completions(
             let snapshot = status.borrow_and_update().clone();
             match snapshot {
                 DetachedSubagentStatus::Running => {}
-                DetachedSubagentStatus::AwaitingUser { .. } => {
+                DetachedSubagentStatus::AwaitingUser { ref question } => {
                     record_status_with_retries(store.as_ref(), &task_id, &snapshot);
+                    target.record_pause(&task_id, question.clone()).await;
                 }
                 _ => break snapshot,
             }

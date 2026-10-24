@@ -99,3 +99,28 @@ fn canonical_adapter_forwards_tool_extension_to_the_call_binding_contract() {
     assert_eq!(target.name(), "selected");
     assert_eq!(effective_args, &args);
 }
+
+#[test]
+fn binding_exposes_typed_registration_metadata_without_changing_call_binding() {
+    let binding = ToolCallBinding::new(|outer, args| {
+        Arc::new(BoundProbe {
+            outer: outer.clone(),
+            target: Arc::new(Target),
+            args: args.clone(),
+        })
+    })
+    .with_metadata(String::from("registry metadata"));
+
+    assert_eq!(
+        binding.metadata::<String>().map(String::as_str),
+        Some("registry metadata")
+    );
+    assert!(binding.metadata::<usize>().is_none());
+
+    let outer: Arc<dyn Tool> = Arc::new(Target);
+    let arguments = json!({"value": 7});
+    let bound = binding.bind(outer.clone(), &arguments);
+    let (target, effective_args) = bound.admission_target().unwrap();
+    assert_eq!(target.name(), "selected");
+    assert_eq!(effective_args, &arguments);
+}

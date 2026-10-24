@@ -693,15 +693,13 @@ async fn resolved_route_middleware_observes_stream_folded_terminal_response() {
         |context: &RouteContext, route| *context.0.lock().unwrap() = Some(route),
     );
     let mut harness: AgentHarness<(), RouteContext> = AgentHarness::new();
-    harness
-        .register_model(
-            "stream",
-            Arc::new(RouteRecordingModel::new(
-                Arc::new(ScriptedModel::replies(vec!["streamed"])),
-                route.clone(),
-            )),
-        )
-        .set_default_model("stream");
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "stream",
+        Arc::new(RouteRecordingModel::new(
+            Arc::new(ScriptedModel::replies(vec!["streamed"])),
+            route.clone(),
+        )) as _,
+    )));
     harness.push_model_middleware(Arc::new(middleware));
     let context = RouteContext::default();
     let slot = context.0.clone();

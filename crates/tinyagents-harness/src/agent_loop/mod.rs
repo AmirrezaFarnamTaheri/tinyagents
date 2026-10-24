@@ -3,7 +3,7 @@
 //! This loop is the innermost turn of the recursive runtime: it is where one
 //! model call is driven to completion, and because a
 //! whole harness can be exposed as a tool
-//! (`SubAgentTool` in `tinyagents-orchestration`), the very tools this loop
+//! (the driver-backed spawn tool in `tinyagents-harness-tools`), the tools this loop
 //! executes may themselves be other agents — so "a model calling a model" is
 //! just this loop nested inside one of its own tool calls. Each invocation runs
 //! inside a [`RunContext`] that tracks recursion depth, fans usage/cost up to a
@@ -89,6 +89,7 @@
 //! provider integration retries after a genuine, growing delay while unit tests
 //! stay sleep-free.
 
+pub mod phases;
 mod types;
 
 pub use types::*;
@@ -97,6 +98,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::agent_loop::ModelBinding;
 use crate::cache::{ResponseCache, cache_key};
 use crate::context::{LoopTarget, MiddlewareControl, RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
@@ -106,7 +108,6 @@ use crate::middleware::{
     AgentBaseCall, AgentRun, BoxAgentFuture, BoxModelFuture, BoxToolFuture, ModelBaseCall,
     ToolBaseCall,
 };
-use crate::model_registry::{ResolvedModelBinding, model_eligible};
 use crate::runtime::{AgentHarness, EndStrategy, InvalidArgsPolicy, UnknownToolPolicy};
 use crate::structured::{StructuredExtractor, StructuredStrategy};
 use crate::terminal::{TerminalClass, TerminalOutcome, TimeoutPhase};
@@ -125,11 +126,10 @@ mod handoff_transform;
 mod host_budget;
 mod lifecycle;
 mod mixed_turn;
-mod model_call;
+pub(crate) mod model_call;
 mod model_switch;
 mod model_turn;
 mod nested;
-pub mod phases;
 mod response_recovery;
 mod run_loop;
 pub(crate) mod stream;

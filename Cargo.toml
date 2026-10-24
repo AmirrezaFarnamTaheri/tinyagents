@@ -3,7 +3,6 @@ members = ["crates/*"]
 default-members = [
     "crates/tinyagents-harness",
     "crates/tinyagents-harness-tools",
-    "crates/tinyagents-graph",
     "crates/tinyagents-tasks",
     "crates/tinyagents-registry",
     "crates/tinyagents-session",
@@ -16,7 +15,7 @@ exclude = ["vendor", "worktrees", "integration-proofs/run-ledger-mongodb"]
 resolver = "3"
 
 [workspace.package]
-version = "2.11.0"
+version = "3.0.0"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/tinyhumansai/tinyagents"
@@ -41,6 +40,7 @@ tracing = "0.1"
 tinystoragedrivers-types = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }
 tinystoragedrivers-api = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }
 tinystoragedrivers-testkit = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }
+tinystoragedrivers = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456", default-features = false, features = ["sqlite"] }
 tinystoragedrivers-document = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456", features = ["sqlite", "file"] }
 tinystoragedrivers-connect = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456", features = ["sqlite"] }
 tinyagents-storage-kit = { path = "crates/tinyagents-storage-kit" }

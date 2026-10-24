@@ -1,0 +1,30 @@
+{
+  "description": "Run the project test suite. Supports 'cargo_test' for Rust and 'vitest' for TypeScript/JavaScript. Returns pass/fail results with output.",
+  "exposure": "Deferred",
+  "name": "run_tests",
+  "permission_level": "Execute",
+  "schema": {
+    "properties": {
+      "filter": {
+        "description": "Filter to run specific tests (e.g. test name or module).",
+        "type": "string"
+      },
+      "runner": {
+        "default": "auto",
+        "description": "Which test runner to use. 'auto' detects from project files.",
+        "enum": [
+          "cargo_test",
+          "vitest",
+          "auto"
+        ],
+        "type": "string"
+      },
+      "timeout_secs": {
+        "default": 120,
+        "description": "Timeout in seconds (default: 120).",
+        "type": "integer"
+      }
+    },
+    "type": "object"
+  }
+}

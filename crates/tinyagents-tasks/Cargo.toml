@@ -11,10 +11,11 @@ description = "Graph-independent detached-task registry, task stores and orchest
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-tinyagents-harness = { path = "../tinyagents-harness", version = "2.11.0", default-features = false }
+tinyagents-harness = { path = "../tinyagents-harness", version = "3.0.0", default-features = false }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.5.0" }
 tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread"] }
 tracing = { workspace = true }
+uuid = { workspace = true }
 # Storage ports (no database client). `blocking` bridges the synchronous
 # `TaskStore` / `CompletionStore` traits onto the async ports.
 tinyagents-storage-kit = { workspace = true }
