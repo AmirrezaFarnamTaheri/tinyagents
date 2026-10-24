@@ -13,8 +13,8 @@ pub(crate) use types::ActiveTurn;
 
 pub use types::{
     EventSink, FailureClassification, FailureClassifier, IngressDecision, IngressPolicy,
-    IngressStage, QueueDisposition, ReplyStore, RequeuePayload, ScopeKey, Summarizer,
-    TerminalEvent, TurnHost, TurnRequest, TurnResult, TurnRunner, TurnRunnerConfig,
+    IngressStage, LiveTurn, QueueDisposition, ReplyStore, RequeuePayload, ScopeKey, Summarizer,
+    TerminalEvent, TurnHost, TurnQueueItem, TurnRequest, TurnResult, TurnRunner, TurnRunnerConfig,
     TurnRunnerError, TurnSession, TurnSignal, WorkTracker, deterministic_reply_id,
 };
 

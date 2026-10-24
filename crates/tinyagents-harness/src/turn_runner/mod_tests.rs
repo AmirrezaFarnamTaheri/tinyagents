@@ -1,6 +1,26 @@
 use super::*;
 use crate::run_queue::{QueueLane, QueueMode, QueuedMessage, RunQueue};
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+#[derive(Clone)]
+struct WrappedQueueRequest(TurnRequest);
+
+impl TurnQueueItem<serde_json::Value> for WrappedQueueRequest {
+    fn from_turn_request(request: TurnRequest) -> Self {
+        Self(request)
+    }
+
+    fn as_turn_request(&self) -> &TurnRequest {
+        &self.0
+    }
+
+    fn into_turn_request(self) -> TurnRequest {
+        self.0
+    }
+}
 
 #[derive(Default)]
 struct Host {
@@ -8,6 +28,7 @@ struct Host {
     release: Option<Arc<tokio::sync::Notify>>,
     fingerprint_error: bool,
     hold_checkin: bool,
+    checkin_started: Option<Arc<tokio::sync::Notify>>,
     fail_run: bool,
     fingerprint_started: Option<Arc<tokio::sync::Notify>>,
     fingerprint_release: Option<Arc<tokio::sync::Notify>>,
@@ -82,6 +103,12 @@ impl TurnHost for Host {
     async fn checkin(&self, request: &TurnRequest) {
         if self.hold_checkin
             && request.request_id == "first"
+            && let Some(started) = &self.checkin_started
+        {
+            started.notify_one();
+        }
+        if self.hold_checkin
+            && request.request_id == "first"
             && let Some(release) = &self.release
         {
             release.notified().await;
@@ -90,6 +117,353 @@ impl TurnHost for Host {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
     async fn cancel_children(&self, _request: &TurnRequest) {}
+}
+
+struct WrappedHost {
+    inner: Host,
+    wrapped_queue: Mutex<Option<Arc<RunQueue<WrappedQueueRequest>>>>,
+}
+
+#[async_trait::async_trait]
+impl TurnHost<serde_json::Value, WrappedQueueRequest> for WrappedHost {
+    async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        <Host as TurnHost>::checkout(&self.inner, request).await
+    }
+
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        <Host as TurnHost>::checkout_fork(&self.inner, request).await
+    }
+
+    async fn validate_fingerprint(
+        &self,
+        request: &TurnRequest,
+        session: &TurnSession,
+    ) -> Result<(), String> {
+        <Host as TurnHost>::validate_fingerprint(&self.inner, request, session).await
+    }
+
+    fn run_origin(&self, request: &TurnRequest) -> serde_json::Value {
+        <Host as TurnHost>::run_origin(&self.inner, request)
+    }
+
+    async fn run(
+        &self,
+        _request: &TurnRequest,
+        _session: &TurnSession,
+        _origin: &serde_json::Value,
+        cancellation: crate::CancellationToken,
+        queue: Arc<RunQueue<WrappedQueueRequest>>,
+        _progress: tokio::sync::mpsc::Sender<TurnSignal>,
+    ) -> Result<TurnResult, String> {
+        *self.wrapped_queue.lock().unwrap() = Some(queue);
+        self.inner
+            .runs
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let (Some(started), Some(release)) = (&self.inner.started, &self.inner.release) {
+            started.notify_one();
+            tokio::select! {
+                _ = release.notified() => {},
+                _ = cancellation.cancelled() => return Err("cancelled".into()),
+            }
+        }
+        Ok(TurnResult {
+            reply: "done".into(),
+            data: serde_json::Value::Null,
+        })
+    }
+
+    async fn checkin(&self, request: &TurnRequest) {
+        <Host as TurnHost>::checkin(&self.inner, request).await
+    }
+
+    async fn cancel_children(&self, request: &TurnRequest) {
+        <Host as TurnHost>::cancel_children(&self.inner, request).await
+    }
+}
+
+#[tokio::test]
+async fn completed_execution_is_not_reported_as_cancelled_during_checkin() {
+    let checkin_started = Arc::new(tokio::sync::Notify::new());
+    let release_checkin = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        hold_checkin: true,
+        checkin_started: Some(checkin_started.clone()),
+        release: Some(release_checkin.clone()),
+        ..Host::default()
+    });
+    let replies = Arc::new(Replies::default());
+    let events = Arc::new(Events::default());
+    let runner = Arc::new(runner(
+        host,
+        Arc::new(Ingress::default()),
+        replies.clone(),
+        events.clone(),
+    ));
+    let mut request = request(QueueDisposition::Interrupt, false);
+    request.request_id = "first".into();
+    let scope = request.scope.clone();
+    let run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(request).await })
+    };
+
+    checkin_started.notified().await;
+    assert!(
+        runner
+            .cancel_requests(&scope, "thread-a", Some("first"))
+            .await
+            .is_empty()
+    );
+    release_checkin.notify_one();
+
+    assert!(run.await.unwrap().is_ok());
+    assert_eq!(replies.0.lock().unwrap().len(), 1);
+    assert!(matches!(
+        events.terminal.lock().unwrap().as_slice(),
+        [TerminalEvent::Completed { request_id, .. }] if request_id == "first"
+    ));
+}
+
+#[tokio::test]
+async fn cancelled_parallel_turn_remains_visible_until_cleanup_finishes() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let checkin_started = Arc::new(tokio::sync::Notify::new());
+    let release_checkin = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release_checkin.clone()),
+        hold_checkin: true,
+        checkin_started: Some(checkin_started.clone()),
+        ..Host::default()
+    });
+    let runner = Arc::new(runner(
+        host,
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+    let mut parallel_request = request(QueueDisposition::Parallel, false);
+    parallel_request.request_id = "first".into();
+    let scope = parallel_request.scope.clone();
+    let run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(parallel_request).await })
+    };
+
+    started.notified().await;
+    assert_eq!(
+        runner
+            .cancel_requests(&scope, "thread-a", Some("first"))
+            .await,
+        ["first"]
+    );
+    checkin_started.notified().await;
+    assert_eq!(
+        runner
+            .live_turns()
+            .await
+            .iter()
+            .map(|turn| (turn.request_id.as_str(), turn.parallel))
+            .collect::<Vec<_>>(),
+        [("first", true)]
+    );
+    assert!(
+        runner
+            .cancel_requests(&scope, "thread-a", Some("first"))
+            .await
+            .is_empty()
+    );
+
+    release_checkin.notify_one();
+    assert!(matches!(
+        run.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    assert!(runner.live_turns().await.is_empty());
+}
+
+#[tokio::test]
+async fn primary_cancel_result_is_reported_once_until_cleanup_finishes() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let checkin_started = Arc::new(tokio::sync::Notify::new());
+    let release_checkin = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release_checkin.clone()),
+        hold_checkin: true,
+        checkin_started: Some(checkin_started.clone()),
+        ..Host::default()
+    });
+    let runner = Arc::new(runner(
+        host,
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+    let mut primary_request = request(QueueDisposition::Interrupt, false);
+    primary_request.request_id = "first".into();
+    let scope = primary_request.scope.clone();
+    let run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(primary_request).await })
+    };
+
+    started.notified().await;
+    assert_eq!(
+        runner
+            .cancel_requests(&scope, "thread-a", Some("first"))
+            .await,
+        ["first"]
+    );
+    checkin_started.notified().await;
+    assert!(
+        runner
+            .cancel_requests(&scope, "thread-a", Some("first"))
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        runner
+            .live_turns()
+            .await
+            .iter()
+            .map(|turn| turn.request_id.as_str())
+            .collect::<Vec<_>>(),
+        ["first"]
+    );
+
+    release_checkin.notify_one();
+    assert!(matches!(
+        run.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    assert!(runner.live_turns().await.is_empty());
+}
+
+#[tokio::test]
+async fn custom_queue_item_shares_runner_queue_and_preserves_complete_request() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(WrappedHost {
+        inner: Host {
+            started: Some(started.clone()),
+            release: Some(release),
+            ..Host::default()
+        },
+        wrapped_queue: Mutex::default(),
+    });
+    let runner = Arc::new(TurnRunner::<
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        serde_json::Value,
+        WrappedQueueRequest,
+    >::new(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    ));
+
+    let mut primary = request(QueueDisposition::Interrupt, false);
+    primary.request_id = "primary".into();
+    primary.scope.profile_id = Some("profile-x".into());
+    let scope = primary.scope.clone();
+    let primary_run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(primary).await })
+    };
+    started.notified().await;
+
+    let mut runner_queued = request(QueueDisposition::Followup, false);
+    runner_queued.scope = scope.clone();
+    runner_queued.thread_id = "thread-a".into();
+    runner_queued.request_id = "runner-queued-id".into();
+    runner_queued.text = "runner text".into();
+    runner_queued.payload = serde_json::json!({"client":"runner","attachment":[1,2]});
+    runner_queued.deadline = Some(Duration::from_secs(31));
+    runner_queued.idle_timeout = Some(Duration::from_secs(7));
+    assert!(matches!(
+        runner.run(runner_queued.clone()).await,
+        Err(TurnRunnerError::Queued)
+    ));
+
+    let shared_queue = host.wrapped_queue.lock().unwrap().clone().unwrap();
+    let runner_item = shared_queue
+        .snapshot()
+        .await
+        .into_iter()
+        .find(|(_, item)| item.as_turn_request().request_id == "runner-queued-id")
+        .expect("runner-enqueued item is in the host's queue");
+    assert_eq!(runner_item.0, QueueLane::Followup);
+    let stored_runner_request = runner_item.1.as_turn_request();
+    assert_eq!(stored_runner_request.scope, runner_queued.scope);
+    assert_eq!(stored_runner_request.thread_id, runner_queued.thread_id);
+    assert_eq!(stored_runner_request.request_id, runner_queued.request_id);
+    assert_eq!(stored_runner_request.text, runner_queued.text);
+    assert_eq!(stored_runner_request.payload, runner_queued.payload);
+    assert_eq!(
+        stored_runner_request.host_authored,
+        runner_queued.host_authored
+    );
+    assert_eq!(stored_runner_request.disposition, runner_queued.disposition);
+    assert_eq!(stored_runner_request.deadline, runner_queued.deadline);
+    assert_eq!(
+        stored_runner_request.idle_timeout,
+        runner_queued.idle_timeout
+    );
+    let round_tripped = runner_item.1.clone().into_turn_request();
+    assert_eq!(round_tripped.scope, runner_queued.scope);
+    assert_eq!(round_tripped.thread_id, runner_queued.thread_id);
+    assert_eq!(round_tripped.request_id, runner_queued.request_id);
+    assert_eq!(round_tripped.text, runner_queued.text);
+    assert_eq!(round_tripped.payload, runner_queued.payload);
+    assert_eq!(round_tripped.host_authored, runner_queued.host_authored);
+    assert_eq!(round_tripped.disposition, runner_queued.disposition);
+    assert_eq!(round_tripped.deadline, runner_queued.deadline);
+    assert_eq!(round_tripped.idle_timeout, runner_queued.idle_timeout);
+
+    let mut host_queued = request(QueueDisposition::Steer, false);
+    host_queued.scope = scope.clone();
+    host_queued.request_id = "host-queued-id".into();
+    host_queued.text = "host text".into();
+    host_queued.payload = serde_json::json!({"client":"host","locale":"en"});
+    shared_queue
+        .push(
+            QueueLane::Steer,
+            WrappedQueueRequest::from_turn_request(host_queued.clone()),
+        )
+        .await;
+    let runner_snapshot = runner.queue_snapshot(&scope, "thread-a").await;
+    let host_item = runner_snapshot
+        .iter()
+        .find(|(_, item)| item.as_turn_request().request_id == "host-queued-id")
+        .expect("host-enqueued item is visible in runner's snapshot");
+    assert_eq!(host_item.0, QueueLane::Steer);
+    assert_eq!(host_item.1.as_turn_request().scope, host_queued.scope);
+    assert_eq!(
+        host_item.1.as_turn_request().request_id,
+        host_queued.request_id
+    );
+    assert_eq!(host_item.1.as_turn_request().text, host_queued.text);
+    assert_eq!(host_item.1.as_turn_request().payload, host_queued.payload);
+
+    assert_eq!(
+        runner
+            .cancel_requests(&scope, "thread-a", Some("primary"))
+            .await,
+        ["primary"]
+    );
+    assert!(matches!(
+        primary_run.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
 }
 
 #[derive(Default)]
@@ -216,6 +590,7 @@ async fn taking_rebuilt_queue_requests_restores_the_active_scope() {
         ActiveTurn {
             request_id: "active".into(),
             cancel: crate::CancellationToken::new(),
+            cancellable: true,
             generation: 7,
             queue,
             payload: serde_json::Value::Null,
@@ -255,6 +630,7 @@ async fn taking_rebuilt_queue_requests_restores_the_owner_thread_id() {
         ActiveTurn {
             request_id: "active".into(),
             cancel: crate::CancellationToken::new(),
+            cancellable: true,
             generation: 7,
             queue,
             payload: serde_json::json!({
@@ -303,6 +679,7 @@ async fn finalizing_a_rebuilt_queue_request_restores_the_active_scope() {
         ActiveTurn {
             request_id: "active".into(),
             cancel: crate::CancellationToken::new(),
+            cancellable: true,
             generation: 7,
             queue,
             payload: serde_json::json!({"access": "full"}),
@@ -342,6 +719,7 @@ async fn finalizing_rebuilt_collect_requests_restores_the_active_scope() {
         ActiveTurn {
             request_id: "active".into(),
             cancel: crate::CancellationToken::new(),
+            cancellable: true,
             generation: 7,
             queue,
             payload: serde_json::Value::Null,
@@ -380,6 +758,7 @@ async fn retiring_rebuilt_queue_requests_restores_the_active_scope() {
         ActiveTurn {
             request_id: "active".into(),
             cancel: crate::CancellationToken::new(),
+            cancellable: true,
             generation: 7,
             queue,
             payload: serde_json::Value::Null,
@@ -2091,4 +2470,158 @@ impl Summarizer for BlockingSummary {
         self.started.notify_one();
         std::future::pending().await
     }
+}
+
+#[tokio::test]
+async fn live_turns_and_cancel_requests_report_scoped_primary_before_parallel() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release),
+        ..Host::default()
+    });
+    let runner = Arc::new(runner(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+
+    let mut primary_request = request(QueueDisposition::Interrupt, false);
+    primary_request.request_id = "primary".into();
+    let scope = primary_request.scope.clone();
+    let primary = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(primary_request).await })
+    };
+    started.notified().await;
+
+    let mut parallel_request = request(QueueDisposition::Parallel, false);
+    parallel_request.request_id = "parallel".into();
+    let parallel = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(parallel_request).await })
+    };
+
+    let mut other_agent_request = request(QueueDisposition::Interrupt, false);
+    other_agent_request.request_id = "other-agent".into();
+    other_agent_request.scope.agent_id = "agent-b".into();
+    let other_agent_scope = other_agent_request.scope.clone();
+    let other_agent = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(other_agent_request).await })
+    };
+    while host.runs.load(std::sync::atomic::Ordering::SeqCst) < 3 {
+        tokio::task::yield_now().await;
+    }
+
+    let live = runner.live_turns().await;
+    assert_eq!(
+        live.iter()
+            .map(|turn| (
+                turn.scope.agent_id.as_str(),
+                turn.request_id.as_str(),
+                turn.parallel,
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("agent-a", "primary", false),
+            ("agent-a", "parallel", true),
+            ("agent-b", "other-agent", false),
+        ]
+    );
+
+    assert_eq!(
+        runner.cancel_requests(&scope, "thread-a", None).await,
+        ["primary".to_owned(), "parallel".to_owned(),]
+    );
+    assert!(matches!(
+        primary.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    assert!(matches!(
+        parallel.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    assert_eq!(
+        runner
+            .cancel_requests(&other_agent_scope, "thread-a", None)
+            .await,
+        ["other-agent".to_owned()]
+    );
+    assert!(matches!(
+        other_agent.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    assert!(runner.live_turns().await.is_empty());
+}
+
+#[tokio::test]
+async fn queue_snapshot_preserves_lane_fifo_and_does_not_drain_work() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release),
+        ..Host::default()
+    });
+    let runner = Arc::new(runner(
+        host,
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+    let primary = {
+        let runner = runner.clone();
+        tokio::spawn(async move {
+            runner
+                .run(request(QueueDisposition::Interrupt, false))
+                .await
+        })
+    };
+    started.notified().await;
+
+    for (disposition, id) in [
+        (QueueDisposition::Steer, "steer-1"),
+        (QueueDisposition::Steer, "steer-2"),
+        (QueueDisposition::Followup, "followup-1"),
+        (QueueDisposition::Collect, "collect-1"),
+    ] {
+        let mut queued = request(disposition, false);
+        queued.request_id = id.into();
+        assert!(matches!(
+            runner.run(queued).await,
+            Err(TurnRunnerError::Queued)
+        ));
+    }
+    let scope = request(QueueDisposition::Interrupt, false).scope;
+
+    let snapshot = runner.queue_snapshot(&scope, "thread-a").await;
+    assert_eq!(
+        snapshot
+            .iter()
+            .map(|(lane, item)| (*lane, item.request_id.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (QueueLane::Steer, "steer-1"),
+            (QueueLane::Steer, "steer-2"),
+            (QueueLane::Followup, "followup-1"),
+            (QueueLane::Collect, "collect-1"),
+        ]
+    );
+    assert_eq!(runner.queue_status(&scope, "thread-a").await.total, 4);
+    assert_eq!(
+        runner
+            .take_queued(&scope, "thread-a", QueueLane::Steer, QueueMode::OneAtATime)
+            .await[0]
+            .request_id,
+        "steer-1"
+    );
+
+    runner.cancel_requests(&scope, "thread-a", None).await;
+    assert!(matches!(
+        primary.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
 }
