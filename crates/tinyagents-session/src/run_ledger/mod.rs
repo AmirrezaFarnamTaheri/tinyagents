@@ -13,6 +13,7 @@ pub mod command_center;
 pub mod drivers;
 pub mod error;
 pub mod history;
+pub mod inbox;
 pub mod port;
 pub mod recovery;
 mod status_map;
