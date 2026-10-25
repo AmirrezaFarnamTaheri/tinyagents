@@ -746,6 +746,25 @@ impl TranscriptHistory for DriverTranscriptHistory {
         .map(|_| ())
     }
 
+    fn adopt_if_empty(&self, messages: &[TranscriptMessage]) -> anyhow::Result<bool> {
+        let messages = normalized(messages.to_vec());
+        if messages.is_empty() {
+            return Ok(false);
+        }
+        self.commit(move |replay, seed| {
+            if replay.written {
+                return Ok(None);
+            }
+            anyhow::ensure!(!replay.sealed, "transcript generation is sealed");
+            Ok(Some(Entry {
+                written: true,
+                meta: Some(seed.clone()),
+                set: Some(messages.clone()),
+                ..Entry::default()
+            }))
+        })
+    }
+
     fn replace(&self, messages: &[TranscriptMessage]) -> anyhow::Result<()> {
         let messages = normalized(messages.to_vec());
         self.commit(move |replay, seed| {
@@ -982,6 +1001,7 @@ fn discovered_seed(stem: &str) -> TranscriptMeta {
         updated: String::new(),
         turn_count: 0,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,
