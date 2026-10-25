@@ -1,0 +1,258 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.27
+   Compiling quote v1.0.47
+   Compiling libc v0.2.191
+    Checking cfg-if v1.0.5
+    Checking itoa v1.0.18
+    Checking memchr v2.8.3
+   Compiling serde_core v1.0.229
+   Compiling find-msvc-tools v0.1.15
+    Checking bytes v1.12.1
+   Compiling shlex v2.0.1
+    Checking pin-project-lite v0.2.17
+   Compiling serde v1.0.229
+    Checking futures-core v0.3.34
+    Checking foldhash v0.2.0
+   Compiling zmij v1.0.23
+    Checking zeroize v1.9.1
+   Compiling serde_json v1.0.154
+    Checking once_cell v1.21.4
+    Checking bitflags v2.13.2
+    Checking typenum v1.20.1
+    Checking smallvec v1.16.3
+   Compiling thiserror v2.0.21
+    Checking stable_deref_trait v1.2.1
+    Checking equivalent v1.0.3
+   Compiling version_check v0.9.5
+    Checking futures-sink v0.3.34
+   Compiling httparse v1.10.1
+    Checking percent-encoding v2.3.2
+    Checking hashbrown v0.17.1
+    Checking http v1.5.0
+    Checking untrusted v0.9.0
+    Checking slab v0.4.12
+   Compiling rustls v0.23.46
+    Checking log v0.4.34
+   Compiling rustix v1.1.5
+    Checking subtle v2.6.1
+   Compiling generic-array v0.14.7
+    Checking tracing-core v0.1.36
+    Checking futures-io v0.3.34
+    Checking futures-task v0.3.34
+    Checking rand_core v0.10.1
+   Compiling getrandom v0.4.3
+    Checking linux-raw-sys v0.12.1
+    Checking writeable v0.6.4
+    Checking litemap v0.8.3
+    Checking cpufeatures v0.2.17
+    Checking base64 v0.23.1
+    Checking utf8_iter v1.0.4
+    Checking rustls-pki-types v1.15.1
+    Checking futures-channel v0.3.34
+   Compiling icu_properties_data v2.4.0
+   Compiling icu_normalizer_data v2.4.0
+    Checking hybrid-array v0.4.15
+    Checking http-body v1.1.0
+   Compiling anyhow v1.0.104
+    Checking cpufeatures v0.3.1
+    Checking form_urlencoded v1.2.2
+    Checking data-encoding v2.11.1
+    Checking tower-service v0.3.3
+    Checking ipnet v2.12.2
+    Checking atomic-waker v1.1.2
+    Checking fnv v1.0.7
+    Checking try-lock v0.2.5
+    Checking const-oid v0.10.2
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking sync_wrapper v1.0.2
+    Checking tower-layer v0.3.3
+    Checking fastrand v2.5.0
+    Checking aho-corasick v1.1.5
+    Checking ryu v1.0.23
+   Compiling autocfg v1.5.1
+    Checking regex-syntax v0.8.11
+    Checking http-body-util v0.1.5
+    Checking toml_write v0.1.2
+    Checking base64 v0.22.1
+    Checking winnow v0.7.15
+    Checking chacha20 v0.10.2
+    Checking httpdate v1.0.3
+    Checking iana-time-zone v0.1.65
+    Checking block-buffer v0.10.4
+    Checking crypto-common v0.1.7
+    Checking want v0.3.2
+    Checking option-ext v0.2.0
+   Compiling pkg-config v0.3.34
+   Compiling getrandom v0.3.4
+   Compiling zerocopy v0.8.63
+   Compiling num-traits v0.2.19
+   Compiling vcpkg v0.2.15
+   Compiling zstd-safe v7.3.0
+   Compiling parking_lot_core v0.9.12
+    Checking fallible-iterator v0.3.0
+    Checking fallible-streaming-iterator v0.1.9
+    Checking scopeguard v1.2.0
+   Compiling ref-cast v1.0.27
+    Checking dyn-clone v1.0.20
+    Checking hex v0.4.3
+    Checking siphasher v1.0.4
+   Compiling chrono-tz v0.10.4
+    Checking dotenvy v0.15.7
+    Checking webpki-roots v1.0.10
+    Checking digest v0.10.7
+    Checking simd-adler32 v0.3.10
+    Checking lock_api v0.4.14
+    Checking adler2 v2.0.1
+   Compiling crc32fast v1.5.3
+    Checking phf_shared v0.12.1
+   Compiling io-lifetimes v2.0.4
+    Checking winnow v1.0.4
+   Compiling io-lifetimes v3.0.1
+    Checking ureq-proto v0.6.5
+   Compiling tinybus v0.1.6 (https://github.com/tinyhumansai/tinybus?rev=0de2d283f35cbbff08efad6fbe05537ffb74611b#0de2d283)
+    Checking indexmap v2.14.2
+    Checking hashlink v0.12.2
+    Checking typed-path v0.12.4
+    Checking toml_writer v1.1.3+spec-1.1.0
+    Checking utf8-zero v0.8.1
+   Compiling io-extras v0.19.0
+   Compiling cap-primitives v4.0.3
+    Checking toml_parser v1.1.5+spec-1.1.0
+    Checking maybe-owned v0.3.4
+    Checking ambient-authority v0.0.2
+    Checking phf v0.12.1
+    Checking webpki-roots v0.26.11
+   Compiling cap-std v4.0.3
+    Checking miniz_oxide v0.9.1
+    Checking miniz_oxide v0.8.9
+   Compiling syn v3.0.9
+   Compiling syn v2.0.119
+    Checking fdeflate v0.3.7
+    Checking sha2 v0.10.9
+    Checking sha1 v0.10.7
+    Checking bitflags v1.3.2
+    Checking digest v0.11.3
+    Checking sha2 v0.11.1
+    Checking regex-automata v0.4.18
+    Checking flate2 v1.1.10
+   Compiling jobserver v0.1.35
+    Checking zip v9.0.5
+    Checking png v0.17.16
+    Checking errno v0.3.14
+    Checking mio v1.2.4
+    Checking socket2 v0.6.5
+    Checking getrandom v0.2.17
+    Checking dirs-sys v0.5.0
+    Checking wait-timeout v0.2.1
+    Checking filetime v0.2.29
+    Checking toml_datetime v1.1.2+spec-1.1.0
+    Checking serde_spanned v1.1.2
+    Checking signal-hook-registry v1.4.8
+    Checking dirs v6.0.0
+   Compiling cc v1.9.0
+    Checking rand v0.10.3
+    Checking uuid v1.26.1
+    Checking rand_core v0.9.5
+    Checking parking_lot v0.12.5
+    Checking toml v1.1.8+spec-1.1.0
+    Checking regex v1.13.1
+   Compiling ring v0.17.14
+   Compiling zstd-sys v2.1.2+zstd.1.5.7
+   Compiling libsqlite3-sys v0.38.2
+    Checking tempfile v3.27.0
+    Checking xattr v1.6.1
+    Checking fs-set-times v0.20.3
+    Checking rustix-linux-procfs v0.1.1
+   Compiling tracing-attributes v0.1.31
+    Checking tar v0.4.46
+   Compiling synstructure v0.14.0
+   Compiling serde_derive_internals v0.30.0
+    Checking ppv-lite86 v0.2.21
+   Compiling serde_derive v1.0.229
+   Compiling tokio-macros v2.7.2
+   Compiling async-trait v0.1.92
+   Compiling thiserror-impl v2.0.21
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling zerovec-derive v0.11.7
+   Compiling displaydoc v0.2.7
+   Compiling futures-macro v0.3.34
+    Checking rand_chacha v0.9.0
+   Compiling ref-cast-impl v1.0.27
+   Compiling schemars_derive v1.2.3
+    Checking tracing v0.1.44
+    Checking rand v0.9.5
+    Checking tokio v1.54.1
+    Checking futures-util v0.3.34
+    Checking ulid v1.2.1
+    Checking zerofrom v0.1.8
+    Checking yoke v0.8.4
+    Checking zerovec v0.11.9
+    Checking zerotrie v0.2.5
+    Checking rustls-webpki v0.103.16
+    Checking tinystr v0.8.5
+    Checking potential_utf v0.1.6
+    Checking icu_collections v2.4.0
+    Checking icu_locale_core v2.4.0
+    Checking tinystoragedrivers-types v2.1.0 (https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada9)
+    Checking serde_spanned v0.6.9
+    Checking serde_urlencoded v0.7.1
+    Checking tinytools v0.6.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/vendor/tinytools/crates/tinytools)
+    Checking toml_datetime v0.6.11
+    Checking chrono v0.4.45
+    Checking icu_provider v2.4.0
+    Checking futures-executor v0.3.34
+    Checking toml_edit v0.22.27
+    Checking futures v0.3.34
+    Checking icu_normalizer v2.4.0
+    Checking icu_properties v2.4.0
+    Checking zstd v0.13.3
+    Checking schemars v1.2.3
+    Checking tinystoragedrivers-api v2.1.0 (https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada9)
+    Checking tungstenite v0.29.0
+    Checking ureq v3.5.0
+    Checking toml v0.8.23
+    Checking tinytools-agent v0.6.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/vendor/tinytools/crates/tinytools-agent)
+    Checking idna_adapter v1.2.2
+    Checking idna v1.1.0
+    Checking tinystoragedrivers-secrets v2.1.0 (https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada9)
+    Checking tinyagents-definition v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-definition)
+    Checking tokio-util v0.7.20
+    Checking tokio-rustls v0.26.6
+    Checking tower v0.5.3
+    Checking tinyagents-storage-kit v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-storage-kit)
+    Checking tinystoragedrivers-queue v2.1.0 (https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada9)
+    Checking url v2.5.8
+    Checking tokio-tungstenite v0.29.0
+    Checking tinyinference-core v0.5.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/vendor/tinyinference/crates/tinyinference-core)
+    Checking tower-http v0.6.11
+    Checking h2 v0.4.20
+    Checking hyper v1.12.0
+    Checking tinystoragedrivers-bus v2.1.0 (https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada9)
+    Checking hyper-util v0.1.21
+    Checking tinystoragedrivers-busproxy v2.1.0 (https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada9)
+    Checking hyper-rustls v0.27.10
+    Checking reqwest v0.12.28
+    Checking tinyinference-embeddings v0.5.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/vendor/tinyinference/crates/tinyinference-embeddings)
+    Checking tinyinference-providers v0.5.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/vendor/tinyinference/crates/tinyinference-providers)
+    Checking tinyliveagents v0.1.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/vendor/tinyliveagents/crates/tinyliveagents)
+    Checking tinyinference-llm v0.5.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/vendor/tinyinference/crates/tinyinference-llm)
+    Checking rusqlite v0.40.2
+    Checking tinystoragedrivers-connect v2.1.0 (https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada9)
+    Checking tinystoragedrivers-blob v2.1.0 (https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada9)
+    Checking tinystoragedrivers-kv v2.1.0 (https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada9)
+    Checking tinystoragedrivers-document v2.1.0 (https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada9)
+    Checking tinystoragedrivers-testkit v2.1.0 (https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada9)
+    Checking tinystoragedrivers v2.1.0 (https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada9)
+    Checking tinyagents-harness v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-harness)
+    Checking tinyagents-tasks v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-tasks)
+    Checking tinyagents-registry v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-registry)
+    Checking tinyagents-harness-tools v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-harness-tools)
+    Checking tinyagents-hooks v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-hooks)
+    Checking tinyagents-live v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-live)
+    Checking tinyagents-session v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-session)
+    Checking tinyagents-orchestration v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-orchestration)
+    Checking tinyagents-runtime v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-runtime)
+    Checking tinyagents-integration-tests v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-integration-tests)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.76s

@@ -1,0 +1,13 @@
+    Checking tinyagents-definition v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-definition)
+    Checking tinyagents-storage-kit v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-storage-kit)
+    Checking tinyagents-harness v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-harness)
+    Checking tinyagents-tasks v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-tasks)
+    Checking tinyagents-registry v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-registry)
+    Checking tinyagents-harness-tools v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-harness-tools)
+    Checking tinyagents-hooks v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-hooks)
+    Checking tinyagents-live v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-live)
+    Checking tinyagents-session v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-session)
+    Checking tinyagents-orchestration v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-orchestration)
+    Checking tinyagents-runtime v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-runtime)
+    Checking tinyagents-integration-tests v3.0.0 (/tmp/claude-1000/-home-ubuntu-work-workflow-openhuman-openhuman/aa91aec8-e97a-43ce-9078-7f1632622bf1/scratchpad/tinyagents/crates/tinyagents-integration-tests)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.88s
