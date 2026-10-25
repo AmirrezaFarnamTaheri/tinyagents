@@ -1,4 +1,4 @@
-//! Durable observability for the harness — journals, status stores, and sinks.
+//! Durable and live observability for the harness, including provider dispatches.
 //!
 //! The live [`crate::events`] layer fans typed [`AgentEvent`]s out to
 //! in-process listeners. This module makes that history **durable and
@@ -28,11 +28,20 @@ mod journal_entry;
 #[cfg(feature = "langfuse")]
 mod langfuse;
 mod profile;
+mod supplemental;
 mod types;
 mod worker;
 
+pub mod physical_dispatch;
+pub use physical_dispatch::{
+    ObservedChatModel, PhysicalDispatchGuard, PhysicalDispatchMetadata, PhysicalDispatchObserver,
+    PhysicalDispatchOutcome, PhysicalDispatchStatus, PhysicalDispatchTerminal,
+    PhysicalDispatchUsage,
+};
 pub mod reaper;
 pub mod replay;
+#[cfg(feature = "langfuse")]
+pub mod spans;
 pub mod status;
 pub(crate) mod status_record;
 pub mod trace_export;
@@ -46,6 +55,7 @@ pub use langfuse::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
 };
 pub use profile::{ProcessProfile, ProcessProfiler, ProcessSnapshot};
+pub use supplemental::{SupplementalCallGuard, SupplementalCallTrace, SupplementalEnricher};
 // Shared Langfuse payload helpers reused by the graph observability exporter so
 // ISO-8601 timestamp formatting and null-field pruning live in one place.
 #[cfg(feature = "langfuse")]
@@ -601,7 +611,10 @@ impl RedactingSink {
 
     /// Wraps `inner`, masking each substring in `secrets` with the default
     /// mask before forwarding.
-    pub fn new(inner: Arc<dyn EventListener>, secrets: Vec<String>) -> Self {
+    pub fn new(inner: Arc<dyn EventListener>, mut secrets: Vec<String>) -> Self {
+        // Longest first, so a secret that contains a shorter one is masked
+        // whole instead of leaving its tail behind.
+        secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
         Self {
             inner,
             secrets,

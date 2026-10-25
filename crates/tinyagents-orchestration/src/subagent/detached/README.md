@@ -33,7 +33,11 @@ store lives, progress projection and policy.
   for children it runs itself, via `with_completion_router`.
 - Roster helpers: `snapshot_for_owner`, `task_id_for_session`,
   `task_id_for_session_in_records`, `resume_ref_for_task`,
-  `resume_ref_from_record`.
+  `resume_ref_from_record`, and `parent_roster_for_owner` /
+  `format_parent_roster_for_owner` for the actual subagent-job registry plus
+  durable session summaries. The latter requires summaries read through the
+  matching `ScopedSubagentSessionStore`; it preserves `awaiting_user` state for
+  host wording and orders entries by agent then task.
 
 ## Operational constraints
 

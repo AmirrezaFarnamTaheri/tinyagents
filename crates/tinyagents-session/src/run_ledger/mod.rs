@@ -14,6 +14,7 @@ pub mod drivers;
 pub mod error;
 pub mod history;
 pub mod inbox;
+pub mod import;
 pub mod port;
 pub mod recovery;
 mod status_map;
@@ -23,8 +24,12 @@ pub mod types;
 pub use drivers::DriverRunLedger;
 pub use error::{LedgerError, LedgerResult};
 pub use history::{
-    MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryStore,
-    SessionStart,
+    MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryImport,
+    SessionHistoryImportReport, SessionHistoryStore, SessionStart,
+};
+pub use import::{
+    AgentFamilyImport, AgentFamilyImportReport, ImportCounts, LegacyLedgerRows,
+    LegacyLedgerRowsReport,
 };
 pub use port::RunLedgerStore;
 

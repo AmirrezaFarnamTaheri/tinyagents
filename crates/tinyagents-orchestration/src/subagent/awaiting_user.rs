@@ -3,8 +3,10 @@
 /// A subagent pause that needs a user answer before it can resume.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubagentAwaitingUser {
-    /// Durable task id accepted by the continuation tool.
+    /// Durable task id used for the child operation.
     pub task_id: String,
+    /// Stable session selector used to respawn/reuse the paused child.
+    pub task_key: String,
     /// Host-resolved agent identity accepted by the continuation tool.
     pub agent_id: String,
     /// Worker conversation id, when the host uses a separate worker thread.
@@ -22,23 +24,25 @@ impl SubagentAwaitingUser {
     /// identifier cannot inject a second field or terminate the marker.
     pub fn render(&self) -> String {
         let task_id = encode(&self.task_id);
+        let task_key = encode(&self.task_key);
         let agent_id = encode(&self.agent_id);
         let worker_thread_id = encode(self.worker_thread_id.as_deref().unwrap_or("(none)"));
         let question = encode(&self.question);
         let resume_caveat = if self.checkpointed {
             ""
         } else {
-            " NOTE: this pause could NOT be saved to disk, so resuming may fail. If continue_subagent reports no checkpoint and no durable session, tell the user the sub-agent's progress was lost instead of retrying."
+            " NOTE: this pause could NOT be saved to disk, so reusing the task_key may fail. If spawn_subagent reports no checkpoint and no durable session, tell the user the sub-agent's progress was lost instead of retrying."
         };
         format!(
             "[SUBAGENT_AWAITING_USER]\n\
              task_id: {task_id}\n\
+             task_key: {task_key}\n\
              agent_id: {agent_id}\n\
              worker_thread_id: {worker_thread_id}\n\
              question: {question}\n\
              checkpointed: {}\n\
              [/SUBAGENT_AWAITING_USER]\n\n\
-             The sub-agent needs clarification before it can continue. Surface the above question to the user. When the user responds, call continue_subagent with the task_id, agent_id, and the user's answer as the message parameter. Do NOT re-spawn or re-delegate the sub-agent — that restarts it from scratch and loses its progress.{resume_caveat}",
+             The sub-agent needs clarification before it can continue. Surface the above question to the user. When the user responds, re-call spawn_subagent with the same task_key and the user's answer as the message. Do NOT use a new task_key; reusing it resumes the paused child session.{resume_caveat}",
             self.checkpointed
         )
     }
@@ -62,6 +66,7 @@ impl SubagentAwaitingUser {
             }
         }
         let task_id = decode(take_field(&mut fields, "task_id")?)?;
+        let task_key = decode(take_field(&mut fields, "task_key")?)?;
         let agent_id = decode(take_field(&mut fields, "agent_id")?)?;
         let worker = decode(take_field(&mut fields, "worker_thread_id")?)?;
         let question = decode(take_field(&mut fields, "question")?)?;
@@ -75,6 +80,7 @@ impl SubagentAwaitingUser {
         }
         Ok(Self {
             task_id,
+            task_key,
             agent_id,
             worker_thread_id: (worker != "(none)").then_some(worker),
             question,

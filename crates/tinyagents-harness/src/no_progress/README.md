@@ -162,5 +162,12 @@ guard's answer, not the tool failing, and counting them would double-escalate.
   the identical-repeat counter but **not** the any-failure backstop, so a
   model that recovers from one bad tool name and then legitimately exhausts
   its budget does not trip the generic backstop early.
+- The tool calls of a dead-call retry (the call sent with reasoning off after
+  a reply died at its output cap; `RunContext::dead_call_retry`) do not feed
+  their plain failures to the identical and no-progress ladder in the
+  failure-scope driver. Without the reasoning behind the last action such a
+  call tends to repeat it, which says nothing about the model insisting on a
+  failing action. Classified failures (timeouts, policy) still count, and a
+  repeat made with reasoning still stops the run.
 - On `NoProgress::Halt`, the tracker resets its own state, so a resumed run
   does not immediately re-trip on latched counters.

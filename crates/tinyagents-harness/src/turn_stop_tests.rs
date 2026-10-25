@@ -1,5 +1,148 @@
 use super::*;
 
+#[test]
+fn stop_summary_with_copy_preserves_placeholder_shaped_values() {
+    let groups = [StopSummaryGroup {
+        name: "tool_{count}_{error}".to_owned(),
+        success: false,
+        error: Some("failed {name}".to_owned()),
+        count: 3,
+    }];
+    let copy = StopCopy {
+        opening_template: "reason: {reason}\n",
+        failure_template: "- `{name}` failed{count}{error}",
+        ..ENGLISH_STOP_COPY
+    };
+    assert_eq!(
+        render_stop_summary_with_copy("reason {count}", &groups, &copy),
+        "reason: reason {count}\n\n**What happened**\n- `tool_{count}_{error}` failed 3 times: failed {name}\n\nTell me how you'd like to proceed, or ask me to try again."
+    );
+}
+
+#[test]
+fn stop_copy_keeps_transient_summary_golden() {
+    let groups = [
+        StopSummaryGroup {
+            name: "get_profile".into(),
+            success: true,
+            error: None,
+            count: 1,
+        },
+        StopSummaryGroup {
+            name: "use_skill".into(),
+            success: false,
+            error: Some("tool `use_skill` timed out after 30000 ms".into()),
+            count: 3,
+        },
+    ];
+    assert_eq!(
+        render_stop_summary_with_copy(
+            "a service I needed kept timing out or was temporarily unavailable",
+            &groups,
+            &ENGLISH_STOP_COPY
+        ),
+        "I stopped this turn early because a service I needed kept timing out or was temporarily unavailable.\n\n**What happened**\n- `get_profile` succeeded\n- `use_skill` failed 3 times: tool `use_skill` timed out after 30000 ms\n\nTell me how you'd like to proceed, or ask me to try again."
+    );
+}
+
+#[test]
+fn stop_summary_groups_scrubbed_failures_and_keeps_the_newest_eight_rows() {
+    let mut results = vec![CloseToolResult {
+        name: "oldest".into(),
+        success: true,
+        content: "ok".into(),
+    }];
+    for index in 0..8 {
+        results.push(CloseToolResult {
+            name: format!("tool-{index}"),
+            success: false,
+            content: format!("secret-{index}"),
+        });
+    }
+    results.extend([
+        CloseToolResult {
+            name: "repeat".into(),
+            success: false,
+            content: "credential: hidden".into(),
+        },
+        CloseToolResult {
+            name: "repeat".into(),
+            success: false,
+            content: "credential: hidden".into(),
+        },
+    ]);
+    let groups = group_stop_results(&results, |content| {
+        content
+            .replace("credential: hidden", "credential redacted")
+            .replace("secret-", "redacted-")
+    });
+    assert_eq!(groups.last().unwrap().count, 2);
+    assert_eq!(
+        groups.last().unwrap().error.as_deref(),
+        Some("credential redacted")
+    );
+    let output = render_stop_summary_with_copy("reason", &groups, &ENGLISH_STOP_COPY);
+    assert!(!output.contains("oldest"));
+    assert!(!output.contains("secret-"));
+    assert!(output.contains("- …and 2 more tool call(s)"));
+    assert!(output.contains("- `repeat` failed 2 times: credential redacted"));
+}
+
+#[test]
+fn stop_summary_reproduces_the_production_repeated_timeout_golden() {
+    let results = [
+        CloseToolResult {
+            name: "get_profile".into(),
+            success: true,
+            content: "profile loaded".into(),
+        },
+        CloseToolResult {
+            name: "use_skill".into(),
+            success: false,
+            content: "tool `use_skill` timed out after 30000 ms".into(),
+        },
+        CloseToolResult {
+            name: "use_skill".into(),
+            success: false,
+            content: "tool `use_skill` timed out after 30000 ms".into(),
+        },
+        CloseToolResult {
+            name: "use_skill".into(),
+            success: false,
+            content: "tool `use_skill` timed out after 30000 ms".into(),
+        },
+    ];
+    let groups = group_stop_results(&results, str::to_owned);
+    assert_eq!(
+        render_stop_summary_with_copy(
+            "a service I needed kept timing out or was temporarily unavailable",
+            &groups,
+            &ENGLISH_STOP_COPY,
+        ),
+        "I stopped this turn early because a service I needed kept timing out or was temporarily unavailable.\n\n**What happened**\n- `get_profile` succeeded\n- `use_skill` failed 3 times: tool `use_skill` timed out after 30000 ms\n\nTell me how you'd like to proceed, or ask me to try again."
+    );
+}
+
+#[test]
+fn successful_repeats_are_reported_without_a_failure_claim() {
+    let results = (0..3)
+        .map(|_| CloseToolResult {
+            name: "list_items".into(),
+            success: true,
+            content: "three items".into(),
+        })
+        .collect::<Vec<_>>();
+    let groups = group_stop_results(&results, str::to_owned);
+    let output =
+        render_stop_summary_with_copy("the same step repeated", &groups, &ENGLISH_STOP_COPY);
+    assert_eq!(
+        output,
+        "I stopped this turn early because the same step repeated.\n\n**What happened**\n- `list_items` succeeded 3 times\n\nTell me how you'd like to proceed, or ask me to try again."
+    );
+    assert!(!output.to_lowercase().contains("failed"));
+    assert!(!output.contains("three items"));
+}
+
 fn fallback(note: &str) -> &'static str {
     if note.contains("in a row failed") {
         "turn_stop.varied_failures"
@@ -153,5 +296,152 @@ fn an_incomplete_reason_maps_to_cap_or_breaker() {
     assert_eq!(
         TurnStop::iteration_cap().status_message(),
         "stopped: iteration_cap"
+    );
+}
+
+struct PartialCopyProvider;
+
+impl crate::turn_stop::CopyProvider for PartialCopyProvider {
+    fn copy_override(&self, request: &crate::turn_stop::CopyRequest<'_>) -> Option<String> {
+        match request {
+            crate::turn_stop::CopyRequest::TurnStop {
+                key: crate::turn_stop::TurnStopCopyKey::Policy,
+                ..
+            } => Some("Translated policy copy".into()),
+            _ => None,
+        }
+    }
+}
+
+#[test]
+fn user_copy_uses_typed_class_mapping_and_partial_provider_fallback() {
+    let policy = TurnStop::breaker_with_cause(
+        "ignored",
+        TurnFailureClass::new("blocked_by_policy"),
+        Some("shell".into()),
+    );
+    assert_eq!(
+        policy.user_copy(&PartialCopyProvider),
+        "Translated policy copy"
+    );
+    assert_eq!(policy.failure_class.as_deref(), Some("blocked_by_policy"));
+
+    let unknown =
+        TurnStop::breaker_with_cause("ignored", TurnFailureClass::new("new_host_class"), None);
+    assert_eq!(
+        unknown.user_copy(&PartialCopyProvider),
+        "my tool calls were not getting anywhere"
+    );
+}
+
+#[test]
+fn copy_provider_override_cannot_change_machine_class_or_expose_operation() {
+    struct UnsafeCopy;
+    impl crate::turn_stop::CopyProvider for UnsafeCopy {
+        fn copy_override(&self, _request: &crate::turn_stop::CopyRequest<'_>) -> Option<String> {
+            Some("secret /home/private".into())
+        }
+    }
+
+    let stop = TurnStop::breaker_with_cause(
+        "ignored",
+        TurnFailureClass::new("permission"),
+        Some("file_write".into()),
+    );
+    assert_eq!(stop.user_copy(&UnsafeCopy), "secret /home/private");
+    assert_eq!(stop.failure_class.as_deref(), Some("permission"));
+    assert_eq!(
+        stop.status_message(),
+        "stopped: breaker permission on file_write"
+    );
+}
+
+#[test]
+fn user_copy_never_receives_an_untrusted_operation_string() {
+    struct OperationCopy;
+    impl crate::turn_stop::CopyProvider for OperationCopy {
+        fn copy_override(&self, request: &crate::turn_stop::CopyRequest<'_>) -> Option<String> {
+            match request {
+                crate::turn_stop::CopyRequest::TurnStop { operation, .. } => {
+                    assert_eq!(*operation, None);
+                    None
+                }
+                _ => None,
+            }
+        }
+    }
+
+    let stop = TurnStop {
+        kind: TurnStopKind::Breaker,
+        failure_class: Some(TurnFailureClass::new("permission")),
+        operation: Some("shell /home/private".into()),
+    };
+    let copy = stop.user_copy(&OperationCopy);
+    assert!(!copy.contains("/home/private"));
+}
+
+#[test]
+fn non_failure_stops_use_generic_copy_without_changing_their_wire_kind() {
+    let provider = PartialCopyProvider;
+    let wind_down = TurnStop::wind_down();
+    let cap = TurnStop::iteration_cap();
+    assert_eq!(
+        wind_down.user_copy(&provider),
+        "my tool calls were not getting anywhere"
+    );
+    assert_eq!(
+        cap.user_copy(&provider),
+        "my tool calls were not getting anywhere"
+    );
+    assert_eq!(wind_down.kind, TurnStopKind::WindDown);
+    assert_eq!(cap.kind, TurnStopKind::IterationCap);
+}
+
+#[test]
+fn stable_stop_classes_map_to_all_translation_keys_without_reading_stop_prose() {
+    use crate::turn_stop::TurnStopCopyKey as Key;
+
+    let cases = [
+        ("transient", Key::Transient),
+        ("uncertain_side_effect", Key::UncertainSideEffect),
+        ("authentication", Key::Authentication),
+        ("permission", Key::Permission),
+        ("policy", Key::Policy),
+        ("missing_program", Key::MissingProgram),
+        ("not_found", Key::NotFound),
+        ("invalid_calls", Key::InvalidCalls),
+        ("unavailable", Key::Unavailable),
+        ("site_refused", Key::SiteRefused),
+        ("repeated_failure", Key::RepeatedFailure),
+        ("varied_failures", Key::VariedFailures),
+        ("repeating_step", Key::RepeatingStep),
+        ("out_of_credits", Key::OutOfCredits),
+        ("provider_config", Key::ProviderConfig),
+        ("missing_connection", Key::MissingConnection),
+        ("generic", Key::Generic),
+    ];
+    for (class, key) in cases {
+        assert_eq!(TurnFailureClass::new(class).copy_key(), key, "{class}");
+        assert_eq!(key.as_str(), format!("turn_stop.{class}"));
+    }
+    for (alias, expected) in [
+        ("blocked_by_policy", Key::Policy),
+        ("unsupported", Key::MissingProgram),
+        ("missing_app", Key::MissingProgram),
+        ("missing_window", Key::NotFound),
+        ("validation", Key::InvalidCalls),
+        ("invalid_arguments", Key::InvalidCalls),
+        ("service_refused", Key::Unavailable),
+    ] {
+        assert_eq!(TurnFailureClass::new(alias).copy_key(), expected, "{alias}");
+    }
+
+    let stop = TurnStop::breaker(
+        "private prose says permission, but class is generic",
+        |_| "turn_stop.generic",
+    );
+    assert_eq!(
+        stop.user_copy(&PartialCopyProvider),
+        "my tool calls were not getting anywhere"
     );
 }

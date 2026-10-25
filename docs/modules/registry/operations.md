@@ -21,7 +21,7 @@ Static components:
 - registered before a run
 - listed in discovery APIs
 - have durable ids
-- validated when graphs compile
+- validated before an agent run
 
 Runtime components:
 
@@ -38,7 +38,7 @@ name and produce a registered-like descriptor.
 
 Parallel execution requires explicit hierarchy.
 
-When an agent spawns child agents or graph branches:
+When an agent spawns child agents:
 
 - every child run gets a new `run_id`
 - every child run inherits `root_run_id`
@@ -51,9 +51,9 @@ Example:
 
 ```text
 root run: support_agent
-  child run: retrieval_graph
-    node: search
-    node: rerank
+  child run: retrieval_agent
+    model: default
+    tool: search
   child run: draft_agent
     model: default
     tool: lookup_user
@@ -72,7 +72,6 @@ GET /runs/{run_id}/events
 GET /threads/{thread_id}/runs
 GET /events/stream?run_id=...
 POST /agents/{name}/invoke
-POST /graphs/{name}/invoke
 ```
 
 The Rust library should not ship a web server initially, but the event and
@@ -82,7 +81,6 @@ UI event needs:
 
 - stable component ids
 - display names
-- graph topology metadata
 - tool schemas
 - run tree correlation
 - streaming model deltas
@@ -109,11 +107,10 @@ Examples:
 - tool-call timeline transformer
 - subagent tree transformer
 - model-token text transformer
-- graph-state diff transformer
 - cost/usage accumulator
 
 Transformers should be registry extensions. They should not be hardcoded into
-every tool, graph, or model implementation.
+tool or model implementations.
 
 ## Redaction And Safety
 
@@ -149,7 +146,6 @@ Registration should be explicit and validated.
 ```rust
 registry.register_tool(tool).await?;
 registry.register_model("default", model).await?;
-registry.register_graph("support_flow", graph).await?;
 registry.register_agent("support_agent", agent).await?;
 registry.register_listener(websocket_listener).await?;
 ```
@@ -225,7 +221,6 @@ listener is marked required.
 - event recorder listener
 - event snapshot assertions
 - fake tool registration
-- fake graph registration
 - fake agent registration
 - deterministic event ids
 - deterministic timestamps
@@ -257,7 +252,6 @@ recorder.assert()
 - `ComponentMetadata`
 - `ToolRegistry`
 - `ModelRegistry`
-- `GraphRegistry`
 - duplicate validation
 
 ### R2: Event Envelope
@@ -274,10 +268,9 @@ recorder.assert()
 - event recorder
 - stdout listener
 
-### R4: Agent And Graph Registration
+### R4: Agent Registration
 
 - registered agent trait
-- registered graph wrapper
 - lookup and invoke helpers
 
 ### R5: Parallel Run Correlation

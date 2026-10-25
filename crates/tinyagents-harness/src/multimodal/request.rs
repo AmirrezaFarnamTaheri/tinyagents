@@ -961,6 +961,14 @@ where
         self.inner.cache_identity()
     }
 
+    fn tracks_physical_attempts(&self) -> bool {
+        self.inner.tracks_physical_attempts()
+    }
+
+    fn has_pre_invocation_admission_gate(&self) -> bool {
+        self.inner.has_pre_invocation_admission_gate()
+    }
+
     async fn invoke(
         &self,
         state: &State,

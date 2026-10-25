@@ -11,9 +11,7 @@ nested executions read and write the same namespaced values, so a
 deeply nested call can persist a result a sibling or a later turn picks up.
 It is the harness-side persistence layer for runtime data — events, model and
 tool call records, message history, artifacts, memory — and is intentionally
-separate from graph checkpointing (which belongs to `tinyagents-graph`'s
-`checkpoint` module) and from prompt/model context assembly (`prompt`,
-`context`).
+separate from prompt/model context assembly (`prompt`, `context`).
 
 ## Public surface
 

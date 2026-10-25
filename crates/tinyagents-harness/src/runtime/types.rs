@@ -23,9 +23,9 @@ use std::sync::Arc;
 
 use crate::cache::ResponseCache;
 use crate::host::HostCapabilities;
+use crate::host::ModelResolver;
 use crate::limits::RunLimits;
 use crate::middleware::MiddlewareStack;
-use crate::model_registry::ModelRegistry;
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::run_queue::QueueMode;
 use crate::tool::{ToolRegistry, ToolTimeoutSettings};
@@ -64,6 +64,9 @@ pub(crate) struct HostInvocationBinding<State: Send + Sync, Ctx: Send + Sync> {
     /// The resolved definition's pattern rules, stacked on the harness
     /// policy's by the loop's tool gate.
     pub(crate) tool_rules: Option<tinytools::ToolRules>,
+    /// A hosted parent's rule layers (its own and those it inherited),
+    /// stacked on [`Self::tool_rules`] so a child never widens its parent.
+    pub(crate) inherited_rules: Vec<tinytools::ToolRules>,
     /// Per-turn ordered, nonblocking projection to the optional progress sink.
     pub(crate) progress: Option<super::agent::ProgressSender>,
     /// The exact invocation-local runtime inherited by authorized children.
@@ -83,6 +86,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Clone for HostInvocationBinding<State
             denied_tools: self.denied_tools.clone(),
             deferred_tools: self.deferred_tools.clone(),
             tool_rules: self.tool_rules.clone(),
+            inherited_rules: self.inherited_rules.clone(),
             progress: self.progress.clone(),
             runtime: self.runtime.clone(),
         }
@@ -346,6 +350,34 @@ pub struct RunPolicy {
     /// cap and one with room. Set to `0` to disable for exact-replay callers
     /// that must not re-issue a call.
     pub truncated_empty_retries: u32,
+    /// Keep every truncated-empty retry at the cap the dead call ran under:
+    /// no doubling, and the second retry is still made at that cap.
+    ///
+    /// The default (`false`) doubles the cap from the second retry, up to 4x
+    /// the original, for a step that no longer fits. A host whose cap is
+    /// already generous (a reasoning model at 128k output) gains nothing from
+    /// doubling: a model that reasons past 128k without answering reasons past
+    /// 256k the same way, at twice the cost and time.
+    pub truncated_empty_constant_cap: bool,
+    /// Make the call that follows a truncated-empty reply (a retry, or a
+    /// "stop deliberating" nudge) with reasoning switched off
+    /// ([`ReasoningEffort::None`](tinyinference_llm::model::ReasoningEffort::None)).
+    /// One call only: the call after it reasons as the policy says again.
+    ///
+    /// A reasoning model that thought to the output cap without acting tends
+    /// to do the same on a retry at any cap; without reasoning it has to act.
+    /// Defaults to `false`.
+    pub truncated_empty_reasoning_off: bool,
+    /// From this many truncated-empty replies in one run on, every later call
+    /// of the run goes out with reasoning off, not just the one after each
+    /// dead call. `0` never makes it sticky.
+    ///
+    /// With [`Self::truncated_empty_reasoning_off`] alone a model that keeps
+    /// thinking to the cap acts on the reasoning-off call and then dies again
+    /// on the next one with reasoning back on: on Terminal-Bench
+    /// protein-assembly five dead calls alternated with five working ones.
+    /// Defaults to `0`.
+    pub truncated_empty_reasoning_off_sticky_after: u32,
     /// Re-prompts after [`Self::truncated_empty_retries`] are spent and the
     /// model *still* returned a truncated-empty completion.
     ///
@@ -499,20 +531,6 @@ pub struct RunPolicy {
     /// the next boundary. Only consulted when the run's
     /// [`RunContext`][crate::context::RunContext] carries a queue.
     pub queue_mode: QueueMode,
-    /// Which engine [`AgentHarness::invoke`][super::AgentHarness::invoke] (and
-    /// friends) drives the loop with (A5).
-    ///
-    /// Defaults to [`LoopExecution::Direct`]: the built-in
-    /// [`crate::agent_loop`] body, unchanged. Setting
-    /// [`LoopExecution::Graph`] selects an [`AgentHarness::loop_driver`
-    /// ][super::AgentHarness::loop_driver] instead — install one with
-    /// [`AgentHarness::with_loop_driver`][super::AgentHarness::with_loop_driver]
-    /// (`tinyagents-graph`'s `GraphLoopDriver` is the intended implementor;
-    /// see `tinyagents_graph::agent_loop`). Selecting `Graph` with no driver
-    /// installed fails the run with
-    /// [`crate::error::TinyAgentsError::Validation`] rather than silently
-    /// falling back to `Direct`.
-    pub execution: LoopExecution,
     /// Whether each executed tool's result row ends with how long the call
     /// took, as a trailing `[took 12.3s]` line the model reads.
     ///
@@ -523,20 +541,6 @@ pub struct RunPolicy {
     /// carries. Defaults to `false`, so a transcript stays byte-identical
     /// unless the host opts in.
     pub tool_result_durations: bool,
-}
-
-/// See [`RunPolicy::execution`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum LoopExecution {
-    /// Drive the run with the built-in [`crate::agent_loop`] body
-    /// (`run_loop`/`run_loop_body`). The default; behavior-identical to
-    /// every release before A5.
-    #[default]
-    Direct,
-    /// Drive the run with the installed
-    /// [`AgentHarness::loop_driver`][super::AgentHarness::loop_driver]
-    /// instead (a compiled-graph rendition of the loop, in the common case).
-    Graph,
 }
 
 /// See [`RunPolicy::structured_strategy_override`].
@@ -692,6 +696,9 @@ impl Default for RunPolicy {
             // keeps deliberating; one plain "stop and act" re-prompt recovers
             // the step instead of ending the run on a blank reply.
             truncated_empty_nudges: 1,
+            truncated_empty_constant_cap: false,
+            truncated_empty_reasoning_off: false,
+            truncated_empty_reasoning_off_sticky_after: 0,
             empty_response_retries: 0,
             reject_truncated_tool_calls: true,
             truncated_tool_call_retries: 2,
@@ -703,7 +710,6 @@ impl Default for RunPolicy {
             end_strategy: EndStrategy::default(),
             structured_strategy_override: None,
             queue_mode: QueueMode::default(),
-            execution: LoopExecution::default(),
             tool_result_durations: false,
         }
     }
@@ -728,15 +734,18 @@ impl Default for RunPolicy {
 /// ```
 /// use std::sync::Arc;
 /// use tinyinference_llm::providers::MockModel;
+/// use tinyagents_harness::host::FixedModelResolver;
 /// use tinyagents_harness::runtime::AgentHarness;
 ///
 /// let mut harness: AgentHarness<()> = AgentHarness::new();
-/// harness.register_model("mock", Arc::new(MockModel::constant("hello")));
-/// assert_eq!(harness.models().default_name(), Some("mock"));
+/// harness.with_model_resolver(Arc::new(FixedModelResolver::named("mock", Arc::new(MockModel::constant("hello")))));
 /// ```
 pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
-    /// Name-keyed registry of chat models with an optional default.
-    pub(crate) models: ModelRegistry<State>,
+    /// Host-supplied resolver for local SDK turns.
+    pub(crate) model_resolver: Option<Arc<dyn ModelResolver<State>>>,
+    /// One directly supplied model, supporting borrowed state without
+    /// imposing an object lifetime on the routing trait.
+    pub(crate) fixed_model: Option<Arc<dyn tinyinference_llm::model::ChatModel<State>>>,
     /// Name-keyed registry of tools exposed to the model.
     pub(crate) tools: ToolRegistry<State, Ctx>,
     /// Ordered middleware stack wrapping agent, model, and tool execution.
@@ -773,23 +782,6 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// [`AgentHarness::with_toolset`]. See that method's doc comment for
     /// exactly which turn behavior this changes.
     pub(crate) toolset: Option<Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>>,
-    /// Capability bundles installed via [`AgentHarness::with_capability`]
-    /// (gap G3), in installation order. Kept so each new `with_capability`
-    /// call can rebuild [`Self::toolset`]'s
-    /// [`crate::capability::CapabilityToolSet`] layer from the complete,
-    /// still-accumulating list rather than nesting one per call.
-    pub(crate) capabilities: Vec<crate::capability::Capability<State, Ctx>>,
-    /// The toolset chain that was installed (via [`AgentHarness::with_toolset`],
-    /// or `None`) before the first [`AgentHarness::with_capability`] call.
-    /// Captured once so every later `with_capability` rebuild of
-    /// [`Self::toolset`] keeps composing with it, instead of losing it to
-    /// the first capability's rebuild.
-    pub(crate) capability_base_toolset: Option<Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>>,
-    /// Alternate loop engine selected when [`RunPolicy::execution`] is
-    /// [`LoopExecution::Graph`] (A5). See
-    /// [`crate::agent_loop::phases::LoopDriver`] and
-    /// [`AgentHarness::with_loop_driver`].
-    pub(crate) loop_driver: Option<Arc<dyn crate::agent_loop::phases::LoopDriver<State, Ctx>>>,
 }
 
 /// The non-serializable mechanics selected for one hosted invocation.

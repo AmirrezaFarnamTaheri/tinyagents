@@ -13,9 +13,9 @@
 //! - the ledger helpers that mirror a status into a `TaskStore` and read a
 //!   durable record back as a wait outcome (so a run this process never
 //!   registered, e.g. after a restart, still resolves);
-//! - [`steer_detached`] / [`SteerError`] to inject a message into a running
-//!   subagent (live handle first, host fallback second), and
-//!   [`cancel_for_thread`] to abort the subagents of one parent thread;
+//! - detached task lifecycle helpers for cancellation, waiting, and durable
+//!   resolution. Message steering and thread-scoped cancellation are exposed
+//!   from [`crate::steering`];
 //! - [`SubagentIdentity`] with roster snapshots, session-id resolution and
 //!   resume references over a registry or the durable records.
 //!
@@ -29,11 +29,11 @@ mod ops;
 mod roster;
 mod status;
 mod status_map;
-mod steer;
 mod types;
 
 pub use completion::{
-    DetachedCompletionTarget, record_detached_completion, spawn_status_watcher_with_completions,
+    DetachedCompletionTarget, pause_record_prefix, record_detached_completion,
+    spawn_status_watcher_with_completions,
 };
 pub use ledger::{
     DETACHED_LEDGER_TIMEOUT_MS, list_subagent_records, orphaned_subagent_reason, record_agent_id,
@@ -48,14 +48,11 @@ pub use ops::{
     wait_detached_or_durable, wait_detached_or_durable_with_owners,
 };
 pub use roster::{
-    resume_ref_for_task, resume_ref_from_record, snapshot_for_owner, task_id_for_session,
-    task_id_for_session_in_records,
+    ParentRosterEntry, format_parent_roster_for_owner, format_roster_for_owner,
+    parent_roster_for_owner, resume_ref_for_task, resume_ref_from_record, snapshot_for_owner,
+    task_id_for_session, task_id_for_session_in_records,
 };
 pub use status::{wait_detached, wait_error_from_registry};
-pub use steer::{
-    SteerAccess, SteerError, SteerReceipt, SteerRoute, cancel_for_thread, distinct_parent_threads,
-    queue_lane_name, steer_detached, steer_detached_with_request_id, steering_command_for_lane,
-};
 pub use types::{
     DetachedSubagentOwners, DetachedSubagentStatus, FinishedOutcome, SpawnedSubagent,
     SubagentIdentity, SubagentResumeRef, SubagentSnapshot, WaitError, WaitOutcome,
@@ -64,9 +61,6 @@ pub use types::{
 #[cfg(test)]
 #[path = "completion_tests.rs"]
 mod completion_test;
-#[cfg(test)]
-#[path = "steer_tests.rs"]
-mod steer_test;
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod test;

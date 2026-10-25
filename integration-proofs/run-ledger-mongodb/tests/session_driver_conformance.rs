@@ -6,14 +6,17 @@
 use std::sync::Arc;
 
 use tinyagents_session::{
-    port::DriverSessionStores,
+    port::{AgentStorageFactory, ConditionedAgentStorageFactory, DriverSessionStores},
     run_ledger::{AgentRunListRequest, DriverRunLedger, RunLedgerStore},
     testkit::conformance::{
         run_ledger_conformance, session_store_conformance, session_store_isolation_conformance,
     },
 };
-use tinystoragedrivers_core::{Scope, StorageBackend};
-use tinystoragedrivers_mongodb::MongoStorage;
+use tinyagents_storage_kit::{Scope, ScopedStorage, WriteCondition};
+use tinystoragedrivers_api::{DocumentStore, Storage, StorageBackend, StreamStore};
+use tinystoragedrivers_connect::MongoConnection;
+use tinystoragedrivers_document::mongodb::{MongoDocuments, MongoStreams};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 /// Require an explicit, credential-free loopback URL for the local fixture.
 fn local_mongo_url() -> String {
@@ -32,26 +35,64 @@ fn local_mongo_url() -> String {
     value
 }
 
-async fn local_backend(label: &str) -> MongoStorage {
+async fn local_connection(label: &str) -> MongoConnection {
     let url = local_mongo_url();
     let database = format!("ta_{label}_{}", uuid::Uuid::new_v4().simple());
-    let backend = MongoStorage::connect(&url, &database)
+    MongoConnection::connect(&url, &database)
         .await
-        .expect("local MongoDB replica set is reachable");
-    backend
-        .prepare_schema()
-        .await
-        .expect("the isolated test database schema prepares");
-    backend
+        .expect("local MongoDB replica set is reachable")
+}
+
+fn scoped_storage(
+    connection: &MongoConnection,
+    scope: &Scope,
+    condition: Option<&WriteCondition>,
+) -> Result<ScopedStorage, tinystoragedrivers_types::StorageError> {
+    let documents = match condition {
+        Some(condition) => Arc::new(MongoDocuments::conditioned(
+            connection.clone(),
+            scope.clone(),
+            condition.clone(),
+        )?) as Arc<dyn DocumentStore>,
+        None => Arc::new(MongoDocuments::new(connection.clone(), scope.clone()))
+            as Arc<dyn DocumentStore>,
+    };
+    let streams =
+        Arc::new(MongoStreams::new(connection.clone(), scope.clone())) as Arc<dyn StreamStore>;
+    let memory = MemoryBackend::new().for_scope(scope).unwrap();
+    Ok(ScopedStorage::new(
+        Storage::new(
+            documents,
+            streams,
+            memory.kv().clone(),
+            memory.blobs().clone(),
+            memory.queues().clone(),
+            memory.secrets().clone(),
+        ),
+        scope.clone(),
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires local MongoDB; run explicitly with TSD_MONGO_URL and --ignored"]
 async fn mongodb_session_store_round_trip_list_delete_and_agent_isolation() {
-    let backend: Arc<dyn StorageBackend> = Arc::new(local_backend("session_store").await);
-    let stores =
-        DriverSessionStores::new(backend, Scope::tenant("session_store_conformance").unwrap())
-            .unwrap();
+    let scope = Scope::new("session_store_conformance").unwrap();
+    let connection = local_connection("session_store").await;
+    let factory_scope = scope.clone();
+    let factory_connection = connection.clone();
+    let factory: AgentStorageFactory = Arc::new(move |agent_id| {
+        let agent_scope = factory_scope.child(agent_id)?;
+        scoped_storage(&factory_connection, &agent_scope, None)
+    });
+    let conditioned_scope = scope.clone();
+    let conditioned_connection = connection.clone();
+    let conditioned: ConditionedAgentStorageFactory = Arc::new(move |agent_id, condition| {
+        let agent_scope = conditioned_scope.child(agent_id)?;
+        scoped_storage(&conditioned_connection, &agent_scope, Some(condition))
+    });
+    let stores = DriverSessionStores::new(factory)
+        .unwrap()
+        .with_conditioned_storage_factory(conditioned);
     session_store_conformance(&stores).await;
     session_store_isolation_conformance(&stores).await;
 }
@@ -59,17 +100,16 @@ async fn mongodb_session_store_round_trip_list_delete_and_agent_isolation() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires local MongoDB; run explicitly with TSD_MONGO_URL and --ignored"]
 async fn mongodb_run_ledger_contract_and_scope_isolation() {
-    let backend = local_backend("run_ledger").await;
-    let scoped = |scope: &str| {
-        Arc::new(DriverRunLedger::new(
-            backend.for_scope(&Scope::tenant(scope).unwrap()).unwrap(),
-        )) as Arc<dyn RunLedgerStore>
-    };
-    let ledger = scoped("run_ledger_conformance");
+    let scope = Scope::new("run_ledger_conformance").unwrap();
+    let connection = local_connection("run_ledger").await;
+    let storage = scoped_storage(&connection, &scope, None).unwrap();
+    let ledger = Arc::new(DriverRunLedger::new(storage)) as Arc<dyn RunLedgerStore>;
     run_ledger_conformance(ledger.clone()).await;
+    let peer_scope = Scope::new("run_ledger_peer").unwrap();
+    let peer_storage = scoped_storage(&connection, &peer_scope, None).unwrap();
+    let peer = Arc::new(DriverRunLedger::new(peer_storage)) as Arc<dyn RunLedgerStore>;
     assert!(
-        scoped("run_ledger_peer")
-            .list_agent_runs(&AgentRunListRequest::default())
+        peer.list_agent_runs(&AgentRunListRequest::default())
             .await
             .unwrap()
             .runs

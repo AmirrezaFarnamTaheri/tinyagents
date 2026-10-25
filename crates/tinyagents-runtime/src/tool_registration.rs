@@ -3,15 +3,81 @@
 //! The host decides *which* tools exist and how each is wrapped; this module
 //! owns the generic rules for which candidates register: de-duplication by
 //! name, an allowlist whose empty set denies everything, thread-scoped tools
-//! dropped on thread-less turns, and spawn/delegate tools never handed to a
-//! sub-agent run whatever the allowlist says.
+//! dropped on thread-less turns, and spawn/delegate tools withheld from
+//! sub-agent runs by default. A host may grant bounded nested spawning for a
+//! turn; those tools still need to pass the ordinary allowlist, and the host
+//! remains responsible for enforcing the depth ceiling when a child executes.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::tool::ToolDispatch;
-use tinytools::Tool;
+use tinyagents_harness::{
+    context::RunContext,
+    middleware::{PolicyDecision, ToolCallPolicy},
+};
+use tinyinference_llm::tool::ToolCall;
+use tinytools::{Tool, ToolSpec};
+
+/// A deny-by-default host belt that may delegate allowed calls to host policy.
+pub struct HostOnlyToolPolicy<C: Send + Sync + 'static> {
+    allowed: HashSet<String>,
+    host: Option<Arc<dyn ToolCallPolicy<C>>>,
+}
+
+impl<C: Send + Sync + 'static> HostOnlyToolPolicy<C> {
+    pub fn new(
+        allowed: impl IntoIterator<Item = String>,
+        host: Option<Arc<dyn ToolCallPolicy<C>>>,
+    ) -> Self {
+        Self {
+            allowed: allowed.into_iter().collect(),
+            host,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl<C: Send + Sync + 'static> ToolCallPolicy<C> for HostOnlyToolPolicy<C> {
+    fn name(&self) -> &str {
+        "host_only"
+    }
+
+    async fn check(&self, ctx: &RunContext<C>, call: &ToolCall) -> PolicyDecision {
+        if !self.allowed.contains(&call.name) {
+            return PolicyDecision::deny(format!(
+                "tool `{}` is not in this host-only belt",
+                call.name
+            ));
+        }
+        match &self.host {
+            Some(host) => host.check(ctx, call).await,
+            None => PolicyDecision::Allow,
+        }
+    }
+}
+
+/// Keeps the first declaration for each name, preserving order and allocation.
+pub fn dedup_visible_tool_specs(specs: Vec<Arc<ToolSpec>>) -> Vec<Arc<ToolSpec>> {
+    let mut names = HashSet::new();
+    specs
+        .into_iter()
+        .filter(|spec| names.insert(spec.name.clone()))
+        .collect()
+}
+
+/// Removes synthesized declarations shadowed by durable declarations.
+pub fn drop_synthesized_name_collisions(
+    durable: &[Arc<ToolSpec>],
+    synthesized: Vec<Arc<ToolSpec>>,
+) -> Vec<Arc<ToolSpec>> {
+    let durable_names: HashSet<&str> = durable.iter().map(|spec| spec.name.as_str()).collect();
+    synthesized
+        .into_iter()
+        .filter(|spec| !durable_names.contains(spec.name.as_str()))
+        .collect()
+}
 
 /// How one admitted tool is registered on the harness.
 pub enum ToolRegistration<State, C> {
@@ -19,6 +85,28 @@ pub enum ToolRegistration<State, C> {
     Tool(Arc<dyn Tool>),
     /// A tool that needs the typed parent run.
     Dispatch(Arc<dyn ToolDispatch<State, C>>),
+}
+
+/// Depth and ceiling supplied by a host that explicitly permits nested
+/// sub-agent creation for this turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NestedSpawnDepth {
+    depth: usize,
+    max_depth: usize,
+}
+
+impl NestedSpawnDepth {
+    /// Creates a depth grant only when the current depth is within its ceiling.
+    pub fn try_new(depth: usize, max_depth: usize) -> Option<Self> {
+        (depth <= max_depth).then_some(Self { depth, max_depth })
+    }
+
+    /// Returns whether one more child fits within the host's ceiling.
+    pub fn allows_child(self) -> bool {
+        self.depth
+            .checked_add(1)
+            .is_some_and(|child_depth| child_depth <= self.max_depth)
+    }
 }
 
 /// Admission rules for one turn's tool registration.
@@ -33,8 +121,14 @@ pub struct ToolAdmission {
     pub has_thread: bool,
     /// Names of tools that cannot run without a thread.
     pub thread_scoped: HashSet<String>,
-    /// Names of spawn/delegate tools a sub-agent must never receive.
+    /// Names of spawn/delegate tools denied to sub-agents unless the host
+    /// supplies a [`NestedSpawnDepth`] grant that permits another child.
+    /// These tools must also pass `allowed`; the grant does not expand that
+    /// allowlist.
     pub spawn_tools: HashSet<String>,
+    /// Explicit host grant for bounded nested spawning. `None` keeps the
+    /// default leaf-subagent behavior.
+    pub nested_spawn_depth: Option<NestedSpawnDepth>,
 }
 
 /// The outcome of [`plan_registration`].
@@ -100,7 +194,12 @@ where
         if !allowed {
             continue;
         }
-        if admission.is_subagent_run && admission.spawn_tools.contains(name) {
+        if admission.is_subagent_run
+            && admission.spawn_tools.contains(name)
+            && !admission
+                .nested_spawn_depth
+                .is_some_and(NestedSpawnDepth::allows_child)
+        {
             tracing::warn!(
                 tool = name,
                 "[tool-registration] refused spawn tool on sub-agent"

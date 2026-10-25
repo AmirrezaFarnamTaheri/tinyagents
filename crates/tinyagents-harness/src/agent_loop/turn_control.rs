@@ -24,7 +24,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let Some(queue) = ctx.run_queue.clone() else {
             return false;
         };
-        let items = queue.take(lane, self.policy.queue_mode).await;
+        let items = queue.take_admitted(lane, self.policy.queue_mode).await;
         if items.is_empty() {
             return false;
         }
@@ -38,12 +38,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             Message::Tool(_) => self.policy.capture.tool_io,
             _ => self.policy.capture.model_io,
         };
-        let captured: Vec<serde_json::Value> = if items.iter().any(is_captured) {
+        let captured: Vec<serde_json::Value> = if items.iter().any(|item| is_captured(&item.value))
+        {
             items
                 .iter()
-                .map(|message| {
-                    if is_captured(message) {
-                        super::lifecycle::to_value_logged(message)
+                .map(|item| {
+                    if is_captured(&item.value) {
+                        super::lifecycle::to_value_logged(&item.value)
                     } else {
                         serde_json::Value::Null
                     }
@@ -52,7 +53,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         } else {
             Vec::new()
         };
-        messages.extend(items);
+        messages.extend(items.iter().map(|item| item.value.clone()));
         let record = ctx.emit(AgentEvent::QueuedMessageApplied {
             lane,
             count,

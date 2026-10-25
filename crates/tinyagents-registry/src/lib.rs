@@ -34,7 +34,7 @@ pub mod router;
 
 pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
-pub use capability::CapabilityRegistry;
+pub use capability::{Capability, CapabilityRegistry};
 pub use catalog::{
     ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelCatalogSnapshot, ModelCatalogSource,
 };
@@ -42,4 +42,7 @@ pub use component::{ComponentId, ComponentKind, ComponentMetadata};
 pub use diagnostics::{AliasBinding, DiagnosticSeverity, RegistryDiagnostic, RegistrySnapshot};
 #[allow(deprecated)]
 pub use router::ModelRouter;
-pub use router::{WorkloadRoute, WorkloadRouter};
+pub use router::{
+    CloudFallbackRole, DefaultModelRoute, FallbackDiagnostics, FallbackReason, RouteSource,
+    WorkloadRoute, WorkloadRouter,
+};

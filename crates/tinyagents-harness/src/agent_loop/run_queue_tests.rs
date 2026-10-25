@@ -157,7 +157,10 @@ struct Fixture {
 fn fixture(responses: Vec<ModelResponse>, mode: QueueMode) -> Fixture {
     let model = Arc::new(ScriptedModel::new(responses));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::clone(&model) as _);
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::clone(&model) as _,
+    )));
     harness.with_policy(RunPolicy {
         queue_mode: mode,
         ..RunPolicy::default()
@@ -395,6 +398,49 @@ async fn collect_lane_lands_on_the_run_and_never_reaches_the_model() {
     assert!(
         queued_applied(&fx.recorder.events()).is_empty(),
         "collected items are not applied to the transcript"
+    );
+    assert_eq!(fx.queue.status().await.collects, 0);
+}
+
+#[tokio::test]
+async fn collect_lane_rejects_revoked_guarded_messages_before_returning_the_run() {
+    use crate::run_queue::{QueueAdmission, QueueAdmissionError, QueueAdmissionPermit};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Debug)]
+    struct Revocable(AtomicBool);
+    impl QueueAdmission for Revocable {
+        fn acquire(&self) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
+            self.0
+                .load(Ordering::SeqCst)
+                .then(|| Arc::new(()) as Arc<dyn QueueAdmissionPermit>)
+                .ok_or(QueueAdmissionError::Rejected)
+        }
+    }
+
+    let fx = fixture(vec![final_turn("done")], QueueMode::All);
+    let admission = Arc::new(Revocable(AtomicBool::new(true)));
+    fx.queue
+        .push_guarded(
+            QueueLane::Collect,
+            Message::user("revoked observation"),
+            admission.clone(),
+        )
+        .await;
+    fx.queue
+        .push(QueueLane::Collect, Message::user("ordinary observation"))
+        .await;
+    admission.0.store(false, Ordering::SeqCst);
+
+    let run = fx
+        .harness
+        .invoke_in_context(&(), fx.ctx("collect-revoked"), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    assert_eq!(
+        run.collected.iter().map(Message::text).collect::<Vec<_>>(),
+        vec!["ordinary observation"]
     );
     assert_eq!(fx.queue.status().await.collects, 0);
 }

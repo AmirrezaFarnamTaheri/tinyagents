@@ -3,6 +3,9 @@ use crate::artifacts::policy::{ArtifactRedactor, Redacted};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
+use tinyagents_storage_kit::Scope;
+use tinyagents_storage_kit::StorageBackend;
+use tinystoragedrivers_testkit::{MemoryBackend, memory_storage};
 
 /// Stand-in for a host's credential/PII pass: rewrites a GitHub token and
 /// phone numbers, and (like the real one) can grow a body.
@@ -26,7 +29,9 @@ fn test_github_token() -> String {
 }
 
 fn store(session: &str) -> ToolResultArtifactStore {
-    ToolResultArtifactStore::in_memory(
+    let scope = Scope::new("local").expect("valid scope");
+    ToolResultArtifactStore::new(
+        memory_storage(&scope).blobs().clone(),
         session,
         Arc::new(TestRedactor),
         "file_read",
@@ -65,19 +70,22 @@ async fn threshold_persists_redacted_preview_and_file() {
     assert!(!stored.contains(&test_github_token()));
 }
 
-/// A call with no id still gets a unique, well-formed file name.
+/// A call with no id, or an empty one, still gets a unique, well-formed file
+/// name; an empty id must not collapse onto a shared `unknown.txt`.
 #[tokio::test]
 async fn a_call_without_an_id_gets_a_random_hex_name() {
     let store = store("s");
-    let a = store.path_for_read_tool("shell", None);
-    let b = store.path_for_read_tool("shell", None);
-    assert_ne!(a, b);
-    let stem = a
-        .strip_prefix("harness/tool_results/s/shell/")
-        .and_then(|rest| rest.strip_suffix(".txt"))
-        .expect("path shape");
-    assert_eq!(stem.len(), 32);
-    assert!(stem.chars().all(|c| c.is_ascii_hexdigit()));
+    for call_id in [None, Some("")] {
+        let a = store.path_for_read_tool("shell", call_id);
+        let b = store.path_for_read_tool("shell", call_id);
+        assert_ne!(a, b, "{call_id:?}");
+        let stem = a
+            .strip_prefix("harness/tool_results/s/shell/")
+            .and_then(|rest| rest.strip_suffix(".txt"))
+            .expect("path shape");
+        assert_eq!(stem.len(), 32, "{call_id:?}: {a}");
+        assert!(stem.chars().all(|c| c.is_ascii_hexdigit()));
+    }
 }
 
 #[tokio::test]
@@ -595,7 +603,7 @@ async fn in_memory_stores_do_not_share_artifacts() {
 /// The pointer is a blob key on a host-supplied store, not a filesystem path.
 #[tokio::test]
 async fn a_host_supplied_blob_store_receives_the_redacted_body() {
-    let scoped = MemoryStorage::new()
+    let scoped = MemoryBackend::new()
         .for_scope(&Scope::new("tenant").unwrap())
         .unwrap();
     let blobs = scoped.blobs().clone();
@@ -673,7 +681,7 @@ async fn read_accepts_the_legacy_relative_pointer() {
 
 #[tokio::test]
 async fn purge_session_removes_only_this_sessions_artifacts() {
-    let scoped = MemoryStorage::new()
+    let scoped = MemoryBackend::new()
         .for_scope(&Scope::new("local").unwrap())
         .unwrap();
     let blobs = scoped.blobs().clone();

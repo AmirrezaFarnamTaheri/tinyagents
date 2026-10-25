@@ -1,17 +1,16 @@
 //! Identifier newtypes and lifecycle enums for the harness.
 //!
-//! Every long-lived harness concept (runs, threads, calls, events, graph
-//! nodes, checkpoints, interrupts) is keyed by a small, cheap-to-clone string
+//! Every long-lived harness concept (runs, threads, calls, and events) is keyed by a small, cheap-to-clone string
 //! newtype. Wrapping the raw `String` in a distinct type prevents accidentally
 //! passing, say, a [`ThreadId`] where a [`RunId`] is expected.
 
 use serde::{Deserialize, Serialize};
 
 /// Identifies a single harness run (one model call, one agent loop, or one
-/// graph-node invocation of the harness).
+/// nested harness invocation).
 ///
-/// A `RunId` is the unit of recursion in TinyAgents: when a run spawns a
-/// sub-agent or sub-graph, the child gets its own `RunId` while
+/// A `RunId` identifies a unit of agent work: when a run spawns a
+/// sub-agent, the child gets its own `RunId` while
 /// [`crate::events::HarnessRunStatus`] records that child's
 /// `parent_run_id` (the spawning run) and `root_run_id` (the top-level
 /// ancestor), so the full recursion tree is reconstructable from these ids.
@@ -38,21 +37,22 @@ pub struct EventId(pub(crate) String);
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ComponentId(pub(crate) String);
 
-/// Identifies a state graph.
+/// Identifies a graph-kind orchestration task. This opaque type is retained for
+/// task descriptor compatibility; the workspace no longer provides a graph
+/// execution runtime.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GraphId(pub(crate) String);
 
-/// Identifies a node within a state graph.
+/// Identifies an optional node label carried by an orchestration task record.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub(crate) String);
 
-/// Identifies a unit of scheduled graph work (a node activation or a `Send`
-/// fanout task) within a run.
+/// Identifies a managed orchestration task, including sub-agent jobs and
+/// persisted task records.
 ///
-/// A `TaskId` distinguishes the individual recursive tasks a graph schedules —
-/// for example each child task produced by a `Send` fanout — so a
-/// `RecursionFrame` (in `tinyagents-graph`) can name the exact task a nested
-/// call descends from, independent of the [`NodeId`] it ran.
+/// `tinyagents-tasks` and `tinyagents-orchestration` use it to correlate task
+/// lifecycle, steering, completion, and recovery records. It is independent of
+/// the optional [`NodeId`] metadata on a task.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(pub(crate) String);
 
@@ -61,7 +61,7 @@ pub struct TaskId(pub(crate) String);
 /// A `SessionId` names one host-driven session: a persistent namespace and
 /// capability boundary that a (possibly model-driven) orchestrator drives one
 /// cell at a time. Pairing it with a [`RunId`] lets session events and the child
-/// model/tool/graph runs a session spawns be correlated back to the session
+/// model/tool runs a session spawns be correlated back to the session
 /// that issued them.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SessionId(pub(crate) String);
@@ -74,7 +74,8 @@ pub struct SessionId(pub(crate) String);
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CellId(pub(crate) String);
 
-/// Identifies a persisted graph checkpoint.
+/// Identifies a persisted execution checkpoint. Retained for compatibility;
+/// durable conversation identity and resume are owned by `tinyagents-session`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CheckpointId(pub(crate) String);
 
@@ -82,8 +83,7 @@ pub struct CheckpointId(pub(crate) String);
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct InterruptId(pub(crate) String);
 
-/// Coarse lifecycle status shared by direct model calls, agent loops, and
-/// graph-node harness invocations.
+/// Coarse lifecycle status shared by direct model calls and agent loops.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionStatus {
@@ -99,10 +99,7 @@ pub enum ExecutionStatus {
     Failed,
     /// Cancelled before completion.
     Cancelled,
-    /// Stopped gracefully at a superstep boundary by a drain request (see
-    /// `tinyagents_graph::DrainSignal`): the in-flight superstep was allowed
-    /// to finish and the still-pending work was checkpointed, so the run is
-    /// resumable exactly like an interrupted one.
+    /// Stopped at a safe boundary after the active work completed.
     Drained,
 }
 

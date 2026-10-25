@@ -1,17 +1,17 @@
 use super::*;
 use std::sync::Arc;
 
+use super::super::{leases_spec, reservation::RESERVATION_TTL_MS};
 use crate::port::drivers::transcripts::tests::meta;
 use crate::transcript::TranscriptMessage;
-use tinystoragedrivers_core::{Blocking, DocumentStore, MemoryStorage, Scope, StorageBackend};
+use crate::transcript::test_locator::conditioned_driver_locator;
+use tinyagents_storage_kit::Blocking;
+use tinyagents_storage_kit::primitives::Leases;
 
 const THREAD: &str = "t";
 
 fn locator() -> DriverTranscriptLocator {
-    let storage = MemoryStorage::new();
-    let docs: Arc<dyn DocumentStore> =
-        Arc::clone(storage.for_scope(&Scope::local()).unwrap().documents());
-    DriverTranscriptLocator::new(docs, Blocking::new().unwrap(), "memory://adoption")
+    conditioned_driver_locator()
 }
 
 /// A root of `THREAD` under `stem`, written with `meta` (as an import does).
@@ -213,15 +213,18 @@ fn a_reserved_stem_reports_nothing_adopted() {
     let session = SessionRef::scoped(THREAD, "planner");
     // A concurrent writer holds the session's stem.
     let stem = session_stem(&session);
-    let docs = Arc::clone(&locator.docs);
-    let tables = Arc::clone(&locator.tables);
-    let declared = Arc::clone(&locator.declared);
-    run_on(&locator.bridge, async move {
-        declared.ensure(&docs).await?;
-        Ok(reservation::reserve(&docs, &tables.leases, &stem).await)
-    })
-    .unwrap()
-    .unwrap();
+    let docs = Arc::clone(locator.documents());
+    Blocking::new()
+        .unwrap()
+        .run(async move {
+            docs.ensure_collection(&leases_spec()).await?;
+            Leases::new(&docs)
+                .acquire("session", &stem, "concurrent-adopter", RESERVATION_TTL_MS)
+                .await
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap();
     assert!(
         locator
             .adopt_legacy(&session, THREAD, &meta(THREAD))
@@ -230,59 +233,42 @@ fn a_reserved_stem_reports_nothing_adopted() {
     );
 }
 
-#[cfg(feature = "legacy-import")]
 #[test]
-fn an_imported_file_workspace_is_adopted_and_resumes_the_folded_history() {
-    use crate::port::WorkspaceStores;
-    use crate::transcript::write_transcript;
-
-    let dir = tempfile::tempdir().unwrap();
-    let raw = dir.path().join("session_raw");
-    for (stem, created, row) in [
-        ("1700000100_orchestrator", "2026-01-01", "first"),
-        ("1700000200_orchestrator", "2026-01-02", "second"),
-    ] {
-        let mut legacy = legacy("orchestrator", created, 1, 0);
-        legacy.dispatcher = "native".into();
-        write_transcript(
-            &raw.join(format!("{stem}.jsonl")),
-            &[TranscriptMessage::user(row)],
-            &legacy,
-            None,
-        )
-        .unwrap();
-    }
+fn pre_identity_roots_are_adopted_and_resume_the_folded_history() {
+    let locator = locator();
+    write_root(
+        &locator,
+        "1700000100_orchestrator",
+        &legacy("orchestrator", "2026-01-01", 1, 0),
+        &["first"],
+    );
+    write_root(
+        &locator,
+        "1700000200_orchestrator",
+        &legacy("orchestrator", "2026-01-02", 1, 0),
+        &["second"],
+    );
     let session = SessionRef::scoped(THREAD, "orchestrator");
     let seed = legacy("orchestrator", "2026-02-01", 0, 0);
 
-    let stores = WorkspaceStores::open(dir.path(), "orchestrator").unwrap();
-    let transcripts = stores.transcripts();
-    let adoption = transcripts
+    let adoption = locator
         .adopt_legacy(&session, THREAD, &seed)
         .unwrap()
-        .expect("the imported legacy roots are adopted");
+        .expect("the pre-identity roots are adopted");
     assert_eq!(adoption.messages, 2);
     assert!(
-        transcripts
+        locator
             .adopt_legacy(&session, THREAD, &seed)
             .unwrap()
             .is_none()
     );
-    drop((transcripts, stores));
-
-    // The next process resumes the session in place.
-    let stores = WorkspaceStores::open(dir.path(), "orchestrator").unwrap();
-    let transcripts = stores.transcripts();
     assert!(
-        transcripts
+        locator
             .adopt_legacy(&session, THREAD, &seed)
             .unwrap()
             .is_none()
     );
-    assert_eq!(
-        contents(transcripts.as_ref(), &session),
-        vec!["first", "second"]
-    );
+    assert_eq!(contents(&locator, &session), vec!["first", "second"]);
 }
 
 #[test]
@@ -301,14 +287,14 @@ fn a_root_missing_from_the_index_is_still_folded() {
         &["two"],
     );
     // The second write was durable but every index refresh after it failed.
-    let docs = Arc::clone(&locator.docs);
+    let docs = Arc::clone(locator.documents());
     Blocking::new()
         .unwrap()
         .run(async move {
             docs.delete(
                 super::super::INDEX,
                 &super::super::index_id("1700000200_planner").unwrap(),
-                tinystoragedrivers_core::Precondition::None,
+                tinystoragedrivers_types::Precondition::None,
             )
             .await
         })

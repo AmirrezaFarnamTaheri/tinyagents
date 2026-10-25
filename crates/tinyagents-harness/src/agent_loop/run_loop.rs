@@ -47,8 +47,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // transcript, and on every exit path — a host that pushed
         // observations during a run that then failed still gets them back.
         if let Some(queue) = ctx.run_queue.clone() {
-            run.collected
-                .extend(queue.drain(crate::run_queue::QueueLane::Collect).await);
+            run.collected.extend(
+                queue
+                    .take_admitted(crate::run_queue::QueueLane::Collect, self.policy.queue_mode)
+                    .await
+                    .into_iter()
+                    .map(|item| item.value.clone()),
+            );
         }
 
         let exit = match outcome {
@@ -374,7 +379,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     Option<String>,
                     Vec<tinyinference_llm::model::ModelHint>,
                     Option<tinyinference_llm::model::CapabilitySet>,
-                    crate::model_registry::ResolvedModelBinding<State>,
+                    crate::agent_loop::ModelBinding<State>,
                 )>,
             ));
             // A pending steered model switch decides the model this call
@@ -395,7 +400,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     ));
                     profile
                 } else {
-                    self.preview_model_profile(&patch_request)
+                    match self.resolve_local_model(ctx, &patch_request).await {
+                        Ok(binding) => {
+                            let profile = binding.model.profile().cloned();
+                            *resolution_cache.lock().unwrap() = Some((
+                                patch_request.model.clone(),
+                                patch_request.model_hints.clone(),
+                                patch_request.required_capabilities.clone(),
+                                binding,
+                            ));
+                            profile
+                        }
+                        Err(TinyAgentsError::ModelNotFound(_)) => None,
+                        Err(error) => return Err(error),
+                    }
                 };
 
             // B6: re-consult the toolset chain and declare any live change as a
@@ -429,7 +447,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // handoff/budget/dialect decisions below all see the new model.
             // Re-applied after `before_model` (see below).
             let model_before_switch = request.model.clone();
-            self.apply_steered_model_switch(ctx, &mut request, &model_before_switch);
+            let switch_candidate = self.steered_model(ctx).and_then(|requested| {
+                resolution_cache
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|(_, _, _, binding)| {
+                        (binding.resolved.name == requested
+                            && binding.resolved.requested.as_deref() == Some(requested.as_str()))
+                        .then(|| binding.model.clone())
+                    })
+            });
+            self.apply_steered_model_switch(
+                ctx,
+                &mut request,
+                &model_before_switch,
+                switch_candidate,
+            )
+            .await?;
 
             // Known tool requirements must shape the hosted profile seen by
             // middleware. The later gate below still catches tools added by
@@ -483,7 +518,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                     Some((key.0, key.1, key.2, binding));
                                 Ok(profile)
                             } else {
-                                Ok(harness.preview_model_profile(request))
+                                match harness.resolve_local_model(ctx, request).await {
+                                    Ok(binding) => {
+                                        let profile = binding.model.profile().cloned();
+                                        *resolution_cache.lock().unwrap() =
+                                            Some((key.0, key.1, key.2, binding));
+                                        Ok(profile)
+                                    }
+                                    Err(TinyAgentsError::ModelNotFound(_)) => Ok(None),
+                                    Err(error) => Err(error),
+                                }
                             }
                         })
                     },
@@ -510,7 +554,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
             // Middleware may have chosen another model or added capability
             // requirements; the steered switch is re-validated and wins.
-            self.apply_steered_model_switch(ctx, &mut request, &model_before_switch);
+            let switch_candidate = self.steered_model(ctx).and_then(|requested| {
+                resolution_cache
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|(_, _, _, binding)| {
+                        (binding.resolved.name == requested
+                            && binding.resolved.requested.as_deref() == Some(requested.as_str()))
+                        .then(|| binding.model.clone())
+                    })
+            });
+            self.apply_steered_model_switch(
+                ctx,
+                &mut request,
+                &model_before_switch,
+                switch_candidate,
+            )
+            .await?;
 
             // Safe checkpoint: a control requested from `before_model_control`
             // (for example `BudgetMiddleware` finding the budget already
@@ -553,16 +614,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let binding = if let Some(binding) = hosted_binding {
                 binding
             } else {
-                self.models
-                    .resolve_request(&request, None, None)
-                    .ok_or_else(|| {
-                        TinyAgentsError::ModelNotFound(
-                            request
-                                .model
-                                .clone()
-                                .unwrap_or_else(|| "<default>".to_string()),
-                        )
-                    })?
+                self.resolve_local_model(ctx, &request).await?
             };
             ctx.model_profile = binding.model.profile().cloned();
             crate::middleware::library::rehome_ephemeral_system_instructions(
@@ -645,6 +697,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 && let Some(mapped) = profile.thinking_level_map.get(effort.as_str())
             {
                 request.reasoning = Some(mapped.clone());
+            }
+            // The call after a dead one (`RunPolicy::truncated_empty_reasoning_off`)
+            // goes out without reasoning, after the default and the profile
+            // mapping so neither puts it back. One call only, unless dead calls
+            // kept coming and reasoning-off is now sticky for the run.
+            let dead_call_retry = std::mem::take(&mut turn_recovery.reasoning_off_next);
+            ctx.dead_call_retry = dead_call_retry;
+            if dead_call_retry || turn_recovery.reasoning_off_sticky {
+                tracing::info!(
+                    target: "tinyagents::agent_loop",
+                    run_id = %ctx.run_id(),
+                    "[agent_loop] call after a dead one goes out with reasoning off"
+                );
+                request.reasoning = Some(tinyinference_llm::model::ReasoningConfig::effort(
+                    tinyinference_llm::model::ReasoningEffort::None,
+                ));
             }
 
             // Resolve the structured-output plan against the resolved model (see
@@ -1035,7 +1103,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     messages,
                     &mut turn_recovery,
                     &turn,
-                ) {
+                )? {
                     continue;
                 }
 
@@ -1508,17 +1576,24 @@ fn pending_tool_calls(messages: &[Message]) -> Result<Vec<ToolCall>> {
     let Message::Assistant(assistant) = &messages[assistant_at] else {
         unreachable!("rposition matched an assistant row");
     };
-    let answered: std::collections::HashSet<&str> = messages[assistant_at + 1..]
-        .iter()
-        .filter_map(|message| match message {
-            Message::Tool(tool) => Some(tool.tool_call_id.as_str()),
-            _ => None,
-        })
-        .collect();
+    // Count answers per id: two calls sharing an id need two tool rows, so
+    // one row must not mark both answered (the earlier call takes it).
+    let mut answered: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for message in &messages[assistant_at + 1..] {
+        if let Message::Tool(tool) = message {
+            *answered.entry(tool.tool_call_id.as_str()).or_default() += 1;
+        }
+    }
     let pending: Vec<ToolCall> = assistant
         .tool_calls
         .iter()
-        .filter(|call| !answered.contains(call.id.as_str()))
+        .filter(|call| match answered.get_mut(call.id.as_str()) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                false
+            }
+            _ => true,
+        })
         .cloned()
         .collect();
     if pending.is_empty() {
@@ -1563,6 +1638,10 @@ pub(super) fn truncated_call_positions(calls: &[ToolCall]) -> std::collections::
 #[cfg(test)]
 #[path = "run_loop_recovery_tests.rs"]
 mod recovery_tests;
+
+#[cfg(test)]
+#[path = "run_loop_dead_call_tests.rs"]
+mod dead_call_tests;
 
 #[cfg(test)]
 #[path = "run_loop_withheld_tests.rs"]

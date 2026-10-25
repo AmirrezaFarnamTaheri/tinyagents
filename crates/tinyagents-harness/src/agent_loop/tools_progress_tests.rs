@@ -112,7 +112,9 @@ struct Fixture {
 fn fixture(first_turn: ModelResponse) -> Fixture {
     let model = Arc::new(ScriptedModel::new(vec![first_turn, response(vec![], "ok")]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", model as _);
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock", model as _,
+    )));
     Fixture {
         harness,
         recorder: EventRecorder::new(),
@@ -157,6 +159,52 @@ fn seen(recorder: &EventRecorder) -> Vec<Seen> {
 
 fn progress(call: &str, message: &str) -> Seen {
     Seen::Progress(call.to_string(), message.to_string())
+}
+
+struct RejectScreenedOutput;
+
+#[async_trait]
+impl Middleware<()> for RejectScreenedOutput {
+    fn name(&self) -> &str {
+        "reject-screened-output"
+    }
+
+    async fn after_tool_output_screened(
+        &self,
+        _ctx: &mut RunContext,
+        _state: &(),
+        _invocation: &ToolInvocationIdentity,
+        _result: &ToolResult,
+        _model_output: &str,
+    ) -> crate::error::Result<()> {
+        Err(crate::error::TinyAgentsError::Middleware(
+            "screening failed".to_string(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn screened_output_failure_emits_a_terminal_tool_failure() {
+    let mut fx = fixture(calls(&[("c1", "build")]));
+    fx.harness.register_tool(Arc::new(ProgressTool {
+        name: "build",
+        updates: vec![],
+        safe: true,
+        stash: None,
+    }));
+    fx.harness.push_middleware(Arc::new(RejectScreenedOutput));
+
+    let ctx = RunContext::new(RunConfig::new("run-progress"), ()).with_events(fx.recorder.sink());
+    let outcome = fx
+        .harness
+        .invoke_in_context(&(), ctx, vec![Message::user("go")])
+        .await;
+
+    assert!(outcome.is_err());
+    assert_eq!(
+        seen(&fx.recorder),
+        vec![Seen::Started("c1".into()), Seen::Failed("c1".into())]
+    );
 }
 
 #[tokio::test]

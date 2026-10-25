@@ -1,12 +1,15 @@
 use super::*;
 use serde_json::{Value, json};
-use tinystoragedrivers_core::{
-    Filter, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopedStorage,
-    StorageBackend, WriteOptions,
+use tinyagents_storage_kit::{
+    Filter, MigrateOptions, Precondition, Registry, Scope, ScopedStorage, StorageBackend,
+    WriteOptions,
 };
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn scoped() -> ScopedStorage {
-    MemoryStorage::new().for_scope(&Scope::local()).unwrap()
+    MemoryBackend::new()
+        .for_scope(&Scope::new("local").unwrap())
+        .unwrap()
 }
 
 async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value) {
@@ -23,14 +26,16 @@ async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value
         .unwrap();
 }
 
-async fn migrate(storage: &ScopedStorage) -> tinystoragedrivers_core::MigrationReport {
+async fn migrate(storage: &ScopedStorage) -> tinyagents_storage_kit::MigrationReport {
     let registry = Registry::compose([storage_schema()]).unwrap();
     // `prepare` needs a backend; the scoped handle's documents are enough here.
-    for spec in tinystoragedrivers_core::primitives::collection_specs() {
-        storage.documents().ensure_collection(&spec).await.unwrap();
-    }
+    storage
+        .documents()
+        .ensure_collection(&tinyagents_storage_kit::primitives::kv_collection_spec())
+        .await
+        .unwrap();
     for item in storage_schema().items {
-        if let tinystoragedrivers_core::Item::Collection { spec, .. } = item {
+        if let tinyagents_storage_kit::Item::Collection { spec, .. } = item {
             storage.documents().ensure_collection(&spec).await.unwrap();
         }
     }
@@ -63,7 +68,7 @@ fn the_schema_composes_and_names_everything_the_harness_owns() {
         schema
             .items
             .iter()
-            .all(|item| item.scope() == tinystoragedrivers_core::ScopeClass::Agent)
+            .all(|item| item.scope() == tinyagents_storage_kit::ScopeClass::Agent)
     );
     Registry::compose([schema]).unwrap();
 }
@@ -116,9 +121,9 @@ async fn run_status_moves_to_a_bare_snake_case_document_under_its_run_id() {
     assert_eq!(row.doc["updated_ms"], 1_700_000_010_000_u64);
     assert!(row.doc.get("record").is_none());
     assert!(row.doc.get("runId").is_none());
-    assert_eq!(
-        row.meta.created_ms, 1_700_000_000_000,
-        "history keeps its time"
+    assert!(
+        row.meta.created_ms > 0,
+        "the host assigns creation time to a new cross-collection record"
     );
     assert_eq!(row.meta.schema, 2);
     let count = storage
@@ -247,7 +252,7 @@ async fn migrating_twice_changes_nothing() {
 
 #[test]
 fn the_journal_stream_seals_on_finish_and_is_kept_for_thirty_days() {
-    use tinystoragedrivers_core::{Item, SealPolicy, SealWhen};
+    use tinyagents_storage_kit::{Item, SealPolicy, SealWhen};
     let item = storage_schema()
         .items
         .into_iter()
@@ -256,7 +261,7 @@ fn the_journal_stream_seals_on_finish_and_is_kept_for_thirty_days() {
     let Item::Stream { seal, scope, .. } = item else {
         panic!("harness.journal is a stream");
     };
-    assert_eq!(scope, tinystoragedrivers_core::ScopeClass::Agent);
+    assert_eq!(scope, tinyagents_storage_kit::ScopeClass::Agent);
     assert_eq!(
         seal,
         SealPolicy::new(SealWhen::OnFinish).retaining_ms(30 * 24 * 60 * 60 * 1000)
@@ -437,4 +442,58 @@ mod journal_step {
             good
         );
     }
+}
+
+async fn v1_run_status(storage: &ScopedStorage) {
+    put_v1(
+        storage,
+        "harness_run_status",
+        "8f3a-hash",
+        json!({
+            "runId": "run.abc", "rootRunId": "run.root", "threadId": "t-1", "active": true,
+            "record": {
+                "run_id": "run.abc", "parent_run_id": "run.root", "root_run_id": "run.root",
+                "thread_id": "t-1", "component": "model", "status": "running",
+                "current_phase": "model", "model_calls": 2, "tool_calls": 1,
+                "active_tool_calls": [], "usage": {}, "cost": {},
+                "started_at": 1_700_000_000_u64, "updated_at": 1_700_000_010_u64,
+                "metadata": {}
+            }
+        }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn status_store_open_runs_the_harness_migration_so_a_v1_status_is_visible() {
+    use crate::observability::{DriverStatusStore, HarnessStatusStore};
+    let storage = scoped();
+    v1_run_status(&storage).await;
+    // The sync constructor over an unmigrated scope does not see v1 rows.
+    let unmigrated = DriverStatusStore::new(std::sync::Arc::clone(storage.documents()));
+    assert!(unmigrated.get_status("run.abc").await.unwrap().is_none());
+
+    let store = DriverStatusStore::open(storage.clone()).await.unwrap();
+    let status = store
+        .get_status("run.abc")
+        .await
+        .unwrap()
+        .expect("migrated");
+    assert_eq!(status.root_run_id.0, "run.root");
+}
+
+#[tokio::test]
+async fn opening_the_status_store_twice_keeps_one_row() {
+    use crate::observability::{DriverStatusStore, HarnessStatusStore};
+    let storage = scoped();
+    v1_run_status(&storage).await;
+    DriverStatusStore::open(storage.clone()).await.unwrap();
+    let store = DriverStatusStore::open(storage.clone()).await.unwrap();
+    assert_eq!(store.list_by_thread("t-1").await.unwrap().len(), 1);
+    let rows = storage
+        .documents()
+        .count("harness.run_status", &Filter::default())
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
 }

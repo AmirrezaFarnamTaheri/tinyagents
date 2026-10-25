@@ -5,7 +5,8 @@ use tinyagents_harness::{context::RunContext, runtime::AgentHarness};
 use tinyinference_llm::message::Message;
 
 use crate::turn_driver::TurnControls;
-use crate::{RuntimeError, ToolSnapshot, TranscriptPartial};
+use crate::{RuntimeError, TranscriptPartial};
+use tinyagents_harness::tool::ToolSnapshot;
 
 /// Immutable values passed from a [`crate::Session`] to one driver invocation.
 pub struct DriverRequest<C = ()> {
@@ -38,6 +39,8 @@ pub struct DriverOutcome {
     /// outcome it would derive from `interrupted`, so a run that stopped on a
     /// cap or a deferral is not reported as `Completed`.
     pub outcome: Option<tinyagents_harness::terminal::TerminalOutcome>,
+    /// Tool calls executed during the turn, captured before their results are folded into history.
+    pub tool_outcomes: Vec<tinyagents_harness::turn_outcome::ToolCallOutcome>,
 }
 
 /// A driver error which may retain model history and display-only partial text.
@@ -149,6 +152,7 @@ pub(crate) fn outcome_from_partial(
             .map(TranscriptPartial::new),
         interrupted: partial.run.paused.is_some(),
         outcome: terminal.clone(),
+        tool_outcomes: Vec::new(),
     };
     match partial.error {
         Some(error) => Err(DriverFailure {

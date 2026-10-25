@@ -7,12 +7,10 @@
 //!   re-import of the same run id, event append + ordered listing, and the
 //!   concurrent lease-claim and team-task-claim races). Every backend a host
 //!   opens goes through the one driver implementation, so this suite is run
-//!   here against the memory and SQLite drivers. FileStorage is tested against
-//!   the operations its capability set supports (workflow CRUD and leases),
-//!   and separately verifies that atomic agent/event/task operations return
-//!   `Unsupported(ValidatedBatch)` without partial writes; its document driver
-//!   does not provide the multi-document transaction boundary those operations
-//!   require. The full MongoDB contracts run from the excluded
+//!   here against the memory backend, and from host/proof suites against their
+//!   real native drivers. Backends without validated batches are tested for
+//!   typed `Unsupported(ValidatedBatch)` responses without partial writes.
+//!   The full MongoDB contracts run from the excluded
 //!   `integration-proofs/run-ledger-mongodb` workspace because BSON enables
 //!   `serde_json/preserve_order`, which must not alter the main workspace's
 //!   shared feature graph.
@@ -347,7 +345,7 @@ fn contract_meta() -> TranscriptMeta {
 /// one message at a time; `append_turn` sets the logical set to exactly its
 /// `next` argument (the extension-vs-compaction *diff* is a storage-format
 /// optimization some backends make and others do not, but the resulting
-/// logical view — via [`content_view`], role/content only — must always equal
+/// logical view — via `content_view`, role/content only — must always equal
 /// `next`; per-message bookkeeping like `preserve_request_id` is legitimately
 /// backend-specific, since a file-backed history stamps it `true` on every
 /// row it reads back); idempotent re-import (calling `append_turn` again with
@@ -739,6 +737,32 @@ pub async fn session_store_conformance(provider: &dyn SessionStoreProvider) {
             .collect::<Vec<_>>(),
         vec![json!("first"), json!("second")],
         "a journal reads back in append order"
+    );
+}
+
+/// Runs the explicit pinned-lease contract against a provider that supports it.
+///
+/// This checks that a lease opens usable stores without depending on any
+/// provider-specific storage implementation. Providers that cannot guarantee
+/// pinned handles are covered by the fail-closed `Unsupported` contract test.
+pub async fn session_store_lease_conformance(provider: &dyn SessionStoreProvider) {
+    let lease = provider
+        .lease_for_agent("contract-lease-agent")
+        .expect("provider supports pinned session-store leases");
+    lease
+        .stores()
+        .kv
+        .put("contract", "lease", serde_json::json!("pinned"))
+        .await
+        .expect("leased key-value store writes");
+    assert_eq!(
+        lease
+            .stores()
+            .kv
+            .get("contract", "lease")
+            .await
+            .expect("leased key-value store reads"),
+        Some(serde_json::json!("pinned"))
     );
 }
 

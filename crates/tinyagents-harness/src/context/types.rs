@@ -245,7 +245,7 @@ impl std::fmt::Debug for StateUpdate {
 /// channel.
 ///
 /// This is the harness-native complement to the graph
-/// `Command`/`Interrupt` vocabulary (in `tinyagents-graph`): the agent loop drains any requested control at its safe
+/// control requests: the agent loop drains any requested control at its safe
 /// checkpoints (after each model response) and acts on it, so behaviors like
 /// "stop after an early-exit tool" or "pause on budget" no longer need a
 /// bespoke side channel. Requests are visible via
@@ -459,6 +459,12 @@ pub struct RunContext<Ctx = ()> {
     /// How many calls the current batch has admitted so far; the position
     /// `truncated_call_positions` is matched against. Reset per batch.
     pub(crate) batch_admissions: usize,
+    /// Whether the tool calls now running came from a dead-call retry: the
+    /// call sent with reasoning off after a reply that died at its output cap.
+    /// Such a call has lost the reasoning that led to the last action and tends
+    /// to repeat it, so the repeated-failure breaker does not count its
+    /// failures toward the identical-repeat stop. Set for every model call.
+    pub(crate) dead_call_retry: bool,
     /// An optional host-supplied workspace/sandbox descriptor threaded into every
     /// [`ToolExecutionContext`][crate::tool::ToolExecutionContext] this
     /// run creates, so tools discover their allowed root from context rather

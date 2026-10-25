@@ -1,5 +1,35 @@
 # Changelog
 
+## 3.0.0 — 2026-10-22
+
+**Breaking.** This release completes the TinyAgents slim-down: generic tool
+types and tool-call parsing live in TinyTools, while host-specific execution
+policy and adapters remain with their hosts. Public crates and modules removed
+during the 2.x migration are no longer part of the TinyAgents workspace.
+
+- Bump the surviving TinyAgents workspace crates to 3.0.0.
+- Update the nested TinyTools pin to the 0.6-compatible epic revision.
+
+The unreleased entries below describe the changes accumulated before this
+major release.
+
+## Unreleased: `AgentProgress::ContextCompacting`
+
+**Breaking.** Added `AgentProgress::ContextCompacting` to the public
+`AgentProgress` enum. Downstream exhaustive matches must handle the new
+variant.
+
+## Unreleased: settled completions drop their result (tinyagents#354)
+
+`CompletionRouter` now empties a record's `result` when the record settles:
+`mark_delivered`, `tombstone` and `cancel_parent` store the record with its
+id, parent key, status, state, attempts and timestamps but no text, artifact
+reference or omitted-character count, so a delivered child's output or a
+deleted parent's withdrawn completions do not sit in the store until
+`compact(retain)`. `mark_failed` still returns the full record to the host's
+give-up writer and stores the emptied one. Dedupe, tombstones and reopen
+behaviour are unchanged.
+
 ## Unreleased: dedicated hooks crate (tinyagents#470)
 
 **Breaking.** Stop-hook and lifecycle-hook APIs now live in
@@ -82,7 +112,6 @@ Fixes (the two deferred tinyagents#463 findings):
 The Release workflow derives the next version from the highest of the
 workspace version and the latest `v*` tag instead of the (stale) workspace
 version alone, so it no longer proposes a tag that already exists.
-
 ## Unreleased: locator-based transcript reads and writes (tinyagents#453)
 
 Hosts can now do through a `TranscriptLocator` everything they used the

@@ -13,9 +13,8 @@
 //! # Cargo features
 //!
 //! - `sqlite` — retained as a no-op for compatibility; durable stores are the `Driver*` types over `tinystoragedrivers`.
-//! - `builtin-tools` — the bundled [`tools`] (currently the time tool). The
-//!   old name `tools` is kept as a deprecated alias.
-//! - `multimodal` — image/audio/binary content resolution ([`multimodal`]),
+//! - `multimodal` — image/audio/binary content resolution (see the `multimodal`
+//!   module when the feature is enabled),
 //!   pulling in `reqwest` and `flate2`.
 //! - `claude-code` — the Claude Code CLI and Claude Agent SDK provider
 //!   adapters under [`providers`].
@@ -27,26 +26,9 @@
 //! `claude-code` and `langfuse` are part of `default` so existing consumers
 //! see no change; disable default features to opt out of either.
 //!
-//! # Host utilities not on the agent loop path (M-10)
-//!
-//! [`handoff`] is exported for a host to build on, but [`agent_loop`] does
-//! not call into it on its own — it is opt-in plumbing, not implicit loop
-//! behavior. (A
-//! [`run_queue::RunQueue`] *is* drained by the loop once attached via
-//! [`context::RunContext::with_run_queue`]; see that module's docs.)
-//!
-//! - [`handoff`] is a progressive-disclosure cache for oversized tool
-//!   results; a host calls [`handoff::apply_handoff`] itself before
-//!   appending a tool result to history, and registers an extraction tool
-//!   that reads the same [`handoff::ResultHandoffCache`].
-//!
 //! Persisting a thread's transcript across runs lives in the separate
 //! `tinyagents-session` crate: a host reads history into a run's `input` and
 //! appends the run's messages back afterward.
-//!
-//! Wiring any of these directly into the loop is deliberately future work
-//! rather than default behavior, so a host that does not need one pays
-//! nothing for it.
 //!
 //! # Vendor re-exports
 //!
@@ -64,10 +46,12 @@ pub mod artifacts;
 pub mod cache;
 pub mod cancel;
 mod canonical_json;
-pub mod capability;
 pub mod catalog;
 pub mod close;
 pub mod config;
+pub use config::{
+    CompactionSettings, CompactionStrategy, ContextConfig, DEFAULT_KEEP_RECENT_TOOL_RESULTS,
+};
 pub mod context;
 pub mod cost;
 pub mod dialect;
@@ -75,43 +59,45 @@ pub mod driver_ids;
 pub mod error;
 pub mod events;
 mod finish_reason;
-pub mod handoff;
 pub mod host;
 pub mod ids;
 pub mod limits;
 #[cfg(feature = "media")]
 pub mod media;
 pub mod middleware;
-pub mod model_registry;
 #[cfg(feature = "multimodal")]
 pub mod multimodal;
 pub mod no_progress;
 pub mod observability;
+pub mod oneshot;
+pub mod progress;
 pub mod prompt;
 pub mod providers;
-pub mod retriever;
 pub mod retry;
 pub mod run_queue;
 pub mod runtime;
 pub mod steering;
 pub mod storage;
 pub mod store;
-pub mod stream;
 pub mod structured;
 pub mod summarization;
 pub mod terminal;
 pub mod testkit;
+pub mod thread_reasoning;
 pub mod title;
+
 pub mod token_estimation;
 pub mod tool;
-#[cfg(feature = "builtin-tools")]
-pub mod tools;
 pub mod turn_deadline;
 pub mod turn_outcome;
 pub mod turn_policy;
 pub mod turn_run_error;
 pub mod turn_run_finalize;
+pub mod turn_runner;
 pub mod turn_stop;
+/// Shared URL admission rules for outbound requests, including SSRF checks
+/// and DNS address pinning.
+pub mod url_guard;
 pub mod workspace;
 
 #[cfg(feature = "media")]
@@ -130,14 +116,9 @@ pub use tinytools;
 pub use tinytools_agent;
 
 pub use cancel::CancellationToken;
-pub use capability::{
-    Capability, CapabilityToolSet, LOAD_CAPABILITY_TOOL_NAME, LoadCapabilityTool,
-    ModelRequestDefaults,
-};
 pub use cost::CostTotals;
 pub use error::{Result, TinyAgentsError};
 pub use ids::*;
-pub use model_registry::{ModelRegistry, ModelSelection, ResolvedModelBinding};
 pub use no_progress::{
     ArgumentChurnDetector, CallGate, ClassifiedFailure, ClassifiedFailureTracker,
     DEFAULT_IDENTICAL_HALT_THRESHOLD, DEFAULT_REPEAT_CALL_THRESHOLD,
@@ -152,13 +133,16 @@ pub use observability::replay::{
 pub use observability::{
     AgentCallLatency, AgentLatencyMetrics, AgentObservation, FanOutSink, HarnessEventJournal,
     HarnessStatusStore, InMemoryEventJournal, InMemoryStatusStore, JournalSink, JsonlSink,
-    RedactingSink, StoreEventJournal,
+    ObservedChatModel, PhysicalDispatchGuard, PhysicalDispatchMetadata, PhysicalDispatchObserver,
+    PhysicalDispatchOutcome, PhysicalDispatchStatus, PhysicalDispatchTerminal,
+    PhysicalDispatchUsage, RedactingSink, StoreEventJournal,
 };
 pub use observability::{DriverStatusStore, mint_run_id, reap_orphaned_runs};
 #[cfg(feature = "langfuse")]
 pub use observability::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
 };
+pub use progress::AgentProgress;
 pub use run_queue::{
     ForwardEvent, ForwardEventSink, ForwarderCleanup, QueueLane, QueueMode, QueueStatus,
     QueuedMessage, RunQueue, RunQueueHandle, SteeringForwarderGuard,
@@ -167,7 +151,7 @@ pub use steering::{
     RecentRequestIds, RequestIdError, SteeringCommand, SteeringCommandKind, SteeringHandle,
     SteeringOutcome, SteeringPolicy,
 };
-pub use storage::storage_schema;
+pub use storage::{collections, open_storage, storage_schema};
 pub use terminal::{TerminalClass, TerminalOutcome, TerminalReason, TimeoutPhase};
 pub use tool::ToolRegistry;
 pub use turn_stop::{TurnFailureClass, TurnStop, TurnStopKind};

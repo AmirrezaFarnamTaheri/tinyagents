@@ -658,7 +658,7 @@ pub enum AgentEvent {
     /// An existing sub-agent was *reused* for a follow-up turn rather than
     /// reconstructed, carrying the prior conversation context forward.
     ///
-    /// Emitted by `SubAgentSession` in `tinyagents-orchestration` on every send
+    /// Emitted by the host session lifecycle on every continuation
     /// after the first (i.e. `turn >= 1`), so post-completion reuse — the
     /// orchestrator → sub-agent → human input → *same* sub-agent pattern — is
     /// visible in the event stream and distinguishable from a fresh

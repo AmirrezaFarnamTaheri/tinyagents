@@ -58,7 +58,9 @@ impl Middleware<()> for StopBeforeNCalls {
 async fn before_model_jump_to_end_stops_the_loop_gracefully() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     let model = Arc::new(MockModel::with_tool_call("spin", json!({})));
-    harness.register_model("mock", model.clone());
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+    ));
     harness.register_tool(Arc::new(FakeTool::returning("spin", "again")));
     harness.push_middleware(Arc::new(StopBeforeNCalls {
         limit: 1,
@@ -117,7 +119,9 @@ async fn jump_to_model_skips_the_turns_tool_calls() {
     // the test bounds the run with max_model_calls and asserts the tool
     // itself never actually ran on the skipped turn.
     let model = Arc::new(MockModel::with_tool_call("spin", json!({})));
-    harness.register_model("mock", model.clone());
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+    ));
     let tool = Arc::new(FakeTool::returning("spin", "ran"));
     harness.register_tool(tool.clone());
     harness.push_middleware(Arc::new(SkipToolsOnce {
@@ -178,7 +182,9 @@ impl Middleware<()> for InterruptAfterTool {
 async fn after_tool_control_interrupt_surfaces_as_interrupted() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     let model = Arc::new(MockModel::with_tool_call("spin", json!({})));
-    harness.register_model("mock", model.clone());
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+    ));
     harness.register_tool(Arc::new(FakeTool::returning("spin", "again")));
     harness.push_middleware(Arc::new(InterruptAfterTool));
 
@@ -253,7 +259,12 @@ impl Middleware<()> for Winner {
 async fn first_non_continue_control_wins_and_non_observers_after_it_are_skipped() {
     let ran = Arc::new(Mutex::new(Vec::new()));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::new(MockModel::constant("done")));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::constant("done")),
+        ),
+    ));
     harness.push_middleware(Arc::new(Winner { ran: ran.clone() }));
     harness.push_middleware(Arc::new(Recorder {
         label: "non-observer",
@@ -308,7 +319,9 @@ impl Tool for ReturnDirectTool {
 async fn tool_return_direct_ends_the_loop_with_the_tools_own_output() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     let model = Arc::new(MockModel::with_tool_call("finalize", json!({})));
-    harness.register_model("mock", model.clone());
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+    ));
     harness.register_tool(Arc::new(ReturnDirectTool));
 
     let run = harness
@@ -353,7 +366,9 @@ impl Tool for GotoModelTool {
 async fn tool_goto_model_is_honored_via_middleware_control() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     let model = Arc::new(MockModel::constant("done"));
-    harness.register_model("mock", model.clone());
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+    ));
     harness.register_tool(Arc::new(GotoModelTool));
 
     // The model itself never calls `reroute` (MockModel::constant produces
@@ -396,7 +411,9 @@ impl Middleware<()> for StopAfterFirstTurn {
 async fn should_stop_after_turn_ends_the_run_once_a_turn_executed_a_tool() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     let model = Arc::new(MockModel::with_tool_call("spin", json!({})));
-    harness.register_model("mock", model.clone());
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+    ));
     harness.register_tool(Arc::new(FakeTool::returning("spin", "again")));
     harness.push_middleware(Arc::new(StopAfterFirstTurn {
         seen_turn: Mutex::new(false),

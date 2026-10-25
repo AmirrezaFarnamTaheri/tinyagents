@@ -629,7 +629,7 @@ pub fn message_to_display_transcript(msg: &Message) -> Option<TranscriptMessage>
 /// with pictures keeps its text and image blocks as ordered `parts`. Without
 /// this the provider sees an assistant with no `tool_calls` followed by an
 /// orphan tool message and drops the round — breaking multi-turn native tool
-/// calling (e.g. the orchestrator's `spawn_parallel_agents` → synthesis hop) —
+/// calling (e.g. a parallel-agent fanout followed by synthesis) —
 /// and a native-tool provider silently loses every pasted image.
 ///
 /// Returns `None` for [`Message::Custom`]: that variant is a host-side

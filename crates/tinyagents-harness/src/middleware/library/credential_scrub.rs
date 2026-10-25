@@ -169,7 +169,12 @@ impl<C: Send + Sync> ToolMiddleware<(), C> for CredentialScrubMiddleware {
                         *data = serde_json::Value::String(scrubbed);
                     }
                 } else if let tinytools::ToolContent::Text { text } = block {
-                    *text = scrubbed;
+                    // Keep only the scrubbed body: the one notice for the whole
+                    // result is appended below.
+                    *text = match scrubbed.split_once("\n\n[credential_scrub]") {
+                        Some((body, _)) => body.to_owned(),
+                        None => scrubbed,
+                    };
                 }
                 redactions = redactions.saturating_add(count);
             }

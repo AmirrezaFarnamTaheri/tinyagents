@@ -320,6 +320,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         Ok(
             ToolGate::new(allowed, &self.policy.tool_rules, definition_rules)
                 .with_denied_names(binding.iter().flat_map(|b| b.denied_tools.iter().cloned()))
+                .with_inherited_rules(binding.iter().flat_map(|b| b.inherited_rules.iter()))
                 .with_deferred_names(
                     binding
                         .iter()
@@ -1525,6 +1526,31 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 ?outcome,
                 "[host] classified tool outcome"
             );
+        }
+
+        if let Err(error) = self
+            .middleware
+            .run_after_tool_output_screened(
+                ctx,
+                state,
+                &crate::middleware::ToolInvocationIdentity::new(
+                    prepared.call_id.clone(),
+                    prepared.tool_name.clone(),
+                ),
+                &result,
+                &result.output_for_llm(prepared.options.prefer_markdown),
+            )
+            .await
+        {
+            self.fail_tool_call(
+                ctx,
+                status,
+                &prepared.call_id,
+                &prepared.tool_name,
+                prepared.started_at_ms,
+                &error,
+            );
+            return Err(error);
         }
 
         // A tool's own `ToolControl` (`return_direct`/`terminate`/`goto`/

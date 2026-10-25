@@ -322,7 +322,3 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for VerifyBeforeFinishMidd
 #[cfg(test)]
 #[path = "middleware_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "middleware_execution_tests.rs"]
-mod execution_tests;

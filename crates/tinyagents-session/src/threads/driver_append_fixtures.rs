@@ -1,8 +1,9 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     Capabilities, Page, Query, ReadCheck, Sort, StreamEntry, Version, WriteOp, WriteResult,
 };
+use tinystoragedrivers_api::StorageBackend;
 use tokio::sync::{Barrier, Notify};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,6 +22,11 @@ pub(super) enum Action {
     FailBefore,
     Unsupported,
     Barrier,
+    /// The document port does not advertise conditional stream appends, as
+    /// SQLite documents do not (only its stream port does).
+    DocsLackStreamAppend,
+    /// The stream port does not advertise conditional stream appends.
+    StreamsLackStreamAppend,
 }
 #[derive(Debug)]
 pub(super) struct Fault {
@@ -62,7 +68,7 @@ impl Fault {
                     1
                 }
     }
-    async fn after(&self, active: bool) -> tinystoragedrivers_core::Result<()> {
+    async fn after(&self, active: bool) -> tinystoragedrivers_types::Result<()> {
         if !active {
             return Ok(());
         }
@@ -93,22 +99,27 @@ struct Documents {
 #[async_trait]
 impl DocumentStore for Documents {
     fn capabilities(&self) -> Capabilities {
-        self.inner.capabilities()
+        let capabilities = self.inner.capabilities();
+        if matches!(self.fault.action, Action::DocsLackStreamAppend) {
+            capabilities.without(tinystoragedrivers_types::Capability::ConditionalStreamAppend)
+        } else {
+            capabilities
+        }
     }
-    async fn ensure_collection(&self, _: &CollectionSpec) -> tinystoragedrivers_core::Result<()> {
+    async fn ensure_collection(&self, _: &CollectionSpec) -> tinystoragedrivers_types::Result<()> {
         panic!("actor attempted DDL")
     }
     async fn validate_collection_spec(
         &self,
         spec: &CollectionSpec,
-    ) -> tinystoragedrivers_core::Result<()> {
+    ) -> tinystoragedrivers_types::Result<()> {
         self.inner.validate_collection_spec(spec).await
     }
     async fn get(
         &self,
         c: &str,
         id: &str,
-    ) -> tinystoragedrivers_core::Result<Option<Versioned<Value>>> {
+    ) -> tinystoragedrivers_types::Result<Option<Versioned<Value>>> {
         self.inner.get(c, id).await
     }
     async fn put(
@@ -117,7 +128,7 @@ impl DocumentStore for Documents {
         id: &str,
         v: Value,
         p: Precondition,
-    ) -> tinystoragedrivers_core::Result<Version> {
+    ) -> tinystoragedrivers_types::Result<Version> {
         self.inner.put(c, id, v, p).await
     }
     async fn put_with(
@@ -126,8 +137,8 @@ impl DocumentStore for Documents {
         id: &str,
         v: Value,
         p: Precondition,
-        o: tinystoragedrivers_core::WriteOptions,
-    ) -> tinystoragedrivers_core::Result<Version> {
+        o: tinystoragedrivers_types::WriteOptions,
+    ) -> tinystoragedrivers_types::Result<Version> {
         self.inner.put_with(c, id, v, p, o).await
     }
     async fn delete(
@@ -135,20 +146,20 @@ impl DocumentStore for Documents {
         c: &str,
         id: &str,
         p: Precondition,
-    ) -> tinystoragedrivers_core::Result<bool> {
+    ) -> tinystoragedrivers_types::Result<bool> {
         self.inner.delete(c, id, p).await
     }
     async fn query(
         &self,
         c: &str,
         q: &Query,
-    ) -> tinystoragedrivers_core::Result<Page<Versioned<Value>>> {
+    ) -> tinystoragedrivers_types::Result<Page<Versioned<Value>>> {
         self.inner.query(c, q).await
     }
-    async fn count(&self, c: &str, f: &Filter) -> tinystoragedrivers_core::Result<u64> {
+    async fn count(&self, c: &str, f: &Filter) -> tinystoragedrivers_types::Result<u64> {
         self.inner.count(c, f).await
     }
-    async fn delete_where(&self, c: &str, f: &Filter) -> tinystoragedrivers_core::Result<u64> {
+    async fn delete_where(&self, c: &str, f: &Filter) -> tinystoragedrivers_types::Result<u64> {
         self.inner.delete_where(c, f).await
     }
     async fn claim(
@@ -157,17 +168,17 @@ impl DocumentStore for Documents {
         f: &Filter,
         s: &[Sort],
         p: &Value,
-    ) -> tinystoragedrivers_core::Result<Option<Versioned<Value>>> {
+    ) -> tinystoragedrivers_types::Result<Option<Versioned<Value>>> {
         self.inner.claim(c, f, s, p).await
     }
-    async fn drop_collection(&self, c: &str) -> tinystoragedrivers_core::Result<()> {
+    async fn drop_collection(&self, c: &str) -> tinystoragedrivers_types::Result<()> {
         self.inner.drop_collection(c).await
     }
     async fn atomic_batch_checked(
         &self,
         checks: Vec<ReadCheck>,
         ops: Vec<WriteOp>,
-    ) -> tinystoragedrivers_core::Result<Vec<WriteResult>> {
+    ) -> tinystoragedrivers_types::Result<Vec<WriteResult>> {
         let phase = if ops.len() == 1 {
             Phase::Reserve
         } else {
@@ -196,10 +207,19 @@ struct Streams {
 }
 #[async_trait]
 impl StreamStore for Streams {
-    async fn append(&self, s: &str, v: Value) -> tinystoragedrivers_core::Result<u64> {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
+        let capabilities = self.inner.capabilities();
+        if matches!(self.fault.action, Action::StreamsLackStreamAppend) {
+            capabilities.without(tinystoragedrivers_types::Capability::ConditionalStreamAppend)
+        } else {
+            capabilities
+        }
+    }
+
+    async fn append(&self, s: &str, v: Value) -> tinystoragedrivers_types::Result<u64> {
         self.inner.append(s, v).await
     }
-    async fn append_batch(&self, s: &str, v: Vec<Value>) -> tinystoragedrivers_core::Result<u64> {
+    async fn append_batch(&self, s: &str, v: Vec<Value>) -> tinystoragedrivers_types::Result<u64> {
         self.inner.append_batch(s, v).await
     }
     async fn append_batch_if_offset(
@@ -207,7 +227,7 @@ impl StreamStore for Streams {
         s: &str,
         o: u64,
         v: Vec<Value>,
-    ) -> tinystoragedrivers_core::Result<u64> {
+    ) -> tinystoragedrivers_types::Result<u64> {
         let phase = if v.is_empty() {
             Phase::Probe
         } else {
@@ -216,7 +236,7 @@ impl StreamStore for Streams {
         let active = self.fault.take(phase);
         if active && matches!(self.fault.action, Action::Unsupported) {
             return Err(StorageError::unsupported(
-                tinystoragedrivers_core::Capability::ConditionalStreamAppend,
+                tinystoragedrivers_types::Capability::ConditionalStreamAppend,
                 "paired stream refuses actual probe",
             ));
         }
@@ -232,7 +252,7 @@ impl StreamStore for Streams {
         s: &str,
         o: u64,
         n: usize,
-    ) -> tinystoragedrivers_core::Result<Vec<StreamEntry>> {
+    ) -> tinystoragedrivers_types::Result<Vec<StreamEntry>> {
         let active = self.fault.take(Phase::ReadWindow);
         if active && matches!(self.fault.action, Action::FailBefore) {
             return Err(Fault::failure());
@@ -241,16 +261,16 @@ impl StreamStore for Streams {
         self.fault.after(active).await?;
         Ok(result)
     }
-    async fn len(&self, s: &str) -> tinystoragedrivers_core::Result<u64> {
+    async fn len(&self, s: &str) -> tinystoragedrivers_types::Result<u64> {
         self.inner.len(s).await
     }
-    async fn truncate_before(&self, s: &str, o: u64) -> tinystoragedrivers_core::Result<u64> {
+    async fn truncate_before(&self, s: &str, o: u64) -> tinystoragedrivers_types::Result<u64> {
         self.inner.truncate_before(s, o).await
     }
-    async fn delete_stream(&self, s: &str) -> tinystoragedrivers_core::Result<bool> {
+    async fn delete_stream(&self, s: &str) -> tinystoragedrivers_types::Result<bool> {
         self.inner.delete_stream(s).await
     }
-    async fn streams(&self, p: &str) -> tinystoragedrivers_core::Result<Vec<String>> {
+    async fn streams(&self, p: &str) -> tinystoragedrivers_types::Result<Vec<String>> {
         self.inner.streams(p).await
     }
 }
@@ -271,17 +291,13 @@ pub(super) fn faulted(
     }
 }
 pub(super) async fn actor(backend: &dyn StorageBackend) -> DriverConversationStore {
-    backend.prepare_schema().await.unwrap();
-    let raw = backend.for_scope(&Scope::new("alice").unwrap()).unwrap();
+    let scope = Scope::new("alice").unwrap();
+    let raw = backend.for_scope(&scope).unwrap();
     DriverConversationStore::prepare_append_schema(raw.documents().as_ref())
         .await
         .unwrap();
     let store = DriverConversationStore::new_validate_only(
-        backend
-            .existing_schema()
-            .unwrap()
-            .for_scope(&Scope::new("alice").unwrap())
-            .unwrap(),
+        tinyagents_storage_kit::ScopedStorage::new(raw, scope),
     );
     store.ensure_thread(request("same")).await.unwrap();
     store

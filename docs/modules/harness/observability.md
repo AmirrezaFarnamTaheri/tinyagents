@@ -31,14 +31,12 @@ TinyAgents should use typed Rust events rather than stringly callback names.
 - Preserve parent/root run relationships.
 - Include usage, cost, cache, retry, fallback, and latency data.
 - Capture model-call and tool-call latency as first-class metrics.
-- Include graph run ids, graph names, super-step indexes, node ids, routing
-  commands, checkpoint ids, and interrupt metadata for state-graph runs.
+
 
 ## Execution Status Store
 
-Harness runs need a readable status surface just like graph runs. Direct model
-calls, model-tool loops, and harness calls made from graph nodes should all
-publish their current execution status so external listeners can inspect runs
+Harness runs need a readable status surface. Direct model calls and model-tool
+loops publish their current execution status so external listeners can inspect runs
 without holding an in-process stream.
 
 ```rust
@@ -81,8 +79,8 @@ pub enum HarnessPhase {
 
 Status should move through `Pending`, `Running`, `Waiting`, `Completed`,
 `Failed`, or `Cancelled` states while `current_phase` describes the active
-harness operation. A graph node that invokes a harness should be able to read
-the child harness status through `parent_run_id` and `root_run_id`.
+harness operation. Nested harness calls can read child status through `parent_run_id` and
+`root_run_id`.
 
 Run-level latency can be derived from `started_at` and either `ended_at` or
 `updated_at`. This status-derived view is compact and cheap, but it only reports
@@ -149,13 +147,22 @@ Event kinds should include:
 - `rate_limit.waited`
 - `limit.reached`
 - `stream.closed`
-- `graph.run.started`
-- `graph.node.entered`
-- `graph.node.completed`
-- `graph.run.paused`
-- `graph.run.completed`
-- `graph.run.failed`
-- `graph.checkpoint.saved`
+
+## Physical Provider Dispatches
+
+`observability::physical_dispatch::ObservedChatModel` wraps a concrete provider
+and calls `PhysicalDispatchObserver::on_start` only after the caller's budget
+wrapper has admitted the request. Its terminal callback reports provider
+usage, model and finish reason without prompts, outputs, raw errors, or provider
+metadata. Dropping an in-flight invocation or unfinished stream reports
+cancellation exactly once. Streaming calls remain streaming and finish only on
+a terminal stream item.
+
+`ModelBudget::wrap_model` installs a task-local adapter automatically. A scoped
+turn observer receives one `TurnObservation::ModelDispatch` for each provider
+invocation while the existing logical `TurnObservation::Model` event remains
+available for compatibility. Calls refused before provider admission produce
+no physical dispatch event.
 
 ## Latency Metrics
 
@@ -223,22 +230,6 @@ Listener filters should include:
 Live event delivery should not block model or tool execution unless the run
 policy explicitly requires a mandatory observer. Durable listeners should replay
 from the journal rather than relying on in-memory broadcast delivery.
-
-### Implementation status (runtime-comparison Phase 3, C2)
-
-`HarnessEventJournal`/`StoreEventJournal` exist as designed above (offset
-replay, no block-level detail). What is new this phase is a durable shape for
-*in-progress* assistant messages specifically:
-`tinyagents_harness::stream::{AssistantFrame, FrameEncoder, reduce_frames}`
-(`crates/tinyagents-harness/src/stream/frame.rs`) — see
-`docs/modules/harness/streaming.md`'s "Implementation status" for the codec
-itself. A journal that persists `AssistantFrame`s alongside its ordinary
-`HarnessEvent` stream lets a reconnecting consumer rebuild a partial
-in-progress message with `reduce_frames` instead of only replaying whichever
-already-flattened `AgentEvent::ModelDelta`s the journal captured — the
-journal wiring (an `AssistantFrame`-aware `HarnessEventJournal`
-implementation, or a `Model*` frame projection alongside `ModelDelta`) is not
-itself implemented yet; the codec is the missing primitive that unblocks it.
 
 ## Observability Cache
 
@@ -364,8 +355,7 @@ Input/Output panels of a generation (`generation-create`) and a tool
 observation (`span-create`). With capture disabled the fields are absent and the
 observation renders with ids, timing, and usage only. The harness exporter also
 defaults the trace-level metadata from the run lineage (root/first run ids and
-parent), mirroring the graph exporter, so a trace is correlatable even when the
-caller passes no metadata.
+parent), so a trace is correlatable even when the caller passes no metadata.
 
 ## Langfuse Observation Tree
 
@@ -381,9 +371,7 @@ Because run-span ids are deterministic and trace-namespaced, the tree spans
 **separately exported batches**: a sub-agent run whose observations are shipped
 in their own batch carries `parent_run_id`, so its run span resolves to
 `{trace_id}:run:{parent_run_id}` and nests under the parent agent's span in the
-same trace. The graph exporter emits a matching `{trace_id}:run:{run_id}` span
-for the graph run, so a graph run and the agent runs its nodes spawn
-reconstruct one unified nested tree.
+same trace, preserving the nested agent-run lineage.
 
 ## Scores
 
@@ -396,22 +384,3 @@ deterministic value derived from the target and metric name, so re-scoring the
 same target upserts rather than duplicating. Point the score's `trace_id` at an
 exported trace (recall both exporters default the trace id to the run's
 `root_run_id`) to attach the evaluation to that run.
-
-## Graph Events
-
-State-graph event payloads should be rich enough for a UI to render run
-progress without loading checkpoints:
-
-- run id
-- graph name
-- step or super-step index
-- node id
-- rendered command such as `continue`, `goto:node`, `fork:[a,b]`,
-  `interrupt:approval`, or `end`
-- elapsed milliseconds
-- lifecycle status
-- interrupt kind and resume node when paused
-- error class and message when failed
-
-Graph event tests should filter by both event kind and run id. A shared global
-event bus can otherwise pick up unrelated graph events from parallel tests.

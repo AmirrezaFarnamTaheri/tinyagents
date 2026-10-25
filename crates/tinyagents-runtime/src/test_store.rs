@@ -6,12 +6,77 @@
 
 use std::sync::Arc;
 
-use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
-use tinyagents_session::transcript::{
-    DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscripts, TranscriptHistory,
-    TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn,
+use tinyagents_session::port::{
+    AgentStorageFactory, ConditionedAgentStorageFactory, DriverSessionStores, SessionStoreProvider,
 };
-use tinystoragedrivers_core::MemoryStorage;
+use tinyagents_session::transcript::{
+    DisplaySessionTranscript, SessionAdoption, SessionRef, SessionTranscript, ThreadTranscripts,
+    TranscriptHistory, TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead,
+    TranscriptTurn,
+};
+use tinyagents_storage_kit::{Scope, ScopedStorage, WriteCondition};
+use tinystoragedrivers_api::{DocumentStore, Storage, StorageBackend, StreamStore};
+use tinystoragedrivers_types::{Capabilities, Result};
+
+/// A driver-backed session provider bound to `scope`, for identity-admission tests.
+pub(crate) fn driver_session_stores(scope: Scope) -> Arc<DriverSessionStores> {
+    driver_session_stores_over(sqlite_backend(), scope)
+}
+
+/// A SQLite backend whose temporary directory stays alive as long as the
+/// returned backend. Driver session tests exercise lease-conditioned generation
+/// writes, which the testkit's simpler in-memory backend does not implement.
+fn sqlite_backend() -> Arc<dyn StorageBackend> {
+    let directory = tempfile::tempdir().expect("SQLite session test directory");
+    let config = tinystoragedrivers::StorageConfig::parse(&format!(
+        "sqlite:{}",
+        directory.path().join("storage").display()
+    ))
+    .expect("SQLite session test URL");
+    let backend = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("SQLite session test runtime")
+            .block_on(tinystoragedrivers::open(&config))
+            .expect("SQLite session test backend")
+    })
+    .join()
+    .expect("SQLite session test thread");
+    Arc::new(TemporarySqliteBackend {
+        _directory: directory,
+        backend,
+    })
+}
+
+#[derive(Debug)]
+struct TemporarySqliteBackend {
+    _directory: tempfile::TempDir,
+    backend: Arc<dyn StorageBackend>,
+}
+
+impl StorageBackend for TemporarySqliteBackend {
+    fn capabilities(&self) -> Capabilities {
+        self.backend.capabilities()
+    }
+
+    fn for_scope(&self, scope: &Scope) -> Result<Storage> {
+        self.backend.for_scope(scope)
+    }
+}
+
+/// A driver-backed session provider bound to `scope` over a shared backend.
+pub(crate) fn driver_session_stores_over(
+    backend: Arc<dyn StorageBackend>,
+    scope: Scope,
+) -> Arc<DriverSessionStores> {
+    let scope_for_factory = scope.clone();
+    let factory: AgentStorageFactory = Arc::new(move |_| {
+        let storage = backend.for_scope(&scope_for_factory)?;
+        Ok(ScopedStorage::new(storage, scope_for_factory.clone()))
+    });
+    Arc::new(DriverSessionStores::new(factory).expect("driver session stores over memory"))
+}
 
 /// An empty transcript store: the production driver-backed locator, over memory.
 pub(crate) fn memory() -> Arc<dyn TranscriptLocator> {
@@ -174,13 +239,121 @@ impl TranscriptLocator for Destination {
     }
 }
 
-/// An empty driver-backed transcript store (the production store, over memory).
+/// An empty driver-backed transcript store (the production store, over SQLite).
 pub(crate) fn driver() -> Arc<dyn TranscriptLocator> {
-    DriverSessionStores::new(
-        Arc::new(MemoryStorage::new()),
-        tinystoragedrivers_core::Scope::local(),
+    let scope = Scope::new("runtime-tests").expect("runtime test scope");
+    let stores = conditioned_driver_session_stores(scope.clone());
+    Arc::new(OwnedTestLocator {
+        locator: stores.for_agent("runtime-tests").transcripts,
+        _stores: stores,
+    })
+}
+
+fn conditioned_driver_session_stores(scope: Scope) -> Arc<DriverSessionStores> {
+    use tinystoragedrivers_connect::sqlite::SqliteConnection;
+    use tinystoragedrivers_document::sqlite::{SqliteDocuments, SqliteStreams};
+
+    fn storage(
+        path: &std::path::Path,
+        scope: &Scope,
+        memory: &tinystoragedrivers_testkit::MemoryBackend,
+        condition: Option<&WriteCondition>,
+    ) -> Result<ScopedStorage> {
+        let connection = SqliteConnection::open(path)
+            .map_err(|error| tinystoragedrivers_types::StorageError::backend(error.to_string()))?;
+        let documents = match condition {
+            Some(condition) => Arc::new(SqliteDocuments::conditioned(
+                connection.clone(),
+                scope.clone(),
+                condition.clone(),
+            )) as Arc<dyn DocumentStore>,
+            None => Arc::new(SqliteDocuments::new(connection.clone(), scope.clone()))
+                as Arc<dyn DocumentStore>,
+        };
+        let streams =
+            Arc::new(SqliteStreams::new(connection, scope.clone())) as Arc<dyn StreamStore>;
+        let ports = memory
+            .for_scope(scope)
+            .map_err(|error| tinystoragedrivers_types::StorageError::backend(error.to_string()))?;
+        Ok(ScopedStorage::new(
+            Storage::new(
+                documents,
+                streams,
+                ports.kv().clone(),
+                ports.blobs().clone(),
+                ports.queues().clone(),
+                ports.secrets().clone(),
+            ),
+            scope.clone(),
+        ))
+    }
+
+    let directory = Arc::new(tempfile::tempdir().expect("SQLite session test directory"));
+    let path = directory.path().join("session.sqlite");
+    let plain_path = path.clone();
+    let memory = Arc::new(tinystoragedrivers_testkit::MemoryBackend::new());
+    let plain_scope = scope.clone();
+    let plain_dir = Arc::clone(&directory);
+    let plain_memory = Arc::clone(&memory);
+    let factory: AgentStorageFactory = Arc::new(move |_| {
+        let _keep_directory = &plain_dir;
+        storage(&plain_path, &plain_scope, &plain_memory, None)
+    });
+    let condition_scope = scope;
+    let condition_dir = Arc::clone(&directory);
+    let condition_memory = memory;
+    let conditioned: ConditionedAgentStorageFactory = Arc::new(move |_, condition| {
+        let _keep_directory = &condition_dir;
+        storage(&path, &condition_scope, &condition_memory, Some(condition))
+    });
+    Arc::new(
+        DriverSessionStores::new(factory)
+            .expect("conditioned SQLite test stores")
+            .with_conditioned_storage_factory(conditioned),
     )
-    .expect("driver session stores over memory")
-    .for_agent("runtime-tests")
-    .transcripts
+}
+
+/// An empty in-memory session locator for behavior tests that do not certify
+/// the driver's storage adapter.
+pub(crate) fn in_memory() -> Arc<dyn TranscriptLocator> {
+    tinyagents_session::port::InMemorySessionStores::new()
+        .for_agent("runtime-tests")
+        .transcripts
+}
+
+/// A transcript handle plus its backend, which retains the fixture directory.
+struct OwnedTestLocator {
+    locator: Arc<dyn TranscriptLocator>,
+    _stores: Arc<DriverSessionStores>,
+}
+
+impl TranscriptLocator for OwnedTestLocator {
+    fn destination_key(&self) -> Option<String> {
+        self.locator.destination_key()
+    }
+
+    fn latest_for_agent(&self, agent_name: &str) -> Option<Arc<dyn TranscriptRead>> {
+        self.locator.latest_for_agent(agent_name)
+    }
+
+    fn root_for_thread(&self, thread_id: &str) -> Option<Arc<dyn TranscriptRead>> {
+        self.locator.root_for_thread(thread_id)
+    }
+
+    fn open_stem(
+        &self,
+        stem: &str,
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<Arc<dyn TranscriptHistory>> {
+        self.locator.open_stem(stem, seed)
+    }
+
+    fn adopt_legacy(
+        &self,
+        session: &SessionRef,
+        thread_id: &str,
+        seed: &TranscriptMeta,
+    ) -> anyhow::Result<Option<SessionAdoption>> {
+        self.locator.adopt_legacy(session, thread_id, seed)
+    }
 }

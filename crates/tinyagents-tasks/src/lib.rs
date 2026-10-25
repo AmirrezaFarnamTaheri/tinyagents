@@ -1,64 +1,58 @@
 //! Graph-independent detached-task machinery for TinyAgents.
 //!
 //! This crate is the managed child-work surface: task model, `TaskStore`
-//! implementations, the detached task registry, restart reconciliation and the
-//! orchestration control tools. It does not depend on the graph engine, so
-//! `tinyagents-graph` and `tinyagents-orchestration` both build on it.
+//! implementations, the detached task registry and restart reconciliation.
+//! It does not depend on the graph engine, so
+//! `tinyagents-orchestration` builds on it.
 //!
-//! It gives
-//! language-model orchestrators stable task ids and typed controls (`spawn`,
-//! `await`, `cancel`, `kill`, `status`, `list`, `timeout`, `race`, `yield`, and
-//! `steer`) without exposing raw executor handles such as `tokio::JoinHandle`.
-//!
-//! The controls are ordinary harness tools. Use [`OrchestrationTool`] directly,
-//! call [`orchestration_tools`] to build the full set, or call
-//! [`register_orchestration_tools`] to insert them into a
-//! [`tinyagents_harness::tool::ToolRegistry`] alongside any other tools.
+//! Hosts can track child work by stable task id without exposing raw executor
+//! handles such as `tokio::JoinHandle`.
 
 mod completions;
 mod driver_store;
 mod reconcile;
-mod recovery;
 mod runtime;
 mod status;
+mod steering_registry;
 mod storage;
 mod store;
 mod store_registry;
-mod tool;
 mod types;
 
 pub use completions::{
-    CompletionArtifact, CompletionFormatter, CompletionRecord, CompletionResult, CompletionRouter,
+    ClaimResolution, CompletionAdmission, CompletionArtifact, CompletionClaim, CompletionClaimMode,
+    CompletionFormatter, CompletionReceipt, CompletionRecord, CompletionResult, CompletionRouter,
     CompletionState, CompletionStatus, CompletionStore, CompletionStoreReplaceOutcome,
     DEFAULT_MAX_ATTEMPTS, DriverCompletionStore, InMemoryCompletionStore,
-    NeutralCompletionFormatter, NotifyMode, RecordOutcome, TombstoneOutcome,
+    NeutralCompletionFormatter, NotifyMode, ParentGateClaim, ParentLifecycle, PendingClaimRequest,
+    RecordOutcome, ResolveClaimRequest, TaskClaimRequest, TombstoneOutcome,
 };
 pub use completions::{
     CompletionDelivery, CompletionDeliveryConfig, CompletionRouterPool, CompletionRouterPoolError,
-    CompletionRouterReplaceOutcome, DeliveryFence, DeliveryOutcome, DeliveryTarget, ParentBusyGate,
-    ParentBusyLease, ThreadDeliveryLeases, open_driver_completion_store_or_memory,
+    CompletionRouterReplaceOutcome, CompletionStoreFallback, DeliveryFence, DeliveryOutcome,
+    DeliveryTarget, DurableThreadDeliveryLease, DurableThreadDeliveryLeases, ParentBusyGate,
+    ParentBusyLease, TenantThreadKey, ThreadDeliveryLeases, open_driver_completion_store,
+    open_driver_completion_store_or_memory,
+    open_driver_completion_store_or_memory_with_coordination_domain,
+    open_driver_completion_store_with_coordination_domain,
 };
 pub use driver_store::DriverTaskStore;
 pub use reconcile::{
     ReconcileOutcome, ReconcileReport, ReconciledTask, reconcile_orphaned_tasks, task_status_label,
 };
-pub use recovery::{
-    MAX_RECOVERY_CHILDREN, MAX_RECOVERY_LABEL_CHARS, RESTART_RECOVERY_INSTRUCTION, RecoveryChild,
-    build_restart_recovery_note, recovery_children,
-};
 pub use runtime::{DetachedAbortEvent, DetachedTaskRegistry};
-pub use storage::storage_schema;
+pub use steering_registry::SteeringRegistry;
+pub use storage::{open_storage, storage_schema};
 pub use store::{InMemoryTaskStore, TaskStore};
 pub use store_registry::{
-    TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store_or_memory,
-};
-pub use tool::{
-    OrchestrationStatusOverlay, OrchestrationTool, SteeringRegistry, orchestration_tool_schema,
-    orchestration_tool_schemas, orchestration_tools, orchestration_tools_with_status_overlay,
-    orchestration_tools_with_steering, register_orchestration_tools,
-    register_orchestration_tools_with_status_overlay,
+    TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store,
+    open_driver_task_store_or_memory,
 };
 pub use types::*;
+
+#[cfg(test)]
+#[path = "conditional_sqlite.rs"]
+mod conditional_sqlite;
 
 #[cfg(test)]
 #[path = "lib_tests.rs"]

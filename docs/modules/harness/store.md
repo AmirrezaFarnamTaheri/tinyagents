@@ -3,16 +3,10 @@
 The store feature provides durable and ephemeral storage for the harness. It is
 used by memory, events, model calls, tool calls, artifacts, web UIs, and tests.
 
-The store is not graph checkpointing. Graph checkpoints belong to the graph
-module. Harness stores record application/runtime data around LLM orchestration.
-When the harness state-graph runtime is enabled, graph checkpointers own the
-serialized graph state snapshots while harness stores can still index the run's
-events, artifacts, model calls, tool calls, and UI-facing summaries.
-
-The store may also back status and event-journal features for the harness and
-for graph integrations. That does not make those records generic memory: status
-records are operational snapshots, event records are append-only execution
-history, and checkpoints remain graph-owned resumable state.
+Harness stores record application/runtime data around LLM orchestration:
+events, artifacts, model calls, tool calls, and UI-facing summaries. Status
+records are operational snapshots and event records are append-only execution
+history.
 
 ## Source Inspiration
 
@@ -38,8 +32,6 @@ runtime injection. TinyAgents should expose stores through `RunContext` and
 - Provide append-only stream storage.
 - Store messages, run records, events, tool records, model records, and artifacts.
 - Store embedding records and vector/retrieval metadata when configured.
-- Store graph run indexes, graph event journals, and graph UI summaries when
-  configured, without taking ownership of checkpoint snapshots.
 - Support in-memory tests.
 - Support JSONL local development.
 - Support MongoDB server deployments.
@@ -56,8 +48,6 @@ runtime injection. TinyAgents should expose stores through `RunContext` and
 
 - It does not decide what enters a prompt.
 - It does not summarize memory.
-- It does not checkpoint graph execution.
-- It does not replace the graph checkpointer used for pause/resume.
 - It does not replace the registry.
 - It does not require one global database.
 
@@ -300,9 +290,7 @@ Store-backed observability uses two different record families:
 - event journal records are append-only and answer "what happened?"
 
 Harness status records should store the compact `HarnessRunStatus` shape from
-[observability](observability.md). Graph integrations may store graph status
-records in the same backend, but graph-specific fields such as checkpoint id,
-checkpoint namespace, step, active nodes, and interrupts remain graph-owned.
+[observability](observability.md), separate from append-only event history.
 
 Event journal records should be addressable by stream and offset:
 
