@@ -79,9 +79,9 @@ fn public_goal_schema_uses_the_serialized_camel_case_record() {
         "tokenBudget",
         "tokensUsed",
         "timeUsedSeconds",
+        "timeUsedSubsecNanos",
         "createdAtMs",
         "updatedAtMs",
-        "continuationSuppressed",
     ] {
         assert!(properties.get(field).is_some(), "missing {field}: {schema}");
     }
