@@ -110,14 +110,10 @@ pub fn collections() -> Vec<CollectionSpec> {
 pub async fn open_storage(
     storage: ScopedStorage,
 ) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
-    tinyagents_storage_kit::with_migration_lease_once(
-        &storage,
-        "harness",
-        {
-            let owned_storage = storage.clone();
-            move |lease| migrate_storage_with_lease(owned_storage, lease)
-        },
-    )
+    tinyagents_storage_kit::with_migration_lease_once(&storage, "harness", {
+        let owned_storage = storage.clone();
+        move |lease| migrate_storage_with_lease(owned_storage, lease)
+    })
     .await?;
     Ok(storage)
 }
