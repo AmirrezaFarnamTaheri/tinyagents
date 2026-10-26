@@ -345,6 +345,7 @@ impl<Ctx> RunContext<Ctx> {
             model_call_failed: false,
             model_base_called: false,
             call_streamed: false,
+            call_first_output_at: None,
             prefix_epoch: 0,
             discarded_usage: Vec::new(),
             deferred_results: None,
