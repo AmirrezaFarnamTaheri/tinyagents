@@ -81,7 +81,7 @@ pub struct PhysicalDispatchGuard {
     terminal: Option<Box<dyn PhysicalDispatchTerminal>>,
     started: Instant,
     usage: Option<PhysicalDispatchUsage>,
-    first_output: Option<Duration>,
+    pub(super) first_output: Option<Duration>,
 }
 
 impl PhysicalDispatchGuard {

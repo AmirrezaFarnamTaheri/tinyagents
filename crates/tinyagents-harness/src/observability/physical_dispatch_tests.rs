@@ -493,9 +493,9 @@ fn a_cancelled_dispatch_keeps_its_first_output_time() {
     let mut guard =
         PhysicalDispatchGuard::new(observer.on_start(&PhysicalDispatchMetadata::default()));
     guard.note_output();
-    let first = guard.first_output_for_test();
+    let first = guard.first_output;
     guard.note_output();
-    assert_eq!(guard.first_output_for_test(), first, "the first time is kept");
+    assert_eq!(guard.first_output, first, "the first time is kept");
     drop(guard);
 
     let outcomes = recorder.0.lock().unwrap();
