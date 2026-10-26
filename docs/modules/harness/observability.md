@@ -164,6 +164,26 @@ invocation while the existing logical `TurnObservation::Model` event remains
 available for compatibility. Calls refused before provider admission produce
 no physical dispatch event.
 
+### Who served a call, and when its first token arrived
+
+Both `TurnObservation::Model` and `TurnObservation::ModelDispatch` (and
+`PhysicalDispatchOutcome`) carry three provider-neutral facts besides usage
+(which already includes `reasoning_tokens`):
+
+| Field | Source | `None` when |
+| --- | --- | --- |
+| `served_by` | a top-level `provider` string on the response's `raw` (OpenRouter names the upstream provider that served the call there, for example `"DeepInfra"`) | the response does not name one, as for a provider that serves calls itself |
+| `response_id` | the provider's response id, which the adapters keep on `AssistantMessage::id` for buffered and streamed responses alike (`chatcmpl-…`, OpenRouter's `gen-…`, `msg_…`); a top-level `raw.id` is the fallback | the provider sent no id |
+| `first_token_ms` (`first_output` on the outcome) | the time from the call's start to its first streamed output: text, reasoning or a tool-call fragment; stream markers, usage updates and empty deltas do not count | the call was buffered, or the stream produced no output |
+
+For `Model`, the agent loop records the first output of each streaming attempt
+on the run context, so with retries the time belongs to the attempt whose
+response the call returned, measured from the start of the logical call. For
+`ModelDispatch`, it is measured within the one physical invocation. A streamed
+OpenAI-compatible response keeps `provider` in `raw` because it is outside the
+chunk schema; the chunk `id` is not kept in `raw`, which is why `response_id`
+reads the message id first.
+
 ## Latency Metrics
 
 The observability module exposes `AgentLatencyMetrics` for durable latency
