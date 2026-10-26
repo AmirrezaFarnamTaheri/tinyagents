@@ -6,7 +6,7 @@ use super::*;
 use crate::run_ledger::inbox::{AddressedInput, QueuedInput, RunInboxStore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use tinystoragedrivers_core::{ErrorKind, ExpectedDocument, Precondition, ReadCheck};
+use tinystoragedrivers_types::{ErrorKind, ExpectedDocument, Precondition, ReadCheck};
 
 #[derive(Clone, Serialize, Deserialize)]
 struct StoredInput {

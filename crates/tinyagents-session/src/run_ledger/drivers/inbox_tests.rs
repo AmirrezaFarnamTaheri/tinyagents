@@ -1,6 +1,6 @@
 use super::*;
 use crate::run_ledger::inbox::InputMode;
-use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
+use crate::testkit::MemoryStorage;
 
 fn ledger() -> DriverRunLedger {
     DriverRunLedger::new(

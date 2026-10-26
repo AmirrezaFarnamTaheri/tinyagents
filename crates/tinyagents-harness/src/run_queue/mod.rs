@@ -487,10 +487,10 @@ impl<T> RunQueue<T> {
             .iter_mut()
             .chain(followups.iter_mut())
             .chain(collects.iter_mut())
-            .find(|item| pred(item));
+            .find(|item| pred(&item.value));
         match item {
             Some(item) => {
-                edit(item);
+                edit(&mut item.value);
                 true
             }
             None => false,
@@ -520,7 +520,7 @@ impl<T> RunQueue<T> {
             [steers, followups, collects].into_iter().find_map(|items| {
                 items
                     .iter()
-                    .position(&pred)
+                    .position(|item| pred(&item.value))
                     .map(|position| items.remove(position))
             })
         };

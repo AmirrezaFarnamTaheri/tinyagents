@@ -20,6 +20,12 @@ the generic artifact-filing wrapper at `tinyagents_harness_tools::media`, and
 `tinyagents_harness_tools::plan_review`. These features do not change the
 default set.
 
+The opt-in `code` feature enables `fs` and exposes six deferred structural tools
+through `code_tools` / `code_tools_with_options`. They use the pure
+`tinytools-code` parser and this crate's existing `fs::filesystem::FsGate` and
+`fs::file_state`, so structural writes share the host's filesystem policy and
+stale-read tracking. See the [structural tool contract](src/code/README.md).
+
 ## Public modules and tools
 
 - `goals` provides `GoalStore`, `GoalTool`, observer notifications, atomic
@@ -39,6 +45,8 @@ default set.
   `tinyagents_orchestration::subagent::SubAgentJobRegistry`.
 - `thread_locks` provides the public `ThreadLockMap` concurrency primitive.
 - `fs` provides filesystem tools and file-state operations in `fs`.
+- `code` provides bounded syntax inspection and revision-checked structural
+  edits behind the same filesystem gate.
 - `net` provides network tools in `net`.
 - `exec` provides `ExecTool`, `InstallTool`, process timeout utilities, and
   host-supplied execution ports in `exec`.

@@ -19,6 +19,11 @@ mod time;
 mod time_parse;
 mod wait;
 
+#[cfg(feature = "code")]
+pub mod code;
+#[cfg(feature = "code")]
+pub use code::{CodeToolOptions, code_tools, code_tools_with_options};
+
 #[cfg(feature = "exec")]
 pub mod exec;
 #[cfg(feature = "fs")]
