@@ -134,6 +134,30 @@ fn bootstrap_manifest_contains_all_session_document_indexes() {
 }
 
 #[tokio::test]
+async fn preparation_admits_a_store_declared_by_the_metadata_ordered_release() {
+    use tinystoragedrivers_types::{CollectionSpec, IndexSpec};
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let scoped = backend
+        .for_scope(&Scope::new("declared-before-created-ms").unwrap())
+        .unwrap();
+    // What releases that ordered transcripts by record metadata persisted.
+    scoped
+        .documents()
+        .ensure_collection(
+            &CollectionSpec::new("session.transcripts")
+                .index(IndexSpec::new("by_thread", ["thread_id", "_created_ms"]))
+                .index(IndexSpec::new("by_agent_name", ["agent_name", "_created_ms"]))
+                .index(IndexSpec::new("by_agent_id", ["agent_id", "_created_ms"])),
+        )
+        .await
+        .unwrap();
+
+    DriverSessionStores::prepare_schema(scoped.documents().as_ref())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     {
