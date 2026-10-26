@@ -12,7 +12,7 @@
 //!   be looked up with the provider afterwards. The provider adapters keep it
 //!   on the assistant message for both buffered and streamed responses; a
 //!   top-level `id` on `raw` is the fallback.
-//! - [`is_first_output`]: whether a stream item is model output (text,
+//! - [`is_output`]: whether a stream item is model output (text,
 //!   reasoning or a tool call), the event that marks the time to first token.
 use serde_json::Value;
 use tinyinference_llm::model::{ModelResponse, ModelStreamItem};
@@ -47,7 +47,7 @@ pub(crate) fn response_id(response: &ModelResponse) -> Option<String> {
 
 /// Whether `item` carries model output: text, reasoning or a tool call.
 /// Stream-opened markers, usage updates and empty deltas do not count.
-pub(crate) fn is_first_output(item: &ModelStreamItem) -> bool {
+pub(crate) fn is_output(item: &ModelStreamItem) -> bool {
     match item {
         ModelStreamItem::MessageDelta(delta) => {
             !delta.text.is_empty() || !delta.reasoning.is_empty() || delta.tool_call.is_some()
