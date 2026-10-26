@@ -48,7 +48,10 @@ fn an_external_provider_can_return_a_lease_over_its_own_stores() {
         .lease_for_agent("agent-a")
         .expect("a provider with fixed handles can lease them");
 
-    assert!(Arc::ptr_eq(&opened.turn_states, &lease.stores().turn_states));
+    assert!(Arc::ptr_eq(
+        &opened.turn_states,
+        &lease.stores().turn_states
+    ));
 }
 
 #[tokio::test]
