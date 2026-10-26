@@ -151,9 +151,7 @@ impl crate::observability::PhysicalDispatchTerminal for ExplicitDispatchTerminal
                 served_by: outcome.served_by,
                 response_id: outcome.response_id,
                 duration_ms: outcome.duration.as_millis() as u64,
-                first_token_ms: outcome
-                    .first_output
-                    .map(|first| first.as_millis() as u64),
+                first_token_ms: outcome.first_output.map(|first| first.as_millis() as u64),
                 status: outcome.status,
                 refused: outcome.refused,
                 usage: outcome.usage.map(|usage| ObservedUsage {

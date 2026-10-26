@@ -26,7 +26,10 @@ fn served_by_is_none_without_a_provider_string() {
         None
     );
     assert_eq!(
-        served_by(&response_with(Some(json!({"provider": {"name": "x"}})), None)),
+        served_by(&response_with(
+            Some(json!({"provider": {"name": "x"}})),
+            None
+        )),
         None
     );
 }

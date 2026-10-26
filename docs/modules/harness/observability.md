@@ -153,7 +153,8 @@ Event kinds should include:
 `observability::physical_dispatch::ObservedChatModel` wraps a concrete provider
 and calls `PhysicalDispatchObserver::on_start` only after the caller's budget
 wrapper has admitted the request. Its terminal callback reports provider
-usage, model and finish reason without prompts, outputs, raw errors, or provider
+usage, model, finish reason, the serving provider, the response id and the time
+to first output, without prompts, outputs, raw errors, or other provider
 metadata. Dropping an in-flight invocation or unfinished stream reports
 cancellation exactly once. Streaming calls remain streaming and finish only on
 a terminal stream item.
