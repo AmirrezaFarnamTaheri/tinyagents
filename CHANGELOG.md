@@ -25,6 +25,10 @@ provider's response id (`gen-…` on OpenRouter) and `first_token_ms` is the
 time to the first streamed text, reasoning or tool-call output. See
 `docs/modules/harness/observability.md`.
 
+OTLP export (`otlp_requests`) now splits a generation's reasoning tokens
+(`gen_ai.usage.reasoning_tokens`) out of `output` into Langfuse's
+`output_reasoning_tokens` usage bucket. `total` is unchanged.
+
 ## Unreleased: `AgentProgress::ContextCompacting`
 
 **Breaking.** Added `AgentProgress::ContextCompacting` to the public
