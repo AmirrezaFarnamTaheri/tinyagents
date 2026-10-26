@@ -146,7 +146,10 @@ async fn preparation_admits_a_store_declared_by_the_metadata_ordered_release() {
         .ensure_collection(
             &CollectionSpec::new("session.transcripts")
                 .index(IndexSpec::new("by_thread", ["thread_id", "_created_ms"]))
-                .index(IndexSpec::new("by_agent_name", ["agent_name", "_created_ms"]))
+                .index(IndexSpec::new(
+                    "by_agent_name",
+                    ["agent_name", "_created_ms"],
+                ))
                 .index(IndexSpec::new("by_agent_id", ["agent_id", "_created_ms"])),
         )
         .await
