@@ -117,8 +117,7 @@ async fn observe_streamed_turn(sse_body: &'static str) -> Vec<TurnObservation> {
             .expect("the streamed run succeeds");
     })
     .await;
-    let events = recorder.0.lock().unwrap().clone();
-    events
+    recorder.0.lock().unwrap().clone()
 }
 
 #[tokio::test]
