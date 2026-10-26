@@ -2026,9 +2026,9 @@ dependencies = [
  "tinyinference-llm",
  "tinyinference-providers",
  "tinyinference-video",
- "tinystoragedrivers-api",
+ "tinystoragedrivers-api 2.1.1",
  "tinystoragedrivers-testkit",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.1",
  "tinytools",
  "tinytools-agent",
  "tokio",
@@ -2114,11 +2114,11 @@ dependencies = [
  "tinyagents-tasks",
  "tinyinference-embeddings",
  "tinyinference-llm",
- "tinystoragedrivers-api",
+ "tinystoragedrivers-api 2.1.1",
  "tinystoragedrivers-connect",
- "tinystoragedrivers-document",
+ "tinystoragedrivers-document 2.1.1",
  "tinystoragedrivers-testkit",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.1",
  "tinytools",
  "tokio",
 ]
@@ -2159,7 +2159,7 @@ dependencies = [
  "tinyagents-tasks",
  "tinyinference-llm",
  "tinystoragedrivers-connect",
- "tinystoragedrivers-document",
+ "tinystoragedrivers-document 2.1.1",
  "tinystoragedrivers-testkit",
  "tinytools",
  "tokio",
@@ -2202,11 +2202,11 @@ dependencies = [
  "tinyagents-storage-kit",
  "tinyinference-llm",
  "tinystoragedrivers",
- "tinystoragedrivers-api",
+ "tinystoragedrivers-api 2.1.1",
  "tinystoragedrivers-connect",
- "tinystoragedrivers-document",
+ "tinystoragedrivers-document 2.1.1",
  "tinystoragedrivers-testkit",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.1",
  "tinytools",
  "tokio",
  "tracing",
@@ -2230,11 +2230,11 @@ dependencies = [
  "tinyagents-harness",
  "tinyagents-storage-kit",
  "tinyagents-tasks",
- "tinystoragedrivers-api",
+ "tinystoragedrivers-api 2.1.1",
  "tinystoragedrivers-connect",
- "tinystoragedrivers-document",
+ "tinystoragedrivers-document 2.1.0",
  "tinystoragedrivers-testkit",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.1",
  "tinytools-agent",
  "tokio",
  "tracing",
@@ -2249,10 +2249,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "tinystoragedrivers-api",
+ "tinystoragedrivers-api 2.1.1",
  "tinystoragedrivers-busproxy",
  "tinystoragedrivers-testkit",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.1",
  "tokio",
  "uuid",
 ]
@@ -2268,7 +2268,7 @@ dependencies = [
  "tinyagents-storage-kit",
  "tinyinference-llm",
  "tinystoragedrivers-connect",
- "tinystoragedrivers-document",
+ "tinystoragedrivers-document 2.1.0",
  "tinystoragedrivers-testkit",
  "tokio",
  "tracing",
@@ -2336,8 +2336,8 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tinyinference-core",
- "tinystoragedrivers-api",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-api 2.1.0",
+ "tinystoragedrivers-types 2.1.0",
  "tokio",
  "tracing",
 ]
@@ -2373,7 +2373,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "tinystoragedrivers-api",
+ "tinystoragedrivers-api 2.1.0",
  "tracing",
  "url",
  "zeroize",
@@ -2412,17 +2412,17 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers"
-version = "2.1.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada962decbab33bafa4763d2bd1a67f6b456"
+version = "2.1.1"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=bf1f0a97fbe6165a6edd9521659c7f6859700761#bf1f0a97fbe6165a6edd9521659c7f6859700761"
 dependencies = [
- "tinystoragedrivers-api",
+ "tinystoragedrivers-api 2.1.1",
  "tinystoragedrivers-blob",
  "tinystoragedrivers-connect",
- "tinystoragedrivers-document",
+ "tinystoragedrivers-document 2.1.1",
  "tinystoragedrivers-kv",
  "tinystoragedrivers-queue",
  "tinystoragedrivers-secrets",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.1",
 ]
 
 [[package]]
@@ -2435,14 +2435,28 @@ dependencies = [
  "futures-core",
  "serde",
  "serde_json",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.0",
+ "zeroize",
+]
+
+[[package]]
+name = "tinystoragedrivers-api"
+version = "2.1.1"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=bf1f0a97fbe6165a6edd9521659c7f6859700761#bf1f0a97fbe6165a6edd9521659c7f6859700761"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
+ "serde",
+ "serde_json",
+ "tinystoragedrivers-types 2.1.1",
  "zeroize",
 ]
 
 [[package]]
 name = "tinystoragedrivers-blob"
-version = "2.1.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada962decbab33bafa4763d2bd1a67f6b456"
+version = "2.1.1"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=bf1f0a97fbe6165a6edd9521659c7f6859700761#bf1f0a97fbe6165a6edd9521659c7f6859700761"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2450,9 +2464,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "tinystoragedrivers-api",
+ "tinystoragedrivers-api 2.1.1",
  "tinystoragedrivers-connect",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.1",
 ]
 
 [[package]]
@@ -2463,7 +2477,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tinybus",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.0",
 ]
 
 [[package]]
@@ -2477,21 +2491,21 @@ dependencies = [
  "serde",
  "serde_json",
  "tinybus",
- "tinystoragedrivers-api",
+ "tinystoragedrivers-api 2.1.0",
  "tinystoragedrivers-bus",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.0",
  "tokio",
  "zeroize",
 ]
 
 [[package]]
 name = "tinystoragedrivers-connect"
-version = "2.1.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada962decbab33bafa4763d2bd1a67f6b456"
+version = "2.1.1"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=bf1f0a97fbe6165a6edd9521659c7f6859700761#bf1f0a97fbe6165a6edd9521659c7f6859700761"
 dependencies = [
  "rusqlite",
  "serde_json",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.1",
  "tokio",
  "zstd",
 ]
@@ -2503,74 +2517,89 @@ source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962d
 dependencies = [
  "async-trait",
  "data-encoding",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tinystoragedrivers-api 2.1.0",
+ "tinystoragedrivers-types 2.1.0",
+ "zstd",
+]
+
+[[package]]
+name = "tinystoragedrivers-document"
+version = "2.1.1"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=bf1f0a97fbe6165a6edd9521659c7f6859700761#bf1f0a97fbe6165a6edd9521659c7f6859700761"
+dependencies = [
+ "async-trait",
+ "data-encoding",
  "libc",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "tinystoragedrivers-api",
+ "tinystoragedrivers-api 2.1.1",
  "tinystoragedrivers-connect",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.1",
  "tokio",
  "zstd",
 ]
 
 [[package]]
 name = "tinystoragedrivers-kv"
-version = "2.1.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada962decbab33bafa4763d2bd1a67f6b456"
+version = "2.1.1"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=bf1f0a97fbe6165a6edd9521659c7f6859700761#bf1f0a97fbe6165a6edd9521659c7f6859700761"
 dependencies = [
  "async-trait",
  "serde",
  "serde_json",
- "tinystoragedrivers-api",
+ "tinystoragedrivers-api 2.1.1",
  "tinystoragedrivers-connect",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.1",
 ]
 
 [[package]]
 name = "tinystoragedrivers-queue"
-version = "2.1.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada962decbab33bafa4763d2bd1a67f6b456"
+version = "2.1.1"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=bf1f0a97fbe6165a6edd9521659c7f6859700761#bf1f0a97fbe6165a6edd9521659c7f6859700761"
 dependencies = [
  "async-trait",
  "data-encoding",
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "tinystoragedrivers-api",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-api 2.1.1",
+ "tinystoragedrivers-types 2.1.1",
  "tokio",
  "ulid",
 ]
 
 [[package]]
 name = "tinystoragedrivers-secrets"
-version = "2.1.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada962decbab33bafa4763d2bd1a67f6b456"
+version = "2.1.1"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=bf1f0a97fbe6165a6edd9521659c7f6859700761#bf1f0a97fbe6165a6edd9521659c7f6859700761"
 dependencies = [
  "async-trait",
- "tinystoragedrivers-api",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-api 2.1.1",
+ "tinystoragedrivers-types 2.1.1",
  "zeroize",
 ]
 
 [[package]]
 name = "tinystoragedrivers-testkit"
-version = "2.1.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada962decbab33bafa4763d2bd1a67f6b456"
+version = "2.1.1"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=bf1f0a97fbe6165a6edd9521659c7f6859700761#bf1f0a97fbe6165a6edd9521659c7f6859700761"
 dependencies = [
  "async-trait",
  "bytes",
  "futures-util",
  "serde_json",
- "tinystoragedrivers-api",
+ "tinystoragedrivers-api 2.1.1",
  "tinystoragedrivers-blob",
- "tinystoragedrivers-document",
+ "tinystoragedrivers-document 2.1.1",
  "tinystoragedrivers-kv",
  "tinystoragedrivers-queue",
  "tinystoragedrivers-secrets",
- "tinystoragedrivers-types",
+ "tinystoragedrivers-types 2.1.1",
  "tokio",
  "ulid",
  "zeroize",
@@ -2580,6 +2609,16 @@ dependencies = [
 name = "tinystoragedrivers-types"
 version = "2.1.0"
 source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=05eaada962decbab33bafa4763d2bd1a67f6b456#05eaada962decbab33bafa4763d2bd1a67f6b456"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "tinystoragedrivers-types"
+version = "2.1.1"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?rev=bf1f0a97fbe6165a6edd9521659c7f6859700761#bf1f0a97fbe6165a6edd9521659c7f6859700761"
 dependencies = [
  "serde",
  "serde_json",
