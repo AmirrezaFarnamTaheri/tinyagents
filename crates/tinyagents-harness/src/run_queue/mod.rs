@@ -58,6 +58,11 @@ pub use types::{
 #[derive(Debug)]
 pub struct RunQueue<T> {
     inner: Mutex<RunQueueInner<T>>,
+    /// Serialize admission with host edits and lane moves. Admission releases
+    /// the lane mutex while consulting its lifecycle capability, so without
+    /// this separate gate a Retry item temporarily looks already consumed.
+    /// Producers still push without taking this gate.
+    admission_mutation_gate: tokio::sync::Mutex<()>,
 }
 
 /// The three FIFO lanes behind [`RunQueue`]'s lock.
@@ -121,6 +126,7 @@ impl<T> RunQueue<T> {
                 followups: Vec::new(),
                 collects: Vec::new(),
             }),
+            admission_mutation_gate: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -172,6 +178,11 @@ impl<T> RunQueue<T> {
         lane: QueueLane,
         mode: QueueMode,
     ) -> Vec<AdmittedQueueItem<T>> {
+        // A temporarily removed item must be either fully admitted/rejected or
+        // requeued before edit_first_where/move_first_where decide it is gone.
+        // Never hold the lane mutex while acquiring a durable permit; queue
+        // producers are not serialized by this gate.
+        let _admission_guard = self.admission_mutation_gate.lock().await;
         if mode == QueueMode::OneAtATime {
             let mut permits = std::collections::HashMap::new();
             let count = {
@@ -477,6 +488,9 @@ impl<T> RunQueue<T> {
         pred: impl Fn(&T) -> bool,
         edit: impl FnOnce(&mut T),
     ) -> bool {
+        // If take_admitted is inspecting a removed guarded item, wait until
+        // Retry has requeued it or acceptance has definitively consumed it.
+        let _admission_guard = self.admission_mutation_gate.lock().await;
         let mut inner = self.lock();
         let RunQueueInner {
             steers,
@@ -510,6 +524,7 @@ impl<T> RunQueue<T> {
         lane: QueueLane,
         index: usize,
     ) -> bool {
+        let _admission_guard = self.admission_mutation_gate.lock().await;
         let mut inner = self.lock();
         let item = {
             let RunQueueInner {
