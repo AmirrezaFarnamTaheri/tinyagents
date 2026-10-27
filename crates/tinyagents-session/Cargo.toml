@@ -15,6 +15,7 @@ anyhow = { workspace = true }
 thiserror = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { version = "1", features = ["derive", "chrono04"] }
 tinyagents-harness = { path = "../tinyagents-harness", version = "3.0.0", default-features = false, features = ["sqlite"] }
 # `OrchestrationTaskStatus` is the canonical lifecycle status the run-ledger and
 # transcript-view statuses convert to and from.
@@ -48,7 +49,7 @@ storage-drivers = []
 
 [dev-dependencies]
 tinystoragedrivers-connect = { workspace = true }
-tinystoragedrivers-document = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }
+tinystoragedrivers-document = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "29471a164619bcec03e5858a7d7ee0c65f52bf22" }
 tinystoragedrivers-testkit = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }

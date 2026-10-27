@@ -637,7 +637,9 @@ pub struct TraceCounts {
 /// the middleware's allowlist, which stay available in either mode so a host
 /// can keep read-only tools and a handful of plan-mode-specific tools (e.g.
 /// `plan_exit`, `request_plan_review`, `todo`) reachable while planning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
 pub enum RunMode {
     /// Every registered tool may be exposed and executed. The default.
     #[default]

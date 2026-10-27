@@ -16,6 +16,7 @@ fn test_meta(thread_id: &str) -> TranscriptMeta {
         updated: "2026-01-01T00:00:00Z".to_string(),
         turn_count: 0,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,
@@ -169,6 +170,7 @@ fn the_newest_root_wins_and_sub_agents_are_never_roots() {
         updated: "2026-01-01T00:00:00Z".to_string(),
         turn_count: 0,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,
@@ -267,6 +269,41 @@ fn an_unwritten_successor_is_reserved_until_written_or_dropped() {
             .begin_generation(&session, test_meta("thread-reservation"))
             .is_err()
     );
+}
+
+#[test]
+fn probing_for_the_head_generation_does_not_reserve_the_next_one() {
+    let locator = InMemoryTranscriptLocator::new("test");
+    let session = SessionRef::scoped("thread-probe", "planner");
+    let meta = test_meta("thread-probe");
+    let baseline = vec![TranscriptMessage::user("hello")];
+    locator
+        .open_session(&session, meta.clone())
+        .unwrap()
+        .append(baseline[0].clone())
+        .unwrap();
+
+    // Resuming asks for the head, which probes the successor generation.
+    assert_eq!(locator.head_generation(&session), session);
+    assert!(!locator.session_exists(&session.next_generation()));
+    assert!(locator.session_chain(&session).len() == 1);
+
+    let (successor, _) = locator
+        .begin_generation_from_baseline(&session, meta, &baseline)
+        .expect("a probe leaves no state for the next generation to collide with");
+    assert_eq!(successor, session.next_generation());
+}
+
+#[test]
+fn a_begun_generation_stays_reserved_after_probing_for_it() {
+    let locator = InMemoryTranscriptLocator::new("test");
+    let session = SessionRef::scoped("thread-probe-reserved", "planner");
+    let meta = test_meta("thread-probe-reserved");
+    let (successor, _) = locator.begin_generation(&session, meta.clone()).unwrap();
+
+    assert!(!locator.session_exists(&successor));
+    assert!(locator.read_session_transcript(&successor).is_none());
+    assert!(locator.begin_generation(&session, meta).is_err());
 }
 
 #[test]

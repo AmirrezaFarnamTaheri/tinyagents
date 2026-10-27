@@ -202,13 +202,22 @@ pub(super) fn collection_specs() -> [CollectionSpec; 2] {
         CollectionSpec::new(ENTRIES)
             .index(IndexSpec::new("by_stem", ["stem", "seq"]))
             .index(IndexSpec::new("by_stem_written", ["stem", "written"])),
+        // Named `*_created`, not `by_thread` and friends: those names are
+        // persisted by earlier releases on `_created_ms` record metadata, and
+        // a store refuses an index redeclared with different fields.
         CollectionSpec::new(INDEX)
-            .index(IndexSpec::new("by_thread", ["thread_id", CREATED_FIELD]))
             .index(IndexSpec::new(
-                "by_agent_name",
+                "by_thread_created",
+                ["thread_id", CREATED_FIELD],
+            ))
+            .index(IndexSpec::new(
+                "by_agent_name_created",
                 ["agent_name", CREATED_FIELD],
             ))
-            .index(IndexSpec::new("by_agent_id", ["agent_id", CREATED_FIELD])),
+            .index(IndexSpec::new(
+                "by_agent_id_created",
+                ["agent_id", CREATED_FIELD],
+            )),
     ]
 }
 
@@ -746,6 +755,25 @@ impl TranscriptHistory for DriverTranscriptHistory {
         .map(|_| ())
     }
 
+    fn adopt_if_empty(&self, messages: &[TranscriptMessage]) -> anyhow::Result<bool> {
+        let messages = normalized(messages.to_vec());
+        if messages.is_empty() {
+            return Ok(false);
+        }
+        self.commit(move |replay, seed| {
+            if replay.written {
+                return Ok(None);
+            }
+            anyhow::ensure!(!replay.sealed, "transcript generation is sealed");
+            Ok(Some(Entry {
+                written: true,
+                meta: Some(seed.clone()),
+                set: Some(messages.clone()),
+                ..Entry::default()
+            }))
+        })
+    }
+
     fn replace(&self, messages: &[TranscriptMessage]) -> anyhow::Result<()> {
         let messages = normalized(messages.to_vec());
         self.commit(move |replay, seed| {
@@ -982,6 +1010,7 @@ fn discovered_seed(stem: &str) -> TranscriptMeta {
         updated: String::new(),
         turn_count: 0,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,

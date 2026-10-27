@@ -20,7 +20,7 @@ use serde_json::Value;
 ///
 /// Distinguishes the several call sites that create a run row so listings and
 /// UI can filter by origin without inferring it from other fields.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentRunKind {
     /// A synchronous sub-agent invocation nested inside a parent run.
@@ -68,7 +68,7 @@ impl AgentRunKind {
 ///
 /// Convertible to and from the canonical `tinyagents_tasks::OrchestrationTaskStatus`
 /// (see `status_map.rs`); the serialized form is unchanged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentRunStatus {
     /// Created but not yet started.
@@ -186,7 +186,7 @@ impl WorkflowRunStatus {
 
 /// A persisted background agent run: a subagent, worker thread, background
 /// agent, team member, or workflow child, as classified by `kind`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRun {
     /// Caller-supplied stable identifier.
@@ -278,7 +278,7 @@ pub enum WorkflowLeaseClaim {
 ///
 /// `sequence` is allocated by the insert itself (see `super::ops`) rather
 /// than computed by the caller, so concurrent appenders cannot collide.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunEvent {
     pub run_id: String,
@@ -296,7 +296,7 @@ pub struct RunEvent {
 ///
 /// One row per `run_id`, updated in place as a run progresses (see
 /// `super::ops::upsert_run_telemetry` for how partial updates are coalesced).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunTelemetry {
     pub run_id: String,
@@ -406,7 +406,7 @@ pub struct AgentRunListRequest {
 }
 
 /// Response shape for `super::ops::list_agent_runs`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRunListResponse {
     pub runs: Vec<AgentRun>,
@@ -455,7 +455,7 @@ pub struct RunEventListRequest {
 }
 
 /// Response shape for `super::ops::list_recent_run_events`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunEventListResponse {
     pub events: Vec<RunEvent>,
@@ -795,3 +795,7 @@ pub enum RunTransition {
     /// No run has this id.
     NotFound,
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;
