@@ -30,6 +30,116 @@ impl QueueAdmission for RetryOnce {
     }
 }
 
+// Admission may consult a durable lifecycle while the queue mutex is free.
+// Concurrent edits and lane moves must not falsely report a Retry item as
+// consumed during that temporary absence from the visible lane.
+#[derive(Debug)]
+struct PausedRetryAdmission {
+    entered: Arc<std::sync::Barrier>,
+    release: Arc<std::sync::Barrier>,
+}
+
+impl QueueAdmission for PausedRetryAdmission {
+    fn acquire(&self) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
+        self.entered.wait();
+        self.release.wait();
+        Err(QueueAdmissionError::Retry)
+    }
+}
+
+#[tokio::test]
+async fn edit_waits_for_in_flight_admission_before_reporting_consumed() {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    let queue = Arc::new(RunQueue::new());
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    queue
+        .push_guarded(
+            QueueLane::Followup,
+            "pending".to_string(),
+            Arc::new(PausedRetryAdmission {
+                entered: Arc::clone(&entered),
+                release: Arc::clone(&release),
+            }),
+        )
+        .await;
+    let worker_queue = Arc::clone(&queue);
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(worker_queue.take_admitted(QueueLane::Followup, QueueMode::All))
+            .is_empty()
+    });
+    entered.wait();
+    let mut edit = std::pin::pin!(queue.edit_first_where(
+        |item| item == "pending",
+        |item| *item = "revised".to_string(),
+    ));
+    let mut context = Context::from_waker(Waker::noop());
+    let pending = matches!(Future::poll(edit.as_mut(), &mut context), Poll::Pending);
+    release.wait();
+    assert!(worker.join().unwrap(), "first admission must retry");
+    assert!(
+        pending,
+        "editing an in-flight item must wait, not report already consumed"
+    );
+    assert!(edit.await);
+    assert_eq!(
+        queue.snapshot().await,
+        vec![(QueueLane::Followup, "revised".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn move_waits_for_in_flight_admission_before_reporting_consumed() {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    let queue = Arc::new(RunQueue::new());
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    queue
+        .push_guarded(
+            QueueLane::Followup,
+            "pending".to_string(),
+            Arc::new(PausedRetryAdmission {
+                entered: Arc::clone(&entered),
+                release: Arc::clone(&release),
+            }),
+        )
+        .await;
+    let worker_queue = Arc::clone(&queue);
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(worker_queue.take_admitted(QueueLane::Followup, QueueMode::OneAtATime))
+            .is_empty()
+    });
+    entered.wait();
+    let mut move_item = std::pin::pin!(queue.move_first_where(
+        |item| item == "pending",
+        QueueLane::Steer,
+        0,
+    ));
+    let mut context = Context::from_waker(Waker::noop());
+    let pending = matches!(Future::poll(move_item.as_mut(), &mut context), Poll::Pending);
+    release.wait();
+    assert!(worker.join().unwrap(), "first admission must retry");
+    assert!(
+        pending,
+        "moving an in-flight item must wait, not report already consumed"
+    );
+    assert!(move_item.await);
+    assert_eq!(
+        queue.snapshot().await,
+        vec![(QueueLane::Steer, "pending".to_string())]
+    );
+}
+
 #[tokio::test]
 async fn transient_admission_result_retains_item_for_the_next_boundary() {
     let queue = RunQueue::new();
