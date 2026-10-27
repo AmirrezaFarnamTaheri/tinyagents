@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     BlobStore, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, Precondition, Query, Sort,
     WriteOptions,
 };
@@ -63,9 +63,34 @@ impl BlobAttachmentStash {
     /// Prefix of every blob key this stash writes.
     pub const KEY_PREFIX: &'static str = "harness/attachments/";
 
+    /// Open the scope's harness storage (running the harness's migrations once
+    /// per scope, see [`crate::storage::open_storage`]) and stash attachments in it. Prefer
+    /// this over [`Self::new`].
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::TinyAgentsError::Storage`] when the migration fails.
+    pub async fn open(
+        storage: tinyagents_storage_kit::ScopedStorage,
+        max_bytes: u64,
+        ttl: Duration,
+    ) -> crate::error::Result<Self> {
+        let storage = crate::storage::open_storage(storage)
+            .await
+            .map_err(crate::store::map_driver_error)?;
+        Ok(Self::new(
+            Arc::clone(storage.blobs()),
+            Arc::clone(storage.documents()),
+            max_bytes,
+            ttl,
+        ))
+    }
+
     /// A stash that, after each new write, evicts the least recently used
     /// attachments until the total is back under `max_bytes`;
-    /// [`Self::sweep_stale`] removes attachments untouched for `ttl`.
+    /// [`Self::sweep_stale`] removes attachments untouched for `ttl`. The
+    /// caller must have opened the scope's harness storage first; prefer
+    /// [`Self::open`].
     pub fn new(
         blobs: Arc<dyn BlobStore>,
         index: Arc<dyn DocumentStore>,

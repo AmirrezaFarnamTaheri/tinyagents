@@ -268,11 +268,18 @@ fn reasoning_only_replay_does_not_add_an_empty_text_block() {
     ));
 }
 
-/// Marker lifting is a host compatibility policy, not this typed conversion core.
+/// Untyped transcript text lifts legacy image references while leaving other
+/// product marker syntax untouched.
 #[test]
-fn untyped_user_text_is_preserved_without_interpreting_legacy_markers() {
+fn untyped_user_text_lifts_images_and_preserves_other_marker_text() {
     let row = TranscriptMessage::user("literal [IMAGE:old-path] and [FILE:file]");
-    assert_eq!(transcript_to_message(&row).text(), row.content);
+    let Message::User(user) = transcript_to_message(&row) else {
+        panic!("user");
+    };
+    assert_eq!(user.content.len(), 3);
+    assert!(matches!(&user.content[0], ContentBlock::Text(text) if text == "literal"));
+    assert!(matches!(&user.content[1], ContentBlock::Image(image) if image.url == "old-path"));
+    assert!(matches!(&user.content[2], ContentBlock::Text(text) if text == "and [FILE:file]"));
     let row = TranscriptMessage::user_with_parts(Vec::new());
     let Message::User(user) = transcript_to_message(&row) else {
         panic!("user");
@@ -373,4 +380,139 @@ fn native_history_decode_rejects_display_rows_and_unanswered_or_duplicate_result
     let mut interrupted = native.clone();
     interrupted.insert(1, TranscriptMessage::user("interrupt"));
     assert!(native_transcript_to_messages(&interrupted).is_err());
+}
+
+#[test]
+fn legacy_image_markers_lift_in_order_and_keep_malformed_markers_as_text() {
+    let png = "data:image/png;base64,AA==";
+    let jpeg = "https://example.test/image.jpg";
+    let original = format!(
+        "before [IMAGE:{png}] between [IMAGE:{jpeg}] after [IMAGE:] broken [IMAGE:unterminated"
+    );
+    let row = TranscriptMessage::user(original.clone());
+    let message = transcript_to_message(&row);
+
+    let Message::User(user) = message else {
+        panic!("user row");
+    };
+    assert_eq!(
+        user.content,
+        vec![
+            ContentBlock::Text("before".into()),
+            ContentBlock::Image(ImageRef {
+                url: png.into(),
+                mime_type: Some("image/png".into()),
+            }),
+            ContentBlock::Text("between".into()),
+            ContentBlock::Image(ImageRef {
+                url: jpeg.into(),
+                mime_type: None,
+            }),
+            ContentBlock::Text("after [IMAGE:] broken [IMAGE:unterminated".into()),
+        ]
+    );
+    assert_eq!(row.content, original);
+}
+
+#[test]
+fn legacy_user_text_parser_preserves_prose_whitespace_around_images() {
+    let source = " before  [IMAGE:data:image/png;base64,AA==]  between [IMAGE:] after ";
+    let message = user_message_from_text(source);
+    let Message::User(user) = message else {
+        panic!("user message");
+    };
+    assert_eq!(
+        user.content,
+        vec![
+            ContentBlock::Text(" before  ".into()),
+            ContentBlock::Image(ImageRef {
+                url: "data:image/png;base64,AA==".into(),
+                mime_type: Some("image/png".into()),
+            }),
+            ContentBlock::Text("  between [IMAGE:] after ".into()),
+        ]
+    );
+}
+
+#[test]
+fn history_helpers_preserve_last_user_and_explicit_request_boundaries() {
+    let messages = vec![
+        Message::assistant("prior"),
+        Message::user("current"),
+        Message::assistant("tool prelude"),
+        Message::tool("call-1", "result"),
+        Message::user("steer"),
+        Message::assistant("answer"),
+    ];
+
+    assert_eq!(messages_since_last_user(&messages), &[messages[5].clone()]);
+    assert_eq!(
+        messages_since_last_user(&messages[..1]),
+        &[messages[0].clone()]
+    );
+    assert!(messages_since_last_user(&[]).is_empty());
+    assert_eq!(
+        messages_since_request(&messages, 2),
+        &messages[2..],
+        "the boundary retains assistant/tool/steer messages in order"
+    );
+    assert!(messages_since_request(&messages, usize::MAX).is_empty());
+    assert!(messages_since_request(&[], 0).is_empty());
+}
+
+#[test]
+fn conversation_projection_groups_tool_results_and_keeps_typed_calls() {
+    let Message::Assistant(mut assistant) = Message::assistant("calling") else {
+        unreachable!()
+    };
+    assistant.tool_calls = vec![TaToolCall::new(
+        "call-1",
+        "lookup",
+        serde_json::json!({"q": "x"}),
+    )];
+    let messages = vec![
+        Message::user("go"),
+        Message::Assistant(assistant),
+        Message::tool("call-1", "first"),
+        Message::tool("call-2", "second"),
+        Message::Custom(tinyinference_llm::message::CustomMessage {
+            kind: "note".into(),
+            payload: serde_json::json!({"text": "hidden"}),
+            display: None,
+        }),
+        Message::assistant("done"),
+    ];
+
+    let entries = messages_to_conversation(&messages);
+    assert_eq!(entries.len(), 4);
+    assert!(matches!(
+        &entries[0],
+        TranscriptEntry::Chat(chat) if chat.role == DialectRole::User && chat.content == "go"
+    ));
+    match &entries[1] {
+        TranscriptEntry::AssistantToolCalls {
+            text, tool_calls, ..
+        } => {
+            assert_eq!(text.as_deref(), Some("calling"));
+            assert_eq!(tool_calls.len(), 1);
+            assert_eq!(tool_calls[0].name, "lookup");
+            assert_eq!(tool_calls[0].arguments, r#"{"q":"x"}"#);
+        }
+        other => panic!("expected typed tool call, got {other:?}"),
+    }
+    match &entries[2] {
+        TranscriptEntry::ToolResults(results) => {
+            assert_eq!(results.len(), 2);
+            assert_eq!(results[0].tool_call_id, "call-1");
+            assert_eq!(results[0].content, "first");
+            assert_eq!(results[1].tool_call_id, "call-2");
+            assert_eq!(results[1].content, "second");
+            assert!(!results[0].trusted_verbatim);
+        }
+        other => panic!("expected grouped tool results, got {other:?}"),
+    }
+    assert!(matches!(
+        &entries[3],
+        TranscriptEntry::Chat(chat) if chat.role == DialectRole::Assistant && chat.content == "done"
+    ));
 }

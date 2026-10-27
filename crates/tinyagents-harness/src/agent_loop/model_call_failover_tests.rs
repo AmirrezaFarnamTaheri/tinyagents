@@ -111,8 +111,15 @@ fn harness_with_primary(
     max_attempts: usize,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("primary", primary);
-    harness.register_model("backup", backup.clone());
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        primary,
+        [(
+            "backup".to_string(),
+            backup.clone() as Arc<dyn ChatModel<()>>,
+        )],
+    )
+    .with_primary_name("primary");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(max_attempts)
@@ -129,8 +136,15 @@ fn harness(
     max_attempts: usize,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("primary", primary.clone());
-    harness.register_model("backup", backup.clone());
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        primary.clone(),
+        [(
+            "backup".to_string(),
+            backup.clone() as Arc<dyn ChatModel<()>>,
+        )],
+    )
+    .with_primary_name("primary");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(max_attempts)
@@ -267,8 +281,15 @@ impl ChatModel<()> for Windowed {
 
 fn windowed_harness(primary: &Arc<Windowed>, sibling: &Arc<Windowed>) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("primary", primary.clone());
-    harness.register_model("sibling", sibling.clone());
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        primary.clone(),
+        [(
+            "sibling".to_string(),
+            sibling.clone() as Arc<dyn ChatModel<()>>,
+        )],
+    )
+    .with_primary_name("primary");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(2)
@@ -383,7 +404,10 @@ async fn plain_auth_failure_is_retried_on_the_next_call() {
 
 fn single_model_harness(model: &Arc<ScriptedOutcomes>) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("primary", model.clone());
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "primary",
+        model.clone(),
+    )));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(1)
@@ -432,9 +456,15 @@ async fn a_fallback_chosen_by_the_skip_hint_is_not_tried_twice() {
     let b = ScriptedOutcomes::failing(400, "bad request", false);
     let c = ScriptedOutcomes::failing(400, "bad request", false);
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("a", a.clone());
-    harness.register_model("b", b.clone());
-    harness.register_model("c", c.clone());
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        a.clone(),
+        [
+            ("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>),
+            ("c".to_string(), c.clone() as Arc<dyn ChatModel<()>>),
+        ],
+    )
+    .with_primary_name("a");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(1)
@@ -451,4 +481,66 @@ async fn a_fallback_chosen_by_the_skip_hint_is_not_tried_twice() {
     assert_eq!(a.attempts(), 0);
     assert_eq!(b.attempts(), 1, "b must be tried once");
     assert_eq!(c.attempts(), 1);
+}
+
+/// Cancels the run's token, then fails with a retryable provider error, so the
+/// next thing the run does is the retry backoff.
+struct CancelThenFail {
+    token: crate::cancel::CancellationToken,
+}
+
+#[async_trait]
+impl ChatModel<()> for CancelThenFail {
+    async fn invoke(
+        &self,
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        self.token.cancel();
+        Err(tinyinference_llm::Error::Provider(Box::new(
+            provider_error(503, "busy", true),
+        )))
+    }
+}
+
+/// A run cancelled while a retry backoff (from the loop's own retry, or from a
+/// `RetryMiddleware`) is pending must end now, not after the backoff.
+#[tokio::test(start_paused = true)]
+async fn a_cancel_during_a_retry_backoff_stops_without_waiting_it_out() {
+    let backoff = RetryPolicy::default()
+        .with_max_attempts(3)
+        .with_initial_backoff_ms(60_000)
+        .with_jitter(false)
+        .with_backoff_sleep(true);
+    for middleware in [false, true] {
+        let token = crate::cancel::CancellationToken::new();
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+            "flaky",
+            Arc::new(CancelThenFail {
+                token: token.clone(),
+            }),
+        )));
+        if middleware {
+            harness.push_model_middleware(Arc::new(
+                crate::middleware::library::RetryMiddleware::new(backoff.clone()),
+            ));
+        }
+        harness.with_policy(RunPolicy {
+            retry: backoff.clone(),
+            ..RunPolicy::default()
+        });
+        let ctx = RunContext::new(RunConfig::new("cancel-backoff"), ()).with_cancellation(token);
+        let started = tokio::time::Instant::now();
+        let err = harness
+            .invoke_in_context(&(), ctx, vec![Message::user("hi")])
+            .await
+            .expect_err("a cancelled run must not complete");
+        assert!(matches!(err, TinyAgentsError::Cancelled), "got {err:?}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "middleware={middleware}: waited {:?} of a 60 s backoff after the cancel",
+            started.elapsed()
+        );
+    }
 }

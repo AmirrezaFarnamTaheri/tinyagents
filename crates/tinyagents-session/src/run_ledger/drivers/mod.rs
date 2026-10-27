@@ -8,14 +8,11 @@ mod agents;
 mod dto;
 mod dto_history;
 mod effects;
-mod entry_tree;
 mod events;
 mod history;
 mod history_retention;
-#[cfg(feature = "legacy-import")]
-mod import;
-#[cfg(feature = "legacy-import")]
-mod legacy_import;
+mod imports;
+mod inbox;
 mod legacy_state;
 mod retention;
 mod schema;
@@ -23,13 +20,6 @@ mod steps;
 mod steps_history;
 mod storage;
 mod team;
-#[cfg(feature = "legacy-import")]
-pub use crate::legacy::{LegacySourceSnapshot, QuiescentSource, SourceOwner};
-#[cfg(feature = "legacy-import")]
-pub use import::AgentImportReport;
-#[cfg(feature = "legacy-import")]
-pub use legacy_import::{ImportCounts, LegacyDatabaseReport};
-
 pub use legacy_state::{LegacyLedgerImport, import_legacy_ledger};
 pub use schema::{history_storage_schema, ledger_storage_schema};
 use std::sync::Arc;
@@ -37,19 +27,19 @@ use storage::{
     LEDGER_OWNER, MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank, now, trunc,
     workflow_lease_key,
 };
-use tinystoragedrivers_core::{Filter, Leases, Query, Scope, ScopedStorage, Sort, StorageError};
+use tinyagents_storage_kit::ScopedStorage;
+use tinyagents_storage_kit::primitives::Leases;
+use tinyagents_storage_kit::{Filter, Query, Scope, Sort, StorageError};
 use tokio::sync::OnceCell;
 
 use super::LedgerResult as Result;
 use chrono::{DateTime, Utc};
-use tinyagents_harness::tinyinference_llm::Message;
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
 use super::port::RunLedgerStore;
 use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
 use super::types::RunTransition;
 use super::types::*;
-use crate::entry_tree::{Branch, Entry, EntryId, EntryKind, Fork};
 use crate::retention::RetentionReport;
 
 /// Ledger storage bound to the supplied tenant/agent scope.
@@ -86,7 +76,7 @@ impl DriverRunLedger {
     }
 
     /// Exact document declarations shared by bootstrap preparation and lazy admission.
-    pub fn collection_specs() -> Vec<tinystoragedrivers_core::CollectionSpec> {
+    pub fn collection_specs() -> Vec<tinystoragedrivers_types::CollectionSpec> {
         storage::specs()
     }
 
@@ -96,7 +86,7 @@ impl DriverRunLedger {
     /// The first native declaration refusal, with no fallback or rollback claim
     /// for earlier successful declarations. This does not prepare native internal schema.
     pub async fn prepare_schema(
-        documents: &dyn tinystoragedrivers_core::DocumentStore,
+        documents: &dyn tinystoragedrivers_api::DocumentStore,
     ) -> std::result::Result<(), StorageError> {
         // The shared `tsd.*` collections (leases, counters, migrations) are
         // declared with them: the ledger reads and writes those too.
@@ -271,6 +261,20 @@ fn apply_workflow(
 
 #[async_trait::async_trait]
 impl RunLedgerStore for DriverRunLedger {
+    async fn import_agent_family(
+        &self,
+        import: super::import::AgentFamilyImport,
+    ) -> Result<super::import::AgentFamilyImportReport> {
+        self.import_agent_family_rows(import).await
+    }
+
+    async fn import_legacy_rows(
+        &self,
+        import: super::import::LegacyLedgerRows,
+    ) -> Result<super::import::LegacyLedgerRowsReport> {
+        self.import_legacy_rows_inner(import).await
+    }
+
     /// Implement [`RunLedgerStore::upsert_agent_run`] without a weaker fallback.
     async fn upsert_agent_run(&self, upsert: AgentRunUpsert) -> Result<AgentRun> {
         self.upsert_agent(upsert).await
@@ -754,6 +758,26 @@ impl RunLedgerStore for DriverRunLedger {
             .await
     }
 
+    async fn complete_agent_team_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+        evidence: &[String],
+        require_evidence: bool,
+    ) -> Result<CompletionOutcome> {
+        self.complete_team_task_if_claimed(
+            team_id,
+            task_id,
+            member_id,
+            Some(claim_token),
+            evidence,
+            require_evidence,
+        )
+        .await
+    }
+
     /// Implement [`RunLedgerStore::shutdown_agent_team_member`] without a weaker fallback.
     async fn shutdown_agent_team_member(
         &self,
@@ -787,6 +811,44 @@ impl RunLedgerStore for DriverRunLedger {
         .map_err(Into::into)
     }
 
+    async fn try_start_agent_team_member(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<AgentTeamMemberRunAdmission> {
+        let now = Utc::now();
+        self.change(
+            MEMBERS,
+            member_id,
+            move |previous: Option<AgentTeamMember>| {
+                let Some(mut row) = previous.filter(|row| row.team_id == team_id) else {
+                    return Ok((None, AgentTeamMemberRunAdmission::Missing));
+                };
+                match row.member_status {
+                    AgentTeamMemberStatus::Active => {
+                        Ok((None, AgentTeamMemberRunAdmission::AlreadyActive(row)))
+                    }
+                    AgentTeamMemberStatus::Stopped => {
+                        Ok((None, AgentTeamMemberRunAdmission::NotAdmissible(row)))
+                    }
+                    AgentTeamMemberStatus::Pending | AgentTeamMemberStatus::Idle => {
+                        row.member_status = AgentTeamMemberStatus::Active;
+                        row.current_task_id = Some(task_id.to_owned());
+                        row.worker_thread_id = Some(worker_thread_id.to_owned());
+                        row.run_id = Some(run_id.to_owned());
+                        row.updated_at = now;
+                        Ok((Some(row.clone()), AgentTeamMemberRunAdmission::Started(row)))
+                    }
+                }
+            },
+        )
+        .await
+        .map_err(Into::into)
+    }
+
     async fn mark_agent_team_member_idle(
         &self,
         team_id: &str,
@@ -806,11 +868,68 @@ impl RunLedgerStore for DriverRunLedger {
         .map_err(Into::into)
     }
 
+    async fn mark_agent_team_member_idle_if_current(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<Option<AgentTeamMember>> {
+        let now = Utc::now();
+        self.change(MEMBERS, member_id, |previous: Option<AgentTeamMember>| {
+            let Some(mut row) = previous.filter(|row| {
+                row.team_id == team_id
+                    && row.member_status == AgentTeamMemberStatus::Active
+                    && row.current_task_id.as_deref() == Some(task_id)
+                    && row.worker_thread_id.as_deref() == Some(worker_thread_id)
+                    && row.run_id.as_deref() == Some(run_id)
+            }) else {
+                return Ok((None, None));
+            };
+            row.member_status = AgentTeamMemberStatus::Idle;
+            row.current_task_id = None;
+            row.updated_at = now;
+            Ok((Some(row.clone()), Some(row)))
+        })
+        .await
+        .map_err(Into::into)
+    }
+
     async fn release_agent_team_task(&self, team_id: &str, task_id: &str) -> Result<bool> {
         let now = now();
         self.change(TASKS, task_id, |previous: Option<AgentTeamTask>| {
             let Some(mut row) = previous.filter(|row| {
                 row.team_id == team_id && row.status == AgentTeamTaskStatus::InProgress
+            }) else {
+                return Ok((None, false));
+            };
+            row.status = AgentTeamTaskStatus::Todo;
+            row.claimed_by_member_id = None;
+            row.claim_token = None;
+            row.gate_status = "pending".into();
+            row.gate_reason = None;
+            row.updated_at = now;
+            Ok((Some(row), true))
+        })
+        .await
+        .map_err(Into::into)
+    }
+
+    async fn release_agent_team_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+    ) -> Result<bool> {
+        let now = Utc::now();
+        self.change(TASKS, task_id, |previous: Option<AgentTeamTask>| {
+            let Some(mut row) = previous.filter(|row| {
+                row.team_id == team_id
+                    && row.status == AgentTeamTaskStatus::InProgress
+                    && row.claimed_by_member_id.as_deref() == Some(member_id)
+                    && row.claim_token.as_deref() == Some(claim_token)
             }) else {
                 return Ok((None, false));
             };
@@ -850,79 +969,6 @@ impl RunLedgerStore for DriverRunLedger {
             effect_summary: None,
         })
         .await
-    }
-
-    async fn entry_append(
-        &self,
-        session_id: &str,
-        parent_id: Option<&EntryId>,
-        kind: EntryKind,
-    ) -> Result<EntryId> {
-        self.tree_mutate(session_id, |tree| {
-            tree.append(parent_id.cloned(), kind.clone())
-        })
-        .await
-        .map_err(Into::into)
-    }
-    async fn entry_append_to_head(&self, session_id: &str, kind: EntryKind) -> Result<EntryId> {
-        self.tree_mutate(session_id, |tree| {
-            tree.append(tree.head.tip.clone(), kind.clone())
-        })
-        .await
-        .map_err(Into::into)
-    }
-    async fn entry_head(&self, session_id: &str) -> Result<Option<EntryId>> {
-        Ok(self.tree_snapshot(session_id).await?.head.tip)
-    }
-    async fn entry_get(&self, session_id: &str, id: &EntryId) -> Result<Option<Entry>> {
-        Ok(self
-            .tree_snapshot(session_id)
-            .await?
-            .entries
-            .get(id)
-            .cloned())
-    }
-    async fn entry_ancestor_chain(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Entry>> {
-        self.tree_snapshot(session_id)
-            .await?
-            .chain(tip)
-            .map_err(Into::into)
-    }
-    async fn entry_tips(&self, session_id: &str) -> Result<Vec<EntryId>> {
-        Ok(self.tree_snapshot(session_id).await?.tips())
-    }
-    async fn entry_branches(&self, session_id: &str) -> Result<Vec<Branch>> {
-        Ok(self
-            .tree_snapshot(session_id)
-            .await?
-            .labels
-            .into_iter()
-            .map(|(name, tip_id)| Branch { name, tip_id })
-            .collect())
-    }
-    async fn entry_label(&self, session_id: &str, tip: &EntryId, name: &str) -> Result<EntryId> {
-        self.tree_mutate(session_id, |tree| tree.label(tip, name))
-            .await
-            .map_err(Into::into)
-    }
-    async fn entry_fork(&self, session_id: &str, tip: &EntryId, fork: Fork) -> Result<EntryId> {
-        self.tree_mutate(session_id, |tree| tree.fork(tip, fork))
-            .await
-            .map_err(Into::into)
-    }
-    async fn entry_rebuild_index(&self, session_id: &str) -> Result<()> {
-        self.tree_mutate(session_id, |tree| tree.rebuild_index())
-            .await
-            .map_err(Into::into)
-    }
-    async fn entry_import_legacy(&self, session_id: &str, entries: &[Entry]) -> Result<()> {
-        self.tree_mutate(session_id, |tree| tree.import(entries).map(drop))
-            .await
-            .map_err(Into::into)
-    }
-    async fn entry_build_context(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Message>> {
-        let tree = self.tree_snapshot(session_id).await?;
-        Ok(crate::entry_tree::project_chain(&tree.context_chain(tip)?))
     }
 
     /// Implement [`RunLedgerStore::prune_sessions_before`] without a weaker fallback.
@@ -1007,9 +1053,6 @@ mod tests;
 mod agent_tests;
 
 #[cfg(test)]
-#[path = "entry_tree_tests.rs"]
-mod entry_tree_tests;
-
 #[cfg(test)]
 #[path = "retention_tests.rs"]
 mod retention_tests;
@@ -1029,3 +1072,7 @@ mod team_tests;
 #[cfg(test)]
 #[path = "history_tests.rs"]
 mod history_tests;
+
+#[cfg(test)]
+#[path = "imports_tests.rs"]
+mod imports_tests;

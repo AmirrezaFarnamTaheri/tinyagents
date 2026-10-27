@@ -202,6 +202,35 @@ async fn fixed_resolver_ignores_every_routing_field() {
 }
 
 #[tokio::test]
+async fn prebuilt_named_lookup_does_not_substitute_the_primary_for_unknown_names() {
+    let resolver = PrebuiltModelResolver::new(
+        Arc::new(EchoModel("primary")),
+        [(
+            "backup".to_string(),
+            Arc::new(EchoModel("backup")) as Arc<dyn ChatModel<()>>,
+        )],
+    )
+    .with_primary_name("primary");
+
+    let backup = resolver
+        .resolve_named("backup")
+        .await
+        .expect("lookup succeeds")
+        .expect("registered named route exists");
+    assert!(Arc::ptr_eq(
+        &backup,
+        resolver.routes.get("backup").expect("backup route")
+    ));
+    assert!(
+        resolver
+            .resolve_named("unregistered")
+            .await
+            .expect("unknown names are a normal miss")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn resolved_model_shares_the_wrapped_allocation() {
     // Resolution must hand back a handle to the same long-lived client, not
     // a clone — a per-turn copy would discard its connection pool.
@@ -226,6 +255,57 @@ async fn clone_resolves_to_the_same_model() {
         .await
         .expect("resolve b");
     assert!(Arc::ptr_eq(&a, &b));
+}
+
+#[tokio::test]
+async fn prebuilt_resolver_prefers_lead_then_pin_then_hint_and_falls_back() {
+    let resolver = PrebuiltModelResolver::new(
+        Arc::new(EchoModel("primary")),
+        [
+            (
+                "pinned".to_string(),
+                Arc::new(EchoModel("pinned")) as Arc<dyn ChatModel<()>>,
+            ),
+            (
+                "hint:fast".to_string(),
+                Arc::new(EchoModel("hint")) as Arc<dyn ChatModel<()>>,
+            ),
+        ],
+    )
+    .with_lead_model(Arc::new(EchoModel("lead")));
+
+    let cases = [
+        (
+            ModelResolveRequest::new("lead")
+                .as_team_lead()
+                .with_model_pin("pinned"),
+            "lead",
+        ),
+        (
+            ModelResolveRequest::new("worker")
+                .with_model_pin("pinned")
+                .with_model_hint("fast"),
+            "pinned",
+        ),
+        (
+            ModelResolveRequest::new("worker").with_model_hint("fast"),
+            "hint",
+        ),
+        (
+            ModelResolveRequest::new("worker").with_model_pin("missing"),
+            "primary",
+        ),
+    ];
+    for (request, expected) in cases {
+        let response = resolver
+            .resolve(&request)
+            .await
+            .expect("resolve")
+            .invoke(&(), ModelRequest::default())
+            .await
+            .expect("invoke");
+        assert_eq!(response.text(), expected);
+    }
 }
 
 #[tokio::test]

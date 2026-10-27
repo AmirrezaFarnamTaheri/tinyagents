@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::*;
+use tinyagents_storage_kit::Scope;
+use tinystoragedrivers_testkit::MemoryBackend;
+use tinystoragedrivers_testkit::memory_storage;
 
 // ── Test policies ─────────────────────────────────────────────────────────────
 
@@ -72,9 +75,14 @@ impl ArtifactRedactor for TestRedactor {
 const READ_TOOL: &str = "file_read";
 
 fn offload() -> ArtifactOffload {
-    ArtifactOffload::in_memory("worker-agent", "task-1")
+    ArtifactOffload::new(test_blobs(), "worker-agent", "task-1")
         .with_path_policy(Arc::new(TestPolicy::rooted_at(PathBuf::from("internal"))))
         .with_redactor(Arc::new(TestRedactor))
+}
+
+fn test_blobs() -> Arc<dyn tinyagents_storage_kit::BlobStore> {
+    let scope = Scope::new("local").expect("valid scope");
+    memory_storage(&scope).blobs().clone()
 }
 
 /// Everything stored, as `(key, body)` pairs.
@@ -90,6 +98,133 @@ async fn stored_bodies(offload: &ArtifactOffload) -> Vec<(String, String)> {
         out.push((meta.key, String::from_utf8(blob.bytes).expect("utf8")));
     }
     out
+}
+
+#[tokio::test]
+async fn filesystem_policy_denial_precedes_blob_or_file_writes() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    let workspace = temp.path().join("private");
+    std::fs::create_dir_all(root.join(OUTPUTS_DIR)).expect("create output root");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let target = root
+        .join(OUTPUTS_DIR)
+        .join("worker")
+        .join("task-1-result.md");
+    std::fs::create_dir_all(target.parent().expect("target parent")).expect("create target parent");
+    std::fs::write(&target, "keep the existing content").expect("seed previous output");
+    let offload =
+        ArtifactOffload::new(test_blobs(), "worker", "task-1").with_path_policy(Arc::new(
+            TestPolicy::rooted_at(workspace)
+                .with_internal_suffix(&format!("/action/{OUTPUTS_DIR}/")),
+        ));
+
+    let output = "sensitive result".repeat(100);
+    let (text, artifact) =
+        offload_oversized_result_to_fs(output.clone(), &offload, 1, READ_TOOL, &root).await;
+
+    assert_eq!(text, output);
+    assert!(artifact.is_none());
+    assert!(
+        stored_bodies(&offload).await.is_empty(),
+        "denied targets must not create blob records"
+    );
+    assert_eq!(
+        std::fs::read_to_string(target).expect("read existing target"),
+        "keep the existing content"
+    );
+}
+
+#[tokio::test]
+async fn filesystem_offload_materializes_only_the_redacted_stored_body() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    std::fs::create_dir_all(&root).expect("create root");
+    let offload = ArtifactOffload::new(test_blobs(), "worker", "materialized")
+        .with_redactor(Arc::new(TestRedactor));
+    let output = format!("before {SECRET} after");
+
+    let (pointer, artifact) =
+        offload_oversized_result_to_fs(output, &offload, 1, READ_TOOL, &root).await;
+
+    let artifact = artifact.expect("offloaded artifact");
+    assert!(pointer.contains(&artifact.relative_path));
+    let materialized = std::fs::read_to_string(root.join(&artifact.relative_path))
+        .expect("read materialized file");
+    assert_eq!(materialized, format!("before {REDACTION} after"));
+    assert!(!materialized.contains(SECRET));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn filesystem_offload_refuses_symlinked_output_directory_before_storage() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&root).expect("create root");
+    std::fs::create_dir_all(&outside).expect("create outside");
+    std::fs::create_dir_all(root.join(OUTPUTS_DIR).parent().expect("outputs parent"))
+        .expect("create namespaced parent");
+    std::os::unix::fs::symlink(&outside, root.join(OUTPUTS_DIR)).expect("symlink outputs");
+    let offload = ArtifactOffload::new(test_blobs(), "worker", "symlink");
+
+    let output = "must remain inline".repeat(100);
+    let (text, artifact) =
+        offload_oversized_result_to_fs(output.clone(), &offload, 1, READ_TOOL, &root).await;
+
+    assert_eq!(text, output);
+    assert!(artifact.is_none());
+    assert!(stored_bodies(&offload).await.is_empty());
+    assert_eq!(
+        std::fs::read_dir(&outside).expect("read outside").count(),
+        0
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_materialization_does_not_create_descendants_through_a_symlink() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&root).expect("create root");
+    std::fs::create_dir_all(&outside).expect("create outside");
+    std::fs::create_dir_all(root.join(OUTPUTS_DIR).parent().expect("outputs parent"))
+        .expect("create namespaced parent");
+    std::os::unix::fs::symlink(&outside, root.join(OUTPUTS_DIR)).expect("symlink outputs");
+
+    let result = super::ops::atomic_write_under_dir(
+        &root,
+        &Path::new(OUTPUTS_DIR).join("worker"),
+        std::ffi::OsStr::new("result.md"),
+        b"body",
+    );
+
+    assert!(result.is_err(), "symlinked parent must fail closed");
+    assert!(
+        !outside.join("worker").exists(),
+        "no directory is created outside the root"
+    );
+}
+
+#[test]
+fn capability_materialization_writes_atomically_beneath_the_open_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    std::fs::create_dir_all(&root).expect("create root");
+
+    super::ops::atomic_write_with_capability(
+        &root,
+        Path::new("outputs/worker"),
+        std::ffi::OsStr::new("result.md"),
+        b"body",
+    )
+    .expect("capability-relative atomic write");
+
+    assert_eq!(
+        std::fs::read(root.join("outputs/worker/result.md")).expect("read materialized body"),
+        b"body"
+    );
 }
 
 // ── Kinds and directories ─────────────────────────────────────────────────────
@@ -410,7 +545,7 @@ async fn write_redacts_credentials_before_they_are_stored() {
 async fn write_without_a_redactor_stores_bytes_verbatim() {
     // The documented consequence of omitting a redactor. Pinned so the default
     // cannot quietly become "scrub something" and give false assurance.
-    let offload = ArtifactOffload::in_memory("agent", "task");
+    let offload = ArtifactOffload::new(test_blobs(), "agent", "task");
     let artifact = offload
         .write(ArtifactKind::Output, "raw.md", SECRET)
         .await
@@ -443,7 +578,7 @@ async fn write_refuses_a_traversal_target_without_storing_anything() {
 
 #[tokio::test]
 async fn default_result_name_sanitizes_both_identifiers() {
-    let offload = ArtifactOffload::in_memory("agent/../x", "task id/1");
+    let offload = ArtifactOffload::new(test_blobs(), "agent/../x", "task id/1");
     // Each of `/`, `.`, `.`, `/` becomes its own underscore — the separators are
     // replaced, never collapsed, so no identifier can smuggle in a key level.
     assert_eq!(
@@ -527,9 +662,9 @@ async fn read_refuses_keys_outside_the_two_namespaces() {
 
 #[tokio::test]
 async fn artifacts_land_on_a_host_supplied_blob_store() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+    use tinyagents_storage_kit::{Scope, StorageBackend};
 
-    let scoped = MemoryStorage::new()
+    let scoped = MemoryBackend::new()
         .for_scope(&Scope::new("host").expect("scope"))
         .expect("scoped");
     let blobs = scoped.blobs().clone();
@@ -618,7 +753,7 @@ async fn offload_failure_keeps_the_inline_payload_for_the_host_backstop() {
     // the caller its content, or a storage problem turns into data loss.
     // Every key under `outputs` is host-internal state here, so the write is
     // refused by policy.
-    let offload = ArtifactOffload::in_memory("agent", "task").with_path_policy(Arc::new(
+    let offload = ArtifactOffload::new(test_blobs(), "agent", "task").with_path_policy(Arc::new(
         TestPolicy::rooted_at(PathBuf::from("internal")).with_internal_suffix("outputs"),
     ));
     let big = "x".repeat(10_000);

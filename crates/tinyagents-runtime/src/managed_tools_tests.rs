@@ -17,6 +17,37 @@ fn names(items: &[&str]) -> HashSet<String> {
 }
 
 #[test]
+fn managed_names_reconcile_revocation_deferred_and_permanent_sets() {
+    let mut managed = ManagedToolNames {
+        visible: names(&["old", "kept", "permanent"]),
+        deferred: names(&["old", "hidden", "permanent"]),
+        permanent: names(&["permanent"]),
+    };
+    managed.refresh_synthesized(&names(&["old", "kept"]), &names(&["kept", "new"]), false);
+    assert!(!managed.visible.contains("old"));
+    assert!(!managed.deferred.contains("old"));
+    assert!(!managed.visible.contains("new"));
+    assert!(managed.visible.contains("permanent"));
+    assert!(!managed.deferred.contains("permanent"));
+
+    managed.defer_visible(&names(&["kept", "hidden", "permanent"]));
+    assert!(!managed.visible.contains("kept"));
+    assert!(managed.deferred.contains("kept"));
+    assert!(!managed.deferred.contains("permanent"));
+}
+
+#[test]
+fn wildcard_refresh_adds_new_synthesized_names() {
+    let mut managed = ManagedToolNames {
+        visible: names(&["old"]),
+        ..ManagedToolNames::default()
+    };
+    managed.refresh_synthesized(&names(&["old"]), &names(&["new"]), true);
+    assert!(!managed.visible.contains("old"));
+    assert!(managed.visible.contains("new"));
+}
+
+#[test]
 fn empty_names_leave_the_prefix_alone() {
     let prefix = PrefixSnapshot::new(vec![Message::system("base")]);
     assert!(refresh_prefix(&prefix, &[spec("a")], &names(&[]), OPEN, CLOSE).is_none());

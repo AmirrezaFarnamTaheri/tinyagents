@@ -17,8 +17,9 @@
 
 use std::sync::Arc;
 
-use tinystoragedrivers_core::primitives::{self, Leases};
-use tinystoragedrivers_core::{CollectionSpec, DocumentStore, Filter, StorageError};
+use tinyagents_storage_kit::primitives::{self, Lease, Leases};
+use tinyagents_storage_kit::{CollectionSpec, Filter, StorageError};
+use tinystoragedrivers_api::DocumentStore;
 
 use super::ENTRIES;
 
@@ -96,7 +97,7 @@ pub(super) async fn claim(
     leases: &Leases,
     stem: &str,
     reservation: &Reservation,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Lease> {
     let renewed = leases
         .renew(
             LEASE_OWNER,
@@ -106,11 +107,11 @@ pub(super) async fn claim(
             RESERVATION_TTL_MS,
         )
         .await?;
-    anyhow::ensure!(
-        renewed.is_some(),
-        "session generation {stem} was taken over by another writer; reload the session"
-    );
-    Ok(())
+    renewed.ok_or_else(|| {
+        anyhow::anyhow!(
+            "session generation {stem} was taken over by another writer; reload the session"
+        )
+    })
 }
 
 /// Gives `reservation` back. A reservation another process has since taken

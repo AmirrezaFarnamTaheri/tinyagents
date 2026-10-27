@@ -5,11 +5,9 @@ format and contract changes (stream, checkpoint, error, tool result) once,
 early, and non-exhaustively so later work does not break downstream matches;
 prefer the smallest change that closes a documented promise over a new
 abstraction. Every item is one PR unless marked (multi-PR). Finding ids
-(`H-C1`, `G-I3`, `W-I5`) refer to
-[`code-review-harness.md`](code-review-harness.md),
-[`code-review-graph.md`](code-review-graph.md) and
-[`code-review-workspace.md`](code-review-workspace.md); gap ids (`A1`,
-`D3`) refer to [`feature-gaps.md`](feature-gaps.md).
+(`H-C1`, `G-I3`, `W-I5`) refer to [`code-review-harness.md`](code-review-harness.md);
+graph and workspace review documents were removed in TinyAgents #61. Gap ids
+(`A1`, `D3`) refer to [`feature-gaps.md`](feature-gaps.md).
 
 ## Execution log
 
@@ -43,16 +41,15 @@ were all merged into `runtime-comparison`.
   `interrupt_after` + `DrainSignal`, and `durable_task` all exist and are
   exercised by tests in this worktree's `crates/`.
 - **Phase 5** (sessions, context, loop-as-graph) — landed (this worktree's
-  `HEAD` merges phase-5). `EntryTree` (id/parent, branches, labels, fork)
-  (E1), compaction (`find_cut_point`, `OverflowClassifier`, `CompactionRecord`)
-  (E2), the `prepare_for_model` handoff transform (E3), the tool-effect
+  `HEAD` merges phase-5). Compaction (`find_cut_point`, `OverflowClassifier`,
+  `CompactionRecord`) (E2), the `prepare_for_model` handoff transform (E3), the tool-effect
   ledger with idempotency keys (B5), and `Message::Custom` (E5) all shipped.
   The loop-as-graph piece (A5) landed only partially — see (b).
 - **Phase 6** (tool ecosystem) — landed. The `ToolSet` trait plus
   `Combined`/`Filtered`/`Prefixed`/`Renamed`/`Prepared`/`ApprovalRequired`/
-  `ExternalToolSet` (B3), transcript-carried tool add/remove (B6), and the
-  `Capability` bundle (`instructions`/`toolset`/`middleware`/`model_defaults`/
-  `exposure`/`defer_loading`) (G3) all shipped. The MCP client crate (B4) and
+  `ExternalToolSet` (B3) and transcript-carried tool add/remove (B6) shipped.
+  The former G3 capability bundle was removed in TinyAgents #62; the registry
+  retains only its stored data type. The MCP client crate (B4) and
   provider-executed tool content parts (B7) are OpenHuman, out of scope.
 - **Phase 7** (models, providers, evals) — landed partially. `ModelProfile`
   behaviour fields including `thinking_tags` (F1), the models.dev catalog
@@ -75,18 +72,15 @@ were all merged into `runtime-comparison`.
 - **`Turn` object** (H-R1, "built once per turn, cache the tools
   fingerprint"): skipped. No `struct Turn` exists anywhere in `crates/`;
   each phase still re-derives what it needs from `RunContext` directly.
-- **`GraphLoopDriver` is not itself checkpointable**: by design, per its own
-  doc comment in `crates/tinyagents-graph/src/agent_loop/mod.rs` — it drives
-  the same phase node bodies without a checkpointer so it can be a drop-in
-  `LoopDriver`. `compile_loop`/`LoopIter` are the real `CompiledGraph` path
-  and have interrupt → checkpoint → resume tests (`loop_as_graph.rs`).
+- **Compiled graph loop (A5) descoped in TinyAgents #61**: the graph crate and
+  `GraphLoopDriver` were removed. The harness now drives runs through its
+  direct loop; graph-backed checkpointing and iteration are not available.
 - **Lease renewal loop**: exists at the orchestration layer only.
   `WorkflowEngine` has a real heartbeat that renews a short lease while a
   child run is in flight (`crates/tinyagents-orchestration/src/workflow/
-  tests.rs::heartbeat_renews_a_short_lease_while_a_child_is_running`), but
-  the compiled-graph executor's per-thread lease (`ThreadLockMap` +
-  `Checkpointer::try_claim`) is claim-once with a fixed TTL and release-at-
-  end — no periodic renewal during a long-running graph execution.
+  tests.rs::heartbeat_renews_a_short_lease_while_a_child_is_running`). The
+  comparison with a compiled-graph executor described the pre-#61 runtime and
+  is no longer applicable.
 - **`ToolProgress` still unwired**: `docs/sdk-gaps/streaming.md` states
   verbatim that "`run_on_tool_delta`/`ToolProgress` still have no real
   caller; that needs a tinytools progress seam" — confirmed by grep: no
@@ -211,18 +205,17 @@ Builds the vocabulary that A1–A4 and B1–B2 share; everything later
 | Per-node `NodePolicy{retry, timeout, idle_timeout, cache, on_error}` reusing `harness::retry::RetryPolicy`; `TaskCache` trait keyed by `(graph_id, node_id, hash)`; `defer` as a scheduling flag; `TaskCompleted{cached: true}` | M | D2 |
 | `interrupt_before/after`, `Interrupt.response_schema`, `SteeringCommand::Drain` honoured at the boundary | S | A7 |
 | `durable_task(ctx, key, fut)` memoised through `PendingWrite` | S | D5 |
-| Lower `WorkflowDefinition` to a `CompiledGraph` behind a feature flag; keep `WorkflowStore` as the status projection and the lease as the durable lock; `workflow/tests.rs` as acceptance | L | G-I12, G-R6 |
+| WorkflowDefinition-to-graph execution | descoped in TinyAgents #61 with graph runtime removal; requires a replacement runtime design | L | G-I12, G-R6 |
 | `NodeHandler` takes `Arc<State>`; `Arc<Value>` send args | M | G-M2 |
 
-## Phase 5: sessions, context, and the loop as a graph (3–4 weeks)
+## Phase 5: sessions, context, and loop hardening (3–4 weeks)
 
 | Item | Effort | Refs | OpenHuman hand-off |
 |---|---|---|---|
-| Transcript entries with `id`/`parent_id`; `CompactionEntry`, `BranchSummaryEntry`, `LabelEntry`, `CustomEntry`; `build_context(tip)` stops at the newest compaction; fork = path copy; SQLite as rebuildable index | L | E1 | `/fork`, `/tree`, labels UI; `session_import` writes the tree |
 | Compaction rules: `find_cut_point`, split turns, iterative summaries, `CompactionRecord`, `OverflowClassifier`, `overflow → compact → retry` in `ContextCompressionMiddleware`; `before_compaction` hook may decline/replace | M | E2 | summary prompt text and `/compact` stay |
 | `AssistantMessage.origin{provider, api, model}`; `prepare_for_model(&[Message], &ModelProfile)` handoff pass | S | E3 | mid-session model switch just works |
 | Tool-effect ledger keyed by `CallId` with `ToolReplay::{Never, Safe}` on `ToolSchema`/policy; `list_unresolved_tool_effects(run_id)` | M | B5 | OpenHuman marks its tools' replay class |
-| Agent loop as a `CompiledGraph` (`plan → model → tools → settle` nodes) so checkpoints, interrupts and time travel apply to the loop; `AgentHarness::iter()` | L | A5 | `agent_graph.rs` collapses onto the SDK graph |
+| Checkpointed agent loop and `AgentHarness::iter()` | descoped in TinyAgents #61: no graph runtime is shipped; revisit only with a replacement design | A5 | no current OpenHuman hand-off |
 | `sanitize_history()` helper; `Message::Custom` | S | E4, E5 | web_chat sanitises via the SDK |
 
 ## Phase 6: tool ecosystem (2–3 weeks)
@@ -232,7 +225,6 @@ Builds the vocabulary that A1–A4 and B1–B2 share; everything later
 | `ToolSet<State,Ctx>` trait with `Combined`, `Filtered`, `Prefixed`, `Renamed`, `Prepared`, `ApprovalRequired`, `External`; `ToolRegistry` becomes one `ToolSet`; per-tool `prepare` | M | B3 | `agent/tool_policy.rs` and `tinyagents/middleware` tool filtering shrink to predicates |
 | `tinytools-mcp` crate (stdio / HTTP / SSE, prefixes, `process_tool_call`, sampling, elicitation, config loading) implementing `ToolSet` | L | B4 | `mcp/` keeps server config, auth and UI; evaluate reusing its transport |
 | Transcript-carried `SystemMessage{sections, tools_added, tools_removed}`, `replay_system_state`, `declare_tool_changes` before `ModelStarted`, `ModelProfile.mid_conversation_system_messages` | M | B6 | tool loadout changes stop busting the cache |
-| `Capability{instructions, tools, middleware, model_defaults, exposure}` bundle in `tinyagents-registry`, referenced by `AgentDefinition`, `defer_loading` | M | G3 | `skills/` discovery produces `Capability` values |
 | Provider-executed tool parts in `ContentBlock` | S | B7 | — |
 
 ## Phase 7: models, providers, evals (2–3 weeks)

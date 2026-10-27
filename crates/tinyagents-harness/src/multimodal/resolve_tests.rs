@@ -107,7 +107,7 @@ async fn guarded_client_does_not_follow_redirects() {
     let address = listener.local_addr().unwrap();
     // The synthetic validated address tests the transport policy in isolation.
     // Production obtains this struct only from the DNS guard, which rejects it.
-    let validated = tinytools_std::url_guard::ValidatedUrl {
+    let validated = crate::url_guard::ValidatedUrl {
         url: format!("http://example.com:{}/image.png", address.port()),
         host: "example.com".to_string(),
         addrs: vec![address],

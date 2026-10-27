@@ -13,18 +13,16 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use tinyagents_harness::store::{InMemoryAppendStore, InMemoryStore};
 
-use super::{AgentStores, SessionStoreProvider, TurnStates};
+use super::helpers::{
+    COMPLETED_RETENTION, MAX_GENERATIONS, completed_newest_first, is_terminal, newest_first,
+};
+use super::{AgentStores, SessionStoreLease, SessionStoreProvider, TurnStates};
 use crate::testkit::InMemoryTranscriptHistory;
 use crate::transcript::{
     SessionRef, ThreadTranscript, ThreadTranscripts, TranscriptHistory, TranscriptLocator,
     TranscriptMeta, TranscriptPartial, TranscriptRead, session_stem,
 };
 use crate::turn_state::{TurnLifecycle, TurnState};
-
-pub(super) const MAX_GENERATIONS: u32 = 4096;
-
-/// Completed turns kept per thread, as the on-disk store keeps them.
-pub(super) const COMPLETED_RETENTION: usize = 20;
 
 /// A [`SessionStoreProvider`] keeping every agent's stores in memory, each
 /// agent's apart from every other's.
@@ -65,6 +63,13 @@ impl SessionStoreProvider for InMemorySessionStores {
                 }
             })
             .clone()
+    }
+
+    fn lease_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Result<SessionStoreLease, super::SessionStoreLeaseError> {
+        Ok(SessionStoreLease::pinned(self.for_agent(agent_id)))
     }
 
     fn recover(&self) -> anyhow::Result<()> {
@@ -331,6 +336,26 @@ impl TranscriptLocator for InMemoryTranscriptLocator {
             .map(|(_, history)| history as Arc<dyn TranscriptRead>)
     }
 
+    /// An exact lookup that never registers a stem. The trait default probes
+    /// through [`Self::open_stem`], which would leave an empty handle behind
+    /// for every generation asked about, and `begin_generation` would then
+    /// find its own successor "already exists". Only a written transcript
+    /// counts, as in the persistent locators.
+    fn read_session_transcript(&self, session: &SessionRef) -> Option<Arc<dyn TranscriptRead>> {
+        let stem = session_stem(session);
+        let history = self
+            .stems
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|(known, _, _)| known == &stem)
+            .map(|(_, _, history)| history.clone())?;
+        match history.read_session() {
+            Ok(Some(_)) => Some(history as Arc<dyn TranscriptRead>),
+            _ => None,
+        }
+    }
+
     fn open_stem(
         &self,
         stem: &str,
@@ -411,7 +436,7 @@ impl InMemoryTranscriptLocator {
 
 /// [`TurnStates`] held in memory, with the on-disk store's semantics:
 /// "latest" is the newest `started_at`, completed turns are kept up to
-/// [`COMPLETED_RETENTION`] per thread, and a completed turn is never
+/// the completed-turn retention limit per thread, and a completed turn is never
 /// overwritten by a conditional write.
 #[derive(Debug, Default)]
 pub struct InMemoryTurnStates {
@@ -424,38 +449,8 @@ impl InMemoryTurnStates {
     }
 }
 
-/// Newest first: by `started_at`, then `updated_at`.
-pub(super) fn newest_first(a: &TurnState, b: &TurnState) -> Ordering {
-    compare_rfc3339(&b.started_at, &a.started_at)
-        .then_with(|| compare_rfc3339(&b.updated_at, &a.updated_at))
-}
-
-/// Completed-turn retention follows completion time, as the durable store
-/// does. Listing the latest live turn still follows its start time.
-pub(super) fn completed_newest_first(a: &TurnState, b: &TurnState) -> Ordering {
-    compare_rfc3339(&b.updated_at, &a.updated_at)
-        .then_with(|| compare_rfc3339(&b.started_at, &a.started_at))
-}
-
-fn compare_rfc3339(left: &str, right: &str) -> Ordering {
-    match (
-        chrono::DateTime::parse_from_rfc3339(left),
-        chrono::DateTime::parse_from_rfc3339(right),
-    ) {
-        (Ok(left), Ok(right)) => left.cmp(&right),
-        _ => left.cmp(right),
-    }
-}
-
 fn key(thread_id: &str, request_id: &str) -> (String, String) {
     (thread_id.to_string(), request_id.to_string())
-}
-
-pub(super) fn is_terminal(state: &TurnState) -> bool {
-    matches!(
-        state.lifecycle,
-        TurnLifecycle::Interrupted | TurnLifecycle::Completed
-    )
 }
 
 /// Drops `thread_id`'s completed turns beyond the newest

@@ -1,7 +1,7 @@
 //! Writer-only reconciliation; a stream row is invisible until metadata publishes it.
 use super::pending::{APPENDS, AppendIntent};
 use super::*;
-use tinystoragedrivers_core::{Capability, ExpectedDocument, ReadCheck, WriteOp, WriteResult};
+use tinyagents_storage_kit::{Capability, ExpectedDocument, ReadCheck, WriteOp, WriteResult};
 
 impl DriverConversationStore {
     /// Thread metadata plus the companion durable append-intent declaration
@@ -24,7 +24,7 @@ impl DriverConversationStore {
     /// The original native declaration failure, with its kind and source.
     pub async fn prepare_append_schema(
         documents: &dyn DocumentStore,
-    ) -> tinystoragedrivers_core::Result<()> {
+    ) -> tinystoragedrivers_types::Result<()> {
         for spec in Self::append_collection_specs() {
             documents.ensure_collection(&spec).await?;
         }
@@ -35,11 +35,25 @@ impl DriverConversationStore {
         for spec in Self::append_collection_specs() {
             self.docs.validate_collection_spec(&spec).await?;
         }
-        for capability in [
-            Capability::ValidatedBatch,
-            Capability::ConditionalStreamAppend,
+        // Each capability is checked on the port that uses it: the intent and
+        // metadata commit is a checked document batch, the message write a
+        // conditional stream append. A backend may advertise them on separate
+        // ports (SQLite does), so neither port speaks for the other.
+        for (capability, available) in [
+            (
+                Capability::ValidatedBatch,
+                self.docs
+                    .capabilities()
+                    .contains(Capability::ValidatedBatch),
+            ),
+            (
+                Capability::ConditionalStreamAppend,
+                self.streams
+                    .capabilities()
+                    .contains(Capability::ConditionalStreamAppend),
+            ),
         ] {
-            if !self.docs.capabilities().contains(capability) {
+            if !available {
                 return Err(StorageError::unsupported(
                     capability,
                     "conversation append requires checked documents and conditional streams",
@@ -63,7 +77,7 @@ impl DriverConversationStore {
             .transpose()
     }
 
-    fn check(collection: &str, id: &str, version: tinystoragedrivers_core::Version) -> ReadCheck {
+    fn check(collection: &str, id: &str, version: tinystoragedrivers_types::Version) -> ReadCheck {
         ReadCheck {
             collection: collection.into(),
             id: id.into(),
@@ -87,7 +101,7 @@ impl DriverConversationStore {
         thread_id: &str,
         message: &ThreadMessage,
     ) -> ConversationResult<Option<ThreadMessage>> {
-        if !is_deterministic_message_id(&message.id)
+        if !is_idempotent_message_id(&message.id)
             && message
                 .extra_metadata
                 .get("scope")
@@ -160,6 +174,11 @@ impl DriverConversationStore {
             }
             let stream = thread.stream()?;
             if thread.visible_end != offset {
+                // A concurrent retry with the same idempotency key may have
+                // committed this exact intent after the check above.
+                if self.committed(intent).await? {
+                    return intent.message();
+                }
                 return Err(StorageError::serialization(
                     "conversation append prefix is inconsistent",
                 )

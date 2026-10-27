@@ -228,6 +228,28 @@ pub trait ModelResolver<State: Send + Sync>: Send + Sync {
     /// should therefore be cheap and must not assume the answer is memoized by
     /// the caller.
     async fn resolve(&self, req: &ModelResolveRequest) -> Result<Arc<dyn ChatModel<State>>>;
+
+    /// Resolves an exact configured name without falling back to a default.
+    /// Used by the generic runtime to walk an explicit fallback chain. Hosts
+    /// with dynamic routing may leave this unsupported; named fallbacks then
+    /// cannot be selected through that resolver.
+    async fn resolve_named(&self, _name: &str) -> Result<Option<Arc<dyn ChatModel<State>>>> {
+        Ok(None)
+    }
+
+    /// Returns a cheap synchronous preview for middleware that shapes a
+    /// request from the target model profile. Network-backed resolvers should
+    /// leave this unavailable and use their normal resolution path.
+    fn preview(&self, _req: &ModelResolveRequest) -> Option<Arc<dyn ChatModel<State>>> {
+        None
+    }
+
+    /// The selected configured name, when the resolver can identify it
+    /// without changing its answer. This carries observability and fallback
+    /// identity alongside the executable model.
+    fn selected_name(&self, _req: &ModelResolveRequest) -> Option<String> {
+        None
+    }
 }
 
 // ── FixedModelResolver ────────────────────────────────────────────────────────
@@ -242,12 +264,21 @@ pub trait ModelResolver<State: Send + Sync>: Send + Sync {
 /// about product tiers.
 pub struct FixedModelResolver<State: Send + Sync> {
     model: Arc<dyn ChatModel<State>>,
+    name: Option<String>,
 }
 
 impl<State: Send + Sync> FixedModelResolver<State> {
     /// Wraps `model` as the answer to every resolution request.
     pub fn new(model: Arc<dyn ChatModel<State>>) -> Self {
-        Self { model }
+        Self { model, name: None }
+    }
+
+    /// Wraps one model while preserving its configured runtime name.
+    pub fn named(name: impl Into<String>, model: Arc<dyn ChatModel<State>>) -> Self {
+        Self {
+            model,
+            name: Some(name.into()),
+        }
     }
 
     /// The wrapped model.
@@ -262,6 +293,7 @@ impl<State: Send + Sync> Clone for FixedModelResolver<State> {
     fn clone(&self) -> Self {
         Self {
             model: Arc::clone(&self.model),
+            name: self.name.clone(),
         }
     }
 }
@@ -277,6 +309,153 @@ impl<State: Send + Sync> std::fmt::Debug for FixedModelResolver<State> {
 impl<State: Send + Sync> ModelResolver<State> for FixedModelResolver<State> {
     async fn resolve(&self, _req: &ModelResolveRequest) -> Result<Arc<dyn ChatModel<State>>> {
         Ok(Arc::clone(&self.model))
+    }
+
+    async fn resolve_named(&self, name: &str) -> Result<Option<Arc<dyn ChatModel<State>>>> {
+        let matches = self.name.as_deref() == Some(name)
+            || self
+                .model
+                .profile()
+                .and_then(|profile| profile.model.as_deref())
+                == Some(name);
+        Ok(matches.then(|| Arc::clone(&self.model)))
+    }
+
+    fn preview(&self, _req: &ModelResolveRequest) -> Option<Arc<dyn ChatModel<State>>> {
+        Some(Arc::clone(&self.model))
+    }
+
+    fn selected_name(&self, _req: &ModelResolveRequest) -> Option<String> {
+        self.name.clone().or_else(|| {
+            self.model
+                .profile()
+                .and_then(|profile| profile.model.clone())
+        })
+    }
+}
+
+/// Resolves from models that a host has already constructed for one turn.
+///
+/// Team leads always use `lead` (the turn's selected model); delegated agents
+/// first resolve an exact definition pin, then a `hint:<name>` route, and use
+/// `primary` when neither route is available. Model construction and route
+/// names remain host-owned. In particular, this resolver does not inspect
+/// credentials, capabilities, or provider state.
+pub struct PrebuiltModelResolver<State: Send + Sync> {
+    primary: Arc<dyn ChatModel<State>>,
+    primary_name: Option<String>,
+    lead: Arc<dyn ChatModel<State>>,
+    routes: std::collections::HashMap<String, Arc<dyn ChatModel<State>>>,
+}
+
+impl<State: Send + Sync> Clone for PrebuiltModelResolver<State> {
+    fn clone(&self) -> Self {
+        Self {
+            primary: Arc::clone(&self.primary),
+            primary_name: self.primary_name.clone(),
+            lead: Arc::clone(&self.lead),
+            routes: self.routes.clone(),
+        }
+    }
+}
+
+impl<State: Send + Sync> PrebuiltModelResolver<State> {
+    /// Creates a resolver using `primary` as both the lead model and fallback.
+    pub fn new<I>(primary: Arc<dyn ChatModel<State>>, routes: I) -> Self
+    where
+        I: IntoIterator<Item = (String, Arc<dyn ChatModel<State>>)>,
+    {
+        Self {
+            lead: Arc::clone(&primary),
+            primary,
+            primary_name: None,
+            routes: routes.into_iter().collect(),
+        }
+    }
+
+    /// Sets a separately wrapped model for team leads.
+    pub fn with_lead_model(mut self, lead: Arc<dyn ChatModel<State>>) -> Self {
+        self.lead = lead;
+        self
+    }
+
+    /// Gives the primary model its exact configured name for fallback lookup.
+    pub fn with_primary_name(mut self, name: impl Into<String>) -> Self {
+        self.primary_name = Some(name.into());
+        self
+    }
+}
+
+impl<State: Send + Sync> std::fmt::Debug for PrebuiltModelResolver<State> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrebuiltModelResolver")
+            .field("route_count", &self.routes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl<State: Send + Sync> ModelResolver<State> for PrebuiltModelResolver<State> {
+    async fn resolve(&self, req: &ModelResolveRequest) -> Result<Arc<dyn ChatModel<State>>> {
+        if req.is_team_lead {
+            return Ok(Arc::clone(&self.lead));
+        }
+
+        let hinted_route = req
+            .model_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+            .map(|hint| format!("hint:{hint}"));
+        let route = req.model_pin().or(hinted_route.as_deref());
+        Ok(route
+            .and_then(|name| self.routes.get(name))
+            .cloned()
+            .unwrap_or_else(|| Arc::clone(&self.primary)))
+    }
+
+    async fn resolve_named(&self, name: &str) -> Result<Option<Arc<dyn ChatModel<State>>>> {
+        if self.primary_name.as_deref() == Some(name) {
+            return Ok(Some(Arc::clone(&self.primary)));
+        }
+        Ok(self.routes.get(name).cloned())
+    }
+
+    fn preview(&self, req: &ModelResolveRequest) -> Option<Arc<dyn ChatModel<State>>> {
+        if req.is_team_lead {
+            return Some(Arc::clone(&self.lead));
+        }
+        let hinted_route = req
+            .model_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+            .map(|hint| format!("hint:{hint}"));
+        let route = req.model_pin().or(hinted_route.as_deref());
+        Some(
+            route
+                .and_then(|name| self.routes.get(name))
+                .cloned()
+                .unwrap_or_else(|| Arc::clone(&self.primary)),
+        )
+    }
+
+    fn selected_name(&self, req: &ModelResolveRequest) -> Option<String> {
+        let hinted_route = req
+            .model_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+            .map(|hint| format!("hint:{hint}"));
+        let route = req.model_pin().or(hinted_route.as_deref());
+        if let Some(name) = route.filter(|name| self.routes.contains_key(*name)) {
+            return Some(name.to_owned());
+        }
+        self.primary_name.clone().or_else(|| {
+            self.primary
+                .profile()
+                .and_then(|profile| profile.model.clone())
+        })
     }
 }
 

@@ -575,7 +575,13 @@ fn redacting_sink_masks_secret_substrings() {
     let collector = Arc::new(Collector::new());
     let sink = RedactingSink::new(
         collector.clone(),
-        vec!["sk-SUPERSECRET".to_string(), "hunter2".to_string()],
+        // A shorter secret that prefixes a longer one must not leave the
+        // longer one's tail behind.
+        vec![
+            "sk-SUPER".to_string(),
+            "sk-SUPERSECRET".to_string(),
+            "hunter2".to_string(),
+        ],
     );
 
     // The secret appears inside a string field of the event.
@@ -593,7 +599,7 @@ fn redacting_sink_masks_secret_substrings() {
     assert_eq!(events.len(), 1);
     match &events[0].event {
         AgentEvent::RunFailed { error, .. } => {
-            assert!(!error.contains("sk-SUPERSECRET"));
+            assert!(!error.contains("SECRET"), "{error}");
             assert!(!error.contains("hunter2"));
             assert!(error.contains("[REDACTED]"));
         }

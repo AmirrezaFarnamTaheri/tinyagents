@@ -1,26 +1,63 @@
 # Subagent orchestration
 
-`tinyagents_orchestration::subagent` is the public home for child-agent work.
-It contains two complementary surfaces.
+`tinyagents_orchestration::subagent` owns child-agent orchestration policy. Generic
+job and message tool shells live in `tinyagents_harness_tools::subagents`.
+It exposes a driver-backed asynchronous job registry and durable lifecycle ports.
 
-The invocation surface provides `SubAgent`, `SubAgentTool`,
-`SubAgentJobRegistry`, `SubAgentSession`, and `ChildDataPolicy`. It wraps an
-`AgentHarness` as a child run, enforces recursion depth, and inherits live
-parent cancellation, events, and host authority. Model-facing delegation is
-background by default: `SubAgentTool` returns a job id immediately while the
-child continues in the background. Callers can request `mode: "inline"` to
-wait for the child and receive its final result in the same tool call. A host
-registers `SubAgentJobsTool` and
+The async surface provides `SubagentDriver` and `SubAgentJobRegistry`. A
+`DriverSubAgentTool` call always registers and starts a background job, then
+returns its task reference immediately. Hosts wait separately through the
+registry or detached settlement APIs. A host constructs
+`tinyagents_harness_tools::subagents::SubAgentJobsTool` and
 `SubAgentMessageTool` over the same registry to query status/results and send
 messages to queued or running jobs. Message delivery is cooperative at the
 child loop's next safe steering checkpoint. The registry is process-local and
 host-owned; durable lifecycle persistence remains the separate surface below.
+The registry retains up to 128 unpinned terminal records. Settling or directly
+cancelling a job prunes the oldest eligible terminal records immediately;
+waiter-pinned results remain available until their wait futures consume or
+drop. Total entries may temporarily exceed 128 while jobs are active or
+terminal jobs have waiters. Queued/running work and `AwaitingInput` sessions
+are never cap-pruned, so the latter remain available for reuse by their scoped
+task key. A completed result remains queryable until retention pressure
+removes it.
+
+Hosts that need complete results from one top-level run should acquire
+`SubAgentJobRegistry::retain_root_run_descendants` before the root starts
+admitting child jobs. After the root turn returns and can no longer admit
+direct children, call `RootRunDescendantLease::settle` with one absolute
+deadline and the caller's cancellation token. The lease keeps completed
+ancestors and descendants available across terminal-retention pressure while
+the subtree is active, then releases its pins on success, timeout,
+cancellation, or drop. Owner filtering is applied to every descendant. A new
+lease captures currently retained records and descendants admitted while it
+is active; it cannot recover records already pruned before acquisition or
+after an earlier lease ended.
+
+Driver jobs retain native parent-to-child-attempt edges.
+`DriverSubAgentTool` records the actual caller and child context run ids;
+retries and durable continuations append new edges while preserving earlier
+attempts. Settlement traverses only edges reachable from the requested run
+and returns final snapshots, including failures and cancellations. Paused
+`AwaitingInput` jobs remain nonterminal and keep settlement open. The older
+`settle_root_run_descendants` method remains available for callers that only
+need currently retained records; it does not pin results before settlement
+starts. A root is not itself a registry job, so hosts must close its direct
+admissions before calling either settlement method.
+
+The legacy `register_driver_job` API can recover a historical parent run from
+its durable key but cannot infer the native child attempt id. Use
+`register_driver_job_with_parent_run` when the live caller context is
+available, then report every actual attempt with `set_attempt_run_id`; the
+settlement traversal can only follow descendants whose actual child attempt
+ids have been recorded.
 
 The durable lifecycle surface coordinates a host-resolved subagent lifecycle
 without making product-policy decisions. Its dependency direction is:
 
 ```text
-orchestration::subagent -> tinyagents-runtime -> {tinyagents-harness, tinyagents-session}
+tinyagents-harness-tools::subagents -> orchestration::subagent
+orchestration::subagent -> {tinyagents-harness, tinyagents-session}
 ```
 
 Hosts provide three object-safe lifecycle seams. `SubagentPlanner<C, H>`
@@ -38,10 +75,12 @@ them. `SubagentPersistence` owns a host's durable resume and lifecycle records.
 root run, immediate parent run, optional thread, and host-local task id.
 Fresh-task callers use `SubagentRequest::fresh_from_parent`, which derives the
 key from an actual parent and validates the owned child context. Continuations
-use `continue_with_key`: hosts must authorize and recover the original key,
-then retain it even with a fresh owned execution context. Request fields are
-private, so callers cannot bypass these identity checks. The key is the sole
-durable thread identity; a request carries no duplicate thread field.
+use async `continue_with_key`: pass the original key directly, or pass a
+durable session id and its `SubagentSessionStore` to resolve the original key.
+Hosts remain responsible for authorizing the session id before calling it.
+Request fields are private, so callers cannot bypass identity checks. The key
+is the sole durable thread identity; a request carries no duplicate thread
+field.
 
 Hosts must assign unique durable `RunConfig` ids to parent and child runs. The
 constructors reject an equal parent/child id but cannot prove global uniqueness.
@@ -111,27 +150,26 @@ Enforcement uses *reservation* semantics: `try_reserve` checks every limit and
 claims the slot under one lock, returning a `SpawnReservation` guard, so
 concurrent spawns cannot race past a cap. Dropping the guard releases the live
 slot; dropping it without `commit()` (the spawn failed before the child
-launched) also refunds the total budget. `SubAgentTool` (background and inline)
+launched) also refunds the total budget. `DriverSubAgentTool`
 reserves before creating the child and moves the guard into the child's task
-for its whole lifetime (a panic, abort, or dropped inline call still releases
+for its whole lifetime (a panic or abort still releases
 it); `SubagentDriver::run` reserves after the cancellation and resume checks and
 before the planner runs, and commits just before the executor launches.
 Coalesced followers and cached terminal results never reserve; a resumed
 lifecycle takes a live slot but no new total budget.
 
-An over-limit `SubAgentTool` call returns a tool error worded as a limit signal
+An over-limit `DriverSubAgentTool` call returns a tool error worded as a limit signal
 ("...treat this as a delegated-agent limit signal, not a completed answer"),
 like the depth-limit error; the driver returns `SubagentError::SpawnRejected`.
 Because the neutral `SubagentRequest` carries no agent identity, a driver host
 that configures `allowed_targets` must name each request with
 `SubagentRequest::with_target`; an unnamed request is refused (fail closed).
 
-**Bypass.** Only `SubAgentTool` and `SubagentDriver` enforce admission. Calling
-`SubAgent::invoke_in_parent` / `invoke_hosted_in_parent` (or `SubAgentSession`)
+**Bypass.** Admission is enforced through `SubagentDriver`.
 directly bypasses it; a host exposing those paths must reserve itself.
 
 Every limit defaults to `None` (unlimited), so nothing changes until a host opts
-in with `SubAgentTool::with_spawn_admission` /
+in with `DriverSubAgentTool::with_spawn_admission` /
 `SubagentDriver::with_spawn_admission`. Recommended guard-rail starting point:
 `max_children_per_parent: Some(5)` (OpenClaw's default) and a
 `max_total_per_root` of a few dozen.
@@ -176,18 +214,18 @@ watching across a pause and skips a child whose ledger shows a cancellation.
 ## Policy, result and role (D5/D6/D9)
 
 One `SubAgentPolicy { timeout, retry, budget, retry_after_tool_calls }` governs
-every path (it is defined in `tinyagents-graph` and re-exported here, because
-orchestration depends on graph).
+every path (it is defined in orchestration and temporarily re-exported by
+the former graph subagent node).
 
 - **Timeout.** `SubagentDriver` runs the executor under its own child token; on
   elapse the child is cancelled (the caller's token is not) and the outcome is
-  `Incomplete(kind: Timeout)`. `SubAgentTool` cancels the job token and marks
+  `Incomplete(kind: Timeout)`. `DriverSubAgentTool` cancels the job token and marks
   the job `Incomplete` (`incomplete_kind: "timeout"`). A timeout is never retried.
 - **Retry.** Only a failure the `RetryPolicy` deems retryable, and never after
   the attempt ran tools unless `retry_after_tool_calls`. The driver retries
   `SubagentError::Transient { tools_ran, .. }` (adapters classify; anything else
   is never retried) and needs `PreparedSubagent::retry_context`, a factory for a
-  fresh run context per attempt; without it one attempt runs. `SubAgentTool`
+  fresh run context per attempt; without it one attempt runs. `DriverSubAgentTool`
   pre-mints one child per attempt and watches `ToolStarted` events to learn
   whether tools ran. A host-visible side effect of retry: the job's recorded
   `subagent_run_id` is the first attempt's.
@@ -202,12 +240,17 @@ orchestration depends on graph).
   `[SUBAGENT_INCOMPLETE]` text marker. The transcript view reads
   `"status": "incomplete"` in a spawn result and still reads the legacy marker;
   both project as `SubagentOutcomeKind::Incomplete` (previously `Failed`).
-- **Result policy.** `ResultPolicy { max_chars, overflow: Truncate | Artifact,
+- **Result policy.** `ResultPolicy { max_chars, max_bytes, overflow: Truncate | Artifact,
   schema }` (builders; `artifact_store` is a host `ArtifactStore` callback, the
-  orchestration layer owns no store). `Truncate` keeps head and tail around
-  `[… N chars omitted …]`; `Artifact` stores the full output through the host
-  store and returns the preview plus a path-free `ArtifactReference` (no store:
-  falls back to truncate and reports `artifact_error`). `schema` is checked with
+  orchestration layer owns no store). `max_chars` caps returned text and
+  `max_bytes` measures full UTF-8 bytes with a strict `>` boundary under
+  `Artifact`; it has no effect under `Truncate`. `Truncate` keeps head and tail
+  around `[… N chars omitted …]`; it never truncates bytes.
+  `Artifact` stores the full output when either configured limit is exceeded and
+  returns the path-free reference. A byte-only trigger leaves returned text
+  unchanged; with no store, character overflow falls back to truncation and a
+  byte-only overflow reports `artifact_error` while keeping the full text.
+  `schema` is checked with
   the tool-call boundary's structural validator (`type`, `properties`,
   `required`, `additionalProperties`, `items`, `enum`; no `$ref`/combinators)
   and a mismatch is surfaced as `schema_error`, never a failure. Defaults: no
@@ -216,45 +259,25 @@ orchestration depends on graph).
   `restrict_tools` drops `subagent_jobs`, `subagent_message` and the host's
   `delegation_tools` for a leaf and intersects with `tool_ceiling` so a child
   never widens what it inherited; the driver applies it to
-  `PreparedSubagent::tools`. `SubAgentTool` cannot filter a shared harness, so a
+  `PreparedSubagent::tools`. The host driver cannot filter a shared harness, so a
   leaf tool refuses to spawn when the child harness exposes a delegation tool.
   `subagent_framing(role, depth, task)` is an optional neutral preamble hosts
   may prepend; nothing applies it by default.
 
 **Retry notes.** Subagent retry compounds with the harness's per-call model
 retry (each attempt may retry model calls first), so keep one of the two low.
-`SubAgentTool` attempts after the first get run ids `{first}-a{n}` (no extra
+Driver attempts after the first get run ids `{first}-a{n}` (no extra
 child ordinals are consumed, so sibling ids do not depend on retry) and the job's
 `subagent_run_id` follows the attempt that is running. The retry predicate
 (`RetryPolicy::retry_on`) sees the real error on the tool path; the driver only
 has the `Transient` message, so it sees a synthetic tool error. Usage of a failed
 or timed-out attempt is not reported (an error carries no run).
 
-## Agent steps: one engine for teams, workflows and the driver (D11)
+## Graph compatibility
 
-`run_agent_step(&AgentStepConfig, AgentStepIdentity, CancellationToken, work)`
-adapts an opaque host worker (a team member closure, a workflow child
-executor) to the driver's planner / executor / in-memory persistence seams and
-runs it on a real `SubagentDriver`. `teams::run_member_graph_with` and
-`WorkflowEngine::with_step_config` call it, so those steps honour `SpawnPolicy`
-admission (scope = team id / workflow run id, target = member / agent id),
-`SubAgentPolicy::timeout` and `ResultPolicy` and the typed
-`SubagentOutcomeKind`. Retry (`StepWorkError::Transient`), token budget (`StepSuccess::usage`) and
-`SubagentRole` are supported by `run_agent_step` itself, but the team and
-workflow adapters have no source for them (their workers report no transient
-failures or usage and expose no tools), so they only take effect for callers
-that use `run_agent_step` directly.
-
-`AgentStepConfig::default()` is inert (unlimited admission, no timeout, one
-attempt, no trimming), so `run_member_graph` and a `WorkflowEngine` without
-`with_step_config` behave as before. A worker `Err` is returned unchanged as
-`AgentStepError::Worker`.
-
-`tinyagents_graph::SubAgentNode` / `subagent_node` are `#[deprecated]` rather
-than adapters: graph cannot depend on orchestration. Their behaviour is
-unchanged; `SubAgentPolicy` is shared and not deprecated.
-
-`StepContext` hands the worker the role and the model/tool call caps (`max_model_calls`, `max_tool_calls`) to enforce, since the crate cannot count an opaque worker's calls.
+the removed graph crate re-exported `SubAgentBudget`, `SubAgentPolicy`,
+and `SubAgentOutput` from this crate while its deprecated subagent node is
+removed.
 
 ## Breaking changes
 
@@ -280,4 +303,24 @@ and `..Default::default()`.
 - The transcript view's `TranscriptSubagentStatus` gained `Incomplete`, and a legacy
   `[SUBAGENT_INCOMPLETE]` result now projects as `Incomplete` instead of
   `Failed`.
-- `tinyagents-runtime`: new `ToolSnapshot::retaining`.
+- `tinyagents-harness`: `ToolSnapshot::retaining`.
+
+
+### Document-backed lifecycle state
+
+`DocumentSubagentPersistence` implements the same pause/resume/terminal contract
+as `DocumentSubagentPersistence` over a host-supplied, already scoped
+`DocumentStore`. A retrying compare-and-swap stores pause and terminal together
+in one `tsd.kv` value: owner `subagents`, namespace `lifecycle-neutral`, key
+`record/<key_component>`. This namespace leaves older host-specific lifecycle
+values available for read-only conversion. The host selects tenant and agent
+scope; the owner does not derive product identity or open a backend.
+
+A continuation must present the exact resume it loaded. Independent writers
+observe the committed winner, and a terminal prevents further pauses.
+`keys_for_task` derives live scoped keys from the records themselves, avoiding
+a separately committed index. `pause_outcome` and `terminal_outcome` support
+synchronous recovery paths. Hosts convert old checkpoint/outcome formats, then
+call `import_record` or `import_record_at`; these fill missing state and never
+replace an existing terminal. Legacy files and migration markers remain the
+host's responsibility.

@@ -320,6 +320,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         Ok(
             ToolGate::new(allowed, &self.policy.tool_rules, definition_rules)
                 .with_denied_names(binding.iter().flat_map(|b| b.denied_tools.iter().cloned()))
+                .with_inherited_rules(binding.iter().flat_map(|b| b.inherited_rules.iter()))
                 .with_deferred_names(
                     binding
                         .iter()
@@ -1527,6 +1528,31 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             );
         }
 
+        if let Err(error) = self
+            .middleware
+            .run_after_tool_output_screened(
+                ctx,
+                state,
+                &crate::middleware::ToolInvocationIdentity::new(
+                    prepared.call_id.clone(),
+                    prepared.tool_name.clone(),
+                ),
+                &result,
+                &result.output_for_llm(prepared.options.prefer_markdown),
+            )
+            .await
+        {
+            self.fail_tool_call(
+                ctx,
+                status,
+                &prepared.call_id,
+                &prepared.tool_name,
+                prepared.started_at_ms,
+                &error,
+            );
+            return Err(error);
+        }
+
         // A tool's own `ToolControl` (`return_direct`/`terminate`/`goto`/
         // `state_update`) is the tool-vocabulary half of A1: it is *data* the
         // tool returned, not a middleware decision, so it is translated into
@@ -1614,6 +1640,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // live run's state. Duration is wall-clock (completion minus start);
         // `is_error` is a reported tool failure, distinct from execution Err.
         let duration_ms = crate::ids::now_ms().saturating_sub(prepared.started_at_ms);
+        let argument_bytes = serde_json::to_vec(&prepared.call.arguments).unwrap_or_default();
+        let args_digest = sha2::Sha256::digest(argument_bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if prepared.executed {
+            run.tool_outcomes.push(crate::host::ToolOutcomeRecord {
+                name: prepared.tool_name.clone(),
+                args_digest,
+                success: !result.is_error,
+                failure_class: result
+                    .is_error
+                    .then(|| crate::host::classify_tool_failure(&result.text()).to_owned()),
+                duration_ms,
+            });
+        }
         let output_bytes = model_output.len() as u64;
         let error = result.is_error.then_some(model_output.clone());
         // The transcript and event both answer the admitted call, never a
@@ -1759,6 +1801,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let base = ToolCallBase {
             harness: self,
             dispatch,
+            invocation: crate::middleware::ToolInvocationIdentity::new(
+                call.id.clone(),
+                call.name.clone(),
+            ),
             options,
             timeout_settings: self.tool_timeouts.clone(),
             level: 0,
@@ -2107,6 +2153,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let base = ToolCallBase {
                 harness: self,
                 dispatch,
+                invocation: crate::middleware::ToolInvocationIdentity::new(
+                    call.id.clone(),
+                    call.name.clone(),
+                ),
                 options,
                 timeout_settings: self.tool_timeouts.clone(),
                 level: 0,
@@ -2367,7 +2417,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Reconciles unresolved tool-effect-ledger rows (B5) before resuming a
     /// run from durable transcript `messages`.
     ///
-    /// A crash between [`Self::record_tool_effect_started`] and the matching
+    /// A crash between `Self::record_tool_effect_started` and the matching
     /// settle write (or between the settle write and the tool result being
     /// folded into `messages`) leaves a `started` row a resumed run must
     /// resolve one way or another before it can safely feed `messages` back
@@ -2406,7 +2456,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// mistake: any call id in it is skipped even if its ledger row is
     /// (unexpectedly) still `started` — e.g. the `Deferred` settle write
     /// above failed and was only logged (settle writes are best-effort, see
-    /// [`Self::record_tool_effect_settled`]). [`AgentHarness::resume_deferred`]
+    /// `Self::record_tool_effect_settled`). [`AgentHarness::resume_deferred`]
     /// passes the ids `results` is about to answer; any other caller — a host
     /// reconciling a genuine crash, where no `results` exists at all — passes
     /// an empty set.

@@ -14,7 +14,7 @@ use crate::turn_outcome::ended_out_of_output_budget;
 use crate::turn_stop::TurnStop;
 
 /// What the host knows about the run beyond the [`AgentRun`] itself.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct TurnEndInputs<'a> {
     /// The model-call cap the run was configured with.
     pub max_iterations: usize,
@@ -51,9 +51,21 @@ pub struct TurnEnd {
 /// tool.
 #[must_use]
 pub fn detect_hit_cap(run: &AgentRun, inputs: &TurnEndInputs<'_>) -> bool {
+    detect_hit_cap_with_cause(run, inputs, None)
+}
+
+/// Typed-cause-aware form of [`detect_hit_cap`]. A classified breaker cause
+/// takes precedence over the model-call cap even if no note was rendered.
+#[must_use]
+pub fn detect_hit_cap_with_cause(
+    run: &AgentRun,
+    inputs: &TurnEndInputs<'_>,
+    failure_cause: Option<&crate::no_progress::ClassifiedStopCause>,
+) -> bool {
     inputs.pause_at_cap
         && !inputs.early_exit
         && inputs.breaker_halt.is_none()
+        && failure_cause.is_none()
         && (inputs.wrap_up_injected
             || (run.model_calls >= inputs.max_iterations && run.final_response.is_none()))
 }
@@ -78,6 +90,25 @@ pub fn turn_stop_for(
     fallback_class: impl FnOnce(&str) -> &'static str,
 ) -> Option<TurnStop> {
     TurnStop::classify(breaker_halt, wind_down, hit_cap, fallback_class)
+}
+
+/// Content-free stop for a turn, preferring the classifier-owned cause over
+/// any human-readable breaker note.
+#[must_use]
+pub fn turn_stop_for_with_cause(
+    breaker_halt: Option<&str>,
+    failure_cause: Option<crate::no_progress::ClassifiedStopCause>,
+    wind_down: bool,
+    hit_cap: bool,
+    fallback_class: impl FnOnce(&str) -> &'static str,
+) -> Option<TurnStop> {
+    TurnStop::classify_with_cause(
+        breaker_halt,
+        failure_cause,
+        wind_down,
+        hit_cap,
+        fallback_class,
+    )
 }
 
 /// The turn's final text. An early-exit tool's captured question stands in for

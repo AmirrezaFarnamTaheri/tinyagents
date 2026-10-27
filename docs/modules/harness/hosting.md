@@ -45,13 +45,10 @@ assemble a run without host capabilities.
 Hosted invocations require `State: 'static` because their live capability
 authority must be retained in the recursive context. The explicit-model
 `invoke*`, streaming, and direct `SubAgent` paths do not install or inspect
-that authority and continue to support borrowed state.
+that authority and continue to support borrowed state. Child execution is
+planned by the host through `SubagentDriver`; the host supplies the child
+context and enforces its own delegation policy.
 
-For a child of a hosted parent, call
-`SubAgent::invoke_hosted_in_parent`; it rechecks the parent's delegate
-allowlist and inherits the exact bundle. The borrowed-state-compatible
-`SubAgent::invoke_in_parent` is explicit-only and rejects a hosted parent
-context before it can start a child.
 
 ## Hosted failures and timeout bounds
 

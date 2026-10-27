@@ -15,6 +15,47 @@ use tinyinference_llm::message::Message;
 /// [`Message::user`] (or [`Message::system`]) — the host chooses the role.
 pub type RunQueueHandle = Arc<super::RunQueue<Message>>;
 
+/// A retained capability checked when a queued item is consumed by an agent
+/// turn. Hosts can attach durable lifecycle admission to messages without
+/// changing the transcript payload.
+pub trait QueueAdmission: std::fmt::Debug + Send + Sync {
+    /// Acquires a short-lived permit that linearizes this item with lifecycle
+    /// closure. Implementations must return an error when the lifecycle no
+    /// longer admits the item. The permit is held only while the harness
+    /// transfers the item into a turn, never across a provider await.
+    fn acquire(&self) -> Result<std::sync::Arc<dyn QueueAdmissionPermit>, QueueAdmissionError>;
+
+    /// Acquires the identity returned by the queue's immediately preceding
+    /// `batch_key` call. Implementations with replaceable authority should
+    /// reject a changed identity so a permit is never cached under a stale key.
+    fn acquire_for(
+        &self,
+        _expected_key: Option<&str>,
+    ) -> Result<std::sync::Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
+        self.acquire()
+    }
+
+    /// Stable identity for capabilities that may share one batch permit.
+    /// `None` means each item requires an independent acquisition.
+    fn batch_key(&self) -> Option<String> {
+        None
+    }
+}
+
+/// Owned authority held across the queue-to-turn transfer.
+pub trait QueueAdmissionPermit: Send + Sync {}
+
+impl QueueAdmissionPermit for () {}
+
+/// Why a queued item could not acquire its admission capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueAdmissionError {
+    /// A binding is changing; retain the item for a later queue boundary.
+    Retry,
+    /// The lifecycle permanently revoked this item; discard it.
+    Rejected,
+}
+
 /// A queue lane consumed by the agent runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

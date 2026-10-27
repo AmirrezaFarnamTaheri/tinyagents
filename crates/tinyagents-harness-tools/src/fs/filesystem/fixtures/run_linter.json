@@ -1,0 +1,25 @@
+{
+  "description": "Run linting tools on the codebase. Supports 'clippy' for Rust and 'eslint' for TypeScript/JavaScript. Returns warnings and errors.",
+  "exposure": "Deferred",
+  "name": "run_linter",
+  "permission_level": "Execute",
+  "schema": {
+    "properties": {
+      "linter": {
+        "default": "auto",
+        "description": "Which linter to run. 'auto' detects from project files.",
+        "enum": [
+          "clippy",
+          "eslint",
+          "auto"
+        ],
+        "type": "string"
+      },
+      "path": {
+        "description": "Limit linting to a specific path.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  }
+}

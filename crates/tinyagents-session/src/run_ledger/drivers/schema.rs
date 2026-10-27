@@ -8,7 +8,6 @@
 //! | v1 | v2 |
 //! |---|---|
 //! | `run_ledger_{workflow_runs,telemetry,agent_runs,teams,members,tool_effects,event_outbox,event_heads,tasks}` | `ledger.{workflow_runs,telemetry,agent_runs,teams,members,tool_effects,event_outbox,event_heads,tasks}`, id `Key::of` of the record's ids, snake_case body with `*_ms` times, no `{schemaVersion, record, *Sql}` envelope |
-//! | `run_ledger_entry_{heads,entries,labels,indexes}` | `ledger.entry_{heads,labels,indexes}` and `ledger.entries` |
 //! | stream `run_events:<sha>` | stream `ledger.events/<run>` (the run id is read from the entries) |
 //! | `session_history_{sessions,messages,tool_calls}` | `history.{sessions,messages,tool_calls}` (µs sort keys dropped, times in ms) |
 //! | `session_history_fts` | `history.search`, rebuilt from the migrated records |
@@ -23,9 +22,9 @@
 //!   and the next sequence of a migrated run is recomputed from its events.
 
 use super::storage::{
-    EVENT_STREAM, HISTORY_OWNER, LEDGER_OWNER, SCHEMA_VERSION, history_specs, ledger_specs,
+    EVENT_STREAM, HISTORY_OWNER, INPUTS, LEDGER_OWNER, SCHEMA_VERSION, history_specs, ledger_specs,
 };
-use tinystoragedrivers_core::{Owner, Schema, ScopeClass};
+use tinyagents_storage_kit::{Owner, Schema, ScopeClass};
 
 /// What the run ledger stores (owner `ledger`, scope class Agent), with the
 /// steps that bring the v1 names and shapes forward.
@@ -34,7 +33,14 @@ pub fn ledger_storage_schema() -> Schema {
     let owner = Owner::new(LEDGER_OWNER).expect("`ledger` is a valid owner");
     let mut schema = Schema::new(owner);
     for spec in ledger_specs() {
-        schema = schema.collection_with(SCHEMA_VERSION, spec, ScopeClass::Agent);
+        // Inputs are new, with no legacy v1 envelope to migrate. Their initial
+        // schema is version one; declaring v2 would demand a nonexistent step.
+        let version = if spec.name == INPUTS {
+            1
+        } else {
+            SCHEMA_VERSION
+        };
+        schema = schema.collection_with(version, spec, ScopeClass::Agent);
     }
     schema = schema.stream(EVENT_STREAM, ScopeClass::Agent);
     for step in super::steps::steps() {

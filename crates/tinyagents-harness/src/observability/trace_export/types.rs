@@ -176,7 +176,7 @@ pub fn trace_session_id(ui_session_id: Option<u64>, thread_id: &str) -> String {
         .unwrap_or_else(|| thread_id.to_string())
 }
 
-/// What a span represents. Mirrors the host's agent-progress lifecycle.
+/// What a span represents in the event-driven trace projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpanKind {
@@ -238,10 +238,9 @@ pub struct TraceSpan {
     pub status: SpanStatus,
     /// Metadata-only attributes (no secrets/PII).
     pub attributes: BTreeMap<String, serde_json::Value>,
-    /// Optional prompt/input content. Populated **only** when the host's content
-    /// capture gate (`observability.agent_tracing.capture_content`) is opted in —
-    /// the host's span collector drops content at storage time otherwise, so with the
-    /// default gate off this is always `None` and no exporter can serialize it.
+    /// Optional prompt/input content. Populated only when the host's content
+    /// capture policy is enabled in [`TraceContext`]; otherwise the collector
+    /// drops content before storing the span, so no exporter can serialize it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<serde_json::Value>,
     /// Optional model-reply/output content. Same storage-level gating as

@@ -1,9 +1,7 @@
 //! Adoption of pre-identity roots into a session, for driver-backed
 //! transcripts.
 //!
-//! A workspace imported from classic `session_raw/` files
-//! ([`legacy::import_transcripts_once`](crate::legacy::import_transcripts_once))
-//! keeps its timestamped roots under their old stems. Resume addresses a
+//! Pre-identity timestamped roots remain under their old stems. Resume addresses a
 //! conversation by [`SessionRef`], so without this those roots are never read
 //! again. [`TranscriptLocator::adopt_legacy`] folds them into the session's
 //! generation 0 once, with the semantics of the file adopter
@@ -30,7 +28,7 @@
 use std::collections::BTreeSet;
 
 use serde_json::Value;
-use tinystoragedrivers_core::{DocumentStoreExt, Filter, Query, StorageError};
+use tinyagents_storage_kit::{DocumentStoreExt, Filter, Query, StorageError};
 
 use super::{DriverTranscriptLocator, ENTRIES, discovered_seed, is_subagent, reservation, run_on};
 use crate::transcript::{
@@ -136,6 +134,12 @@ impl DriverTranscriptLocator {
         seed: &TranscriptMeta,
     ) -> anyhow::Result<Option<SessionAdoption>> {
         if self.session_exists(session) {
+            return Ok(None);
+        }
+        // Legacy roots predate delegated session lineage. A child has no
+        // independent root identity to adopt, and treating its absent
+        // `agent_id` as a wildcard would copy the parent's history into it.
+        if session.is_subagent() {
             return Ok(None);
         }
         let stem = session_stem(session);

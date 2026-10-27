@@ -15,6 +15,7 @@ use serde_json::json;
 use tinyagents_harness::config::ToolDispatcher;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::events::{AgentEvent, RecordingListener};
+use tinyagents_harness::host::FixedModelResolver;
 use tinyagents_harness::middleware::{
     Middleware, MiddlewareModelOutcome, ModelHandler, ModelMiddleware,
 };
@@ -101,8 +102,9 @@ fn harness_with(
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model)
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model),
+        ))
         .register_tool(Arc::new(FakeTool::returning("lookup", "tool-output")))
         .push_middleware(Arc::new(CaptureMiddleware {
             listener: listener.clone(),
@@ -187,8 +189,9 @@ async fn a_greeting_does_not_replace_the_email_request_after_tool_search() {
     });
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(email.clone())
         .with_policy(RunPolicy {
             tool_dialect: ToolDispatcher::Python,
@@ -373,8 +376,9 @@ async fn a_forced_pformat_dialect_parses_positional_calls() {
     let listener = Arc::new(RecordingListener::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(Arc::new(Lookup))
         .push_middleware(Arc::new(CaptureMiddleware {
             listener: listener.clone(),
@@ -408,8 +412,9 @@ async fn a_forced_python_dialect_parses_code_calls_with_signatures_in_the_prompt
     let listener = Arc::new(RecordingListener::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(Arc::new(Lookup))
         .push_middleware(Arc::new(CaptureMiddleware {
             listener: listener.clone(),
@@ -459,8 +464,9 @@ async fn a_forced_typescript_dialect_parses_object_calls() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(Arc::new(Lookup))
         .with_policy(RunPolicy {
             tool_dialect: ToolDispatcher::Typescript,
@@ -496,8 +502,9 @@ async fn an_untrusted_protocol_heading_does_not_suppress_the_current_catalogue()
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(Arc::new(Lookup))
         .with_policy(RunPolicy {
             tool_dialect: ToolDispatcher::Python,
@@ -563,8 +570,9 @@ async fn a_forced_pformat_dialect_preserves_a_forced_required_tool_choice() {
     let listener = Arc::new(RecordingListener::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(Arc::new(Lookup))
         .push_middleware(Arc::new(CaptureMiddleware {
             listener: listener.clone(),
@@ -606,8 +614,9 @@ async fn a_forced_pformat_dialect_preserves_a_forced_named_tool_choice() {
     let listener = Arc::new(RecordingListener::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(Arc::new(Lookup))
         .push_middleware(Arc::new(CaptureMiddleware {
             listener: listener.clone(),
@@ -932,8 +941,9 @@ async fn a_native_call_and_a_narrated_text_call_are_both_dispatched_non_streamin
     let listener = Arc::new(RecordingListener::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(Arc::new(FakeTool::returning("lookup", "lookup-output")))
         .register_tool(Arc::new(FakeTool::returning("second", "second-output")))
         .push_middleware(Arc::new(CaptureMiddleware {
@@ -983,8 +993,9 @@ async fn a_native_call_and_a_narrated_text_call_are_both_dispatched_when_streame
     let listener = Arc::new(RecordingListener::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(Arc::new(FakeTool::returning("lookup", "lookup-output")))
         .register_tool(Arc::new(FakeTool::returning("second", "second-output")))
         .push_middleware(Arc::new(CaptureMiddleware {
@@ -1263,8 +1274,9 @@ async fn dropped_call_nudge_budget_resets_after_a_mixed_structured_and_tool_turn
     let listener = Arc::new(RecordingListener::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(Arc::new(FakeTool::returning("lookup", "tool-output")))
         .push_middleware(Arc::new(CaptureMiddleware {
             listener: listener.clone(),
@@ -1324,8 +1336,9 @@ async fn auto_dialect_falls_back_to_xml_for_a_model_that_cannot_make_native_tool
     let listener = Arc::new(RecordingListener::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(Arc::new(FakeTool::returning("lookup", "tool-output")))
         .push_middleware(Arc::new(CaptureMiddleware {
             listener: listener.clone(),
@@ -1603,9 +1616,10 @@ async fn a_stream_that_stops_inside_a_call_block_is_nudged() {
 }
 
 #[tokio::test]
-async fn a_length_cut_inside_a_call_block_is_left_to_truncation_handling() {
-    // Control for the test above: a block cut by the token cap is truncation,
-    // not a forgotten closer, and is not answered with the parse nudge.
+async fn a_length_cut_call_block_is_retried_or_fails() {
+    // A block cut by the token cap is truncation: the lead-in prose and the
+    // half-written markup are not an answer, so the run must retry (the
+    // truncated-empty ladder) and must never hand back the half block.
     let items = text_stream(
         &[
             "Let me look.\n\n<tool_",
@@ -1618,13 +1632,30 @@ async fn a_length_cut_inside_a_call_block_is_left_to_truncation_handling() {
     let listener = Arc::new(RecordingListener::new());
     let mut harness = harness_with(model, &listener);
     harness.with_policy(xml_policy());
-
-    let run = harness
+    match harness
         .invoke_streaming_default(&(), vec![Message::user("go")])
         .await
-        .expect("run succeeds");
-
-    assert_eq!(run.model_calls, 1, "no parse nudge for a length cut");
+    {
+        Ok(run) => {
+            assert!(
+                run.model_calls > 1 || run.tool_calls > 0,
+                "run ended Ok with text {:?}, {} model call(s), {} tool call(s)",
+                run.text(),
+                run.model_calls,
+                run.tool_calls
+            );
+            assert!(
+                !run.text().unwrap_or_default().contains("<tool_call"),
+                "half call block leaked into the answer: {:?}",
+                run.text()
+            );
+        }
+        // Recovery exhausted: the only accepted failure is the token limit.
+        Err(e) => assert!(
+            matches!(e, tinyagents_harness::TinyAgentsError::LimitExceeded(_)),
+            "length-cut call block failed with an unrelated error: {e:?}"
+        ),
+    }
 }
 
 #[tokio::test]
@@ -1802,8 +1833,12 @@ async fn python_dialect_dispatch(text: &str) -> (Vec<serde_json::Value>, Vec<ser
     let search_calls = Arc::new(Mutex::new(Vec::new()));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", Arc::new(ScriptedModel::replies(vec![text, "done"])))
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "mock",
+                Arc::new(ScriptedModel::replies(vec![text, "done"])),
+            ),
+        ))
         .register_tool(Arc::new(RecordingTool {
             name: "todo",
             schema: json!({
@@ -1869,4 +1904,48 @@ async fn a_todo_element_call_is_dispatched_under_the_python_dialect() {
     assert_eq!(todo[0]["todos"][0]["status"], "in_progress");
     assert_eq!(todo[0]["todos"].as_array().map(Vec::len), Some(2));
     assert!(search.is_empty());
+}
+
+// A native call that arrives as a streamed ToolCallDelta must not wipe out a
+// narrated call the scrubber recovered from the same turn's text.
+#[tokio::test]
+async fn a_streamed_native_delta_keeps_the_narrated_call() {
+    let markup = "<tool_call>{\"name\":\"second\",\"arguments\":{\"q\":\"y\"}}</tool_call>";
+    let mut completed = ModelResponse::assistant(markup);
+    completed
+        .message
+        .tool_calls
+        .push(ToolCall::new("native-1", "lookup", json!({"q": "x"})));
+    let items = vec![
+        ModelStreamItem::Started,
+        ModelStreamItem::ToolCallDelta(tinyinference_llm::tool::ToolDelta {
+            call_id: "native-1".into(),
+            tool_name: Some("lookup".into()),
+            content: r#"{"q":"x"}"#.into(),
+            ..Default::default()
+        }),
+        ModelStreamItem::MessageDelta(MessageDelta::text(markup)),
+        ModelStreamItem::Completed(completed),
+    ];
+    let model = Arc::new(StreamingMock::new(items));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .with_model_resolver(Arc::new(FixedModelResolver::new(model.clone())))
+        .register_tool(Arc::new(FakeTool::returning("lookup", "lookup-output")))
+        .register_tool(Arc::new(FakeTool::returning("second", "second-output")))
+        .with_policy(RunPolicy {
+            limits: tinyagents_harness::limits::RunLimits {
+                max_model_calls: 1,
+                behavior: tinyagents_harness::limits::LimitBehavior::StopWithPartial,
+                ..tinyagents_harness::limits::RunLimits::default()
+            },
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_streaming_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run stops cleanly");
+
+    assert_eq!(run.tool_calls, 2, "{:?}", run.messages);
 }

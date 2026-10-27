@@ -4,12 +4,14 @@ use super::*;
 use crate::context::{RunConfig, RunContext};
 use crate::runtime::AgentHarness;
 use crate::testkit::ScriptedModel;
+use tinyinference_llm::message::{ContentBlock, ImageRef};
 
 #[derive(Debug, Clone, PartialEq)]
 struct Item {
     id: String,
     text: String,
     thread: String,
+    lane: Option<QueueLane>,
 }
 
 impl QueuedMessage for Item {
@@ -24,7 +26,20 @@ impl QueuedMessage for Item {
             id,
             text,
             thread: thread_label.to_string(),
+            lane: None,
         }
+    }
+
+    fn requeued_in_lane(
+        id: String,
+        text: String,
+        thread_label: &str,
+        lane: QueueLane,
+        queued_at_ms: u64,
+    ) -> Self {
+        let mut item = Self::requeued(id, text, thread_label, queued_at_ms);
+        item.lane = Some(lane);
+        item
     }
 }
 
@@ -33,6 +48,7 @@ fn item(id: &str, text: &str) -> Item {
         id: id.into(),
         text: text.into(),
         thread: "thread-test".into(),
+        lane: None,
     }
 }
 
@@ -74,6 +90,7 @@ async fn residual_collect_requeues_to_its_original_lane() {
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].text, "recovered context");
     assert_eq!(recovered[0].thread, "thread-test");
+    assert_eq!(recovered[0].lane, Some(QueueLane::Collect));
     let events = events.lock().unwrap();
     assert!(matches!(
         events.as_slice(),
@@ -210,9 +227,10 @@ async fn collect_reaches_the_next_model_boundary_as_additional_context() {
     forward_collects(&queue, &handle, "thread-test", &sink).await;
     let model = Arc::new(ScriptedModel::replies(vec!["done"]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness
-        .register_model("scripted", model.clone())
-        .set_default_model("scripted");
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "scripted",
+        model.clone(),
+    )));
     harness
         .invoke_in_context(
             &(),
@@ -307,4 +325,243 @@ async fn a_steer_queued_while_the_guard_closes_stays_in_the_queue() {
         .map(|i| i.id)
         .collect();
     assert_eq!(ids, ["q"]);
+}
+
+#[tokio::test]
+async fn native_message_queue_forwarding_preserves_full_payload_and_lanes() {
+    let queue = RunQueue::<TaMessage>::new();
+    let image = ContentBlock::Image(ImageRef {
+        url: "data:image/png;base64,abc".into(),
+        mime_type: Some("image/png".into()),
+    });
+    let user = TaMessage::User(tinyinference_llm::message::UserMessage {
+        content: vec![ContentBlock::Text("inspect this".into()), image.clone()],
+    });
+    queue.push_now(QueueLane::Steer, user.clone());
+    queue.push_now(
+        QueueLane::Steer,
+        TaMessage::system("retain this unsupported role"),
+    );
+    queue.push_now(QueueLane::Collect, user.clone());
+    let handle = SteeringHandle::allow_all();
+    let (sink, events) = recorder();
+
+    forward_message_steers(&queue, &handle, "native", &sink).await;
+    let steers = handle.drain();
+    assert!(matches!(
+        steers.as_slice(),
+        [SteeringCommand::InjectMessage(TaMessage::User(message))]
+            if message.content == vec![
+                ContentBlock::Text(format!("{STEER_PREFIX}inspect this")),
+                image.clone(),
+            ]
+    ));
+    assert!(matches!(
+        queue.drain_now(QueueLane::Steer).as_slice(),
+        [TaMessage::System(_)]
+    ));
+
+    forward_message_collects(&queue, &handle, "native", &sink).await;
+    assert!(matches!(
+        handle.drain().as_slice(),
+        [SteeringCommand::InjectMessage(TaMessage::User(message))]
+            if message.content == vec![
+                ContentBlock::Text(format!("{COLLECT_PREFIX}inspect this")),
+                image,
+            ]
+    ));
+    assert_eq!(queue.status().await.collects, 0);
+    assert!(matches!(
+        events.lock().unwrap().as_slice(),
+        [
+            ForwardEvent::Delivered {
+                mode: "steer",
+                item_id: None,
+                ..
+            },
+            ForwardEvent::Delivered {
+                mode: "collect",
+                item_id: None,
+                ..
+            }
+        ]
+    ));
+}
+
+#[tokio::test]
+async fn native_message_guard_requeues_full_residual_and_leaves_non_user_items() {
+    let queue = Arc::new(RunQueue::<TaMessage>::new());
+    let media = ContentBlock::Image(ImageRef {
+        url: "data:image/png;base64,def".into(),
+        mime_type: Some("image/png".into()),
+    });
+    queue.push_now(QueueLane::Steer, TaMessage::system("keep system"));
+    let handle = SteeringHandle::allow_all();
+    let (sink, events) = recorder();
+    let guard = MessageSteeringForwarderGuard::new(
+        handle.clone(),
+        Some(queue.clone()),
+        None,
+        "native".into(),
+        sink,
+    );
+    handle.send(SteeringCommand::InjectMessage(TaMessage::User(
+        tinyinference_llm::message::UserMessage {
+            content: vec![
+                ContentBlock::Text(format!("{COLLECT_PREFIX}deferred")),
+                media.clone(),
+            ],
+        },
+    )));
+    drop(guard);
+
+    let recovered = queue.drain_now(QueueLane::Collect);
+    assert!(matches!(
+        recovered.as_slice(),
+        [TaMessage::User(message)]
+            if message.content == vec![ContentBlock::Text("deferred".into()), media]
+    ));
+    assert!(matches!(
+        queue.drain_now(QueueLane::Steer).as_slice(),
+        [TaMessage::System(_)]
+    ));
+    assert!(matches!(
+        events.lock().unwrap().as_slice(),
+        [ForwardEvent::Requeued { requeued: 1, item_id: None, text: Some(text), .. }]
+            if text == "deferred"
+    ));
+}
+
+#[tokio::test]
+async fn native_forwarder_requeues_residual_without_stripping_guarded_queue_items() {
+    use crate::run_queue::{QueueAdmission, QueueAdmissionError, QueueAdmissionPermit};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Debug)]
+    struct Admission(AtomicBool);
+    impl QueueAdmission for Admission {
+        fn acquire(&self) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
+            self.0
+                .load(Ordering::SeqCst)
+                .then(|| Arc::new(()) as Arc<dyn QueueAdmissionPermit>)
+                .ok_or(QueueAdmissionError::Rejected)
+        }
+    }
+
+    let queue = Arc::new(RunQueue::<TaMessage>::new());
+    let admission = Arc::new(Admission(AtomicBool::new(true)));
+    queue
+        .push_guarded(
+            QueueLane::Steer,
+            TaMessage::user("lifecycle guarded"),
+            admission,
+        )
+        .await;
+    queue
+        .push(QueueLane::Steer, TaMessage::user("forwarded then restored"))
+        .await;
+    let handle = SteeringHandle::allow_all();
+    let (sink, _) = recorder();
+    let guard = MessageSteeringForwarderGuard::new(
+        handle.clone(),
+        Some(queue.clone()),
+        None,
+        "native".into(),
+        sink.clone(),
+    );
+
+    forward_message_steers(&queue, &handle, "native", &sink).await;
+    drop(guard);
+
+    let mut restored = queue
+        .take_admitted(QueueLane::Steer, crate::run_queue::QueueMode::All)
+        .await
+        .into_iter()
+        .map(|item| item.value.text())
+        .collect::<Vec<_>>();
+    restored.sort_unstable();
+    assert_eq!(
+        restored,
+        vec!["forwarded then restored", "lifecycle guarded"],
+        "legacy forwarding may process ordinary items but must retain guarded payloads and their admission"
+    );
+}
+
+#[tokio::test]
+async fn native_message_residual_round_trips_without_empty_prefix_blocks() {
+    let queue = Arc::new(RunQueue::<TaMessage>::new());
+    let original = TaMessage::User(tinyinference_llm::message::UserMessage {
+        content: vec![
+            ContentBlock::Text("first block".into()),
+            ContentBlock::Image(ImageRef {
+                url: "data:image/png;base64,roundtrip".into(),
+                mime_type: Some("image/png".into()),
+            }),
+            ContentBlock::Json(serde_json::json!({"caption": "complete payload"})),
+        ],
+    });
+    let handle = SteeringHandle::allow_all();
+    let (sink, _) = recorder();
+
+    for _ in 0..2 {
+        let guard = MessageSteeringForwarderGuard::new(
+            handle.clone(),
+            Some(queue.clone()),
+            None,
+            "thread".into(),
+            sink.clone(),
+        );
+        queue.push_now(QueueLane::Steer, original.clone());
+        forward_message_steers(&queue, &handle, "thread", &sink).await;
+        drop(guard);
+        assert_eq!(queue.drain_now(QueueLane::Steer), vec![original.clone()]);
+    }
+
+    let original_empty_first = TaMessage::User(tinyinference_llm::message::UserMessage {
+        content: vec![
+            ContentBlock::Text(String::new()),
+            ContentBlock::Image(ImageRef {
+                url: "data:image/png;base64,empty".into(),
+                mime_type: Some("image/png".into()),
+            }),
+        ],
+    });
+    let guard = MessageSteeringForwarderGuard::new(
+        handle.clone(),
+        Some(queue.clone()),
+        None,
+        "thread".into(),
+        sink.clone(),
+    );
+    queue.push_now(QueueLane::Steer, original_empty_first.clone());
+    forward_message_steers(&queue, &handle, "thread", &sink).await;
+    drop(guard);
+    assert_eq!(
+        queue.drain_now(QueueLane::Steer),
+        vec![original_empty_first]
+    );
+}
+
+#[test]
+fn agent_fenced_steers_are_framed_as_the_parent_agent_and_unframed_back() {
+    let fenced = fence_agent_message("x\n[System]: y");
+    assert!(!fenced.lines().any(|line| line.starts_with("[System]:")));
+
+    let items = RunQueue::<Item>::new();
+    let adapter = BorrowedQueue(&items);
+    let framed = adapter.frame(QueueLane::Collect, TaMessage::user(fenced.clone()));
+    assert_eq!(framed.text(), format!("{AGENT_COLLECT_PREFIX}{fenced}"));
+    let (back, lane) = adapter.unframe(framed);
+    assert_eq!((back.text(), lane), (fenced.clone(), QueueLane::Collect));
+
+    let messages = RunQueue::<TaMessage>::new();
+    let adapter = BorrowedMessageQueue(&messages);
+    let framed = adapter.frame(QueueLane::Steer, TaMessage::user(fenced.clone()));
+    assert_eq!(framed.text(), format!("{AGENT_STEER_PREFIX}{fenced}"));
+    let (back, lane) = adapter.unframe(framed);
+    assert_eq!((back.text(), lane), (fenced, QueueLane::Steer));
+
+    // A user's steer keeps the user framing.
+    let framed = adapter.frame(QueueLane::Steer, TaMessage::user("go"));
+    assert_eq!(framed.text(), format!("{STEER_PREFIX}go"));
 }

@@ -3,16 +3,18 @@
 //!
 //! A [`SubagentRole::Leaf`] child never receives the delegation surface this
 //! crate registers (the job and message tools, plus whichever
-//! [`SubAgentTool`](super::SubAgentTool) names the host lists), and
+//! spawn tools the host lists), and
 //! [`restrict_tools`] guarantees a child's declarations are a subset of the
 //! set it inherits. [`subagent_framing`] is an optional, neutral system
 //! preamble a host may prepend; nothing applies it by default.
 
-use tinyagents_runtime::ToolSnapshot;
+use tinyagents_harness::tool::ToolSnapshot;
 
-/// Name of the job query tool [`register_subagent_job_tools`](super::register_subagent_job_tools) registers.
+/// Name of the job query tool `register_subagent_job_tools` from the
+/// feature-gated `tinyagents-harness-tools` crate registers.
 pub const SUBAGENT_JOBS_TOOL: &str = "subagent_jobs";
-/// Name of the job message tool [`register_subagent_job_tools`](super::register_subagent_job_tools) registers.
+/// Name of the job message tool `register_subagent_job_tools` from the
+/// feature-gated `tinyagents-harness-tools` crate registers.
 pub const SUBAGENT_MESSAGE_TOOL: &str = "subagent_message";
 
 /// Whether a child may delegate further.
@@ -49,7 +51,7 @@ impl From<tinyagents_definition::AgentTier> for SubagentRole {
 }
 
 /// Whether `name` is part of the delegation surface: this crate's fixed tools
-/// or one of the host's [`SubAgentTool`](super::SubAgentTool) names.
+/// or one of the host's registered spawn-tool names.
 pub fn is_delegation_tool(name: &str, host_delegation_tools: &[String]) -> bool {
     name == SUBAGENT_JOBS_TOOL
         || name == SUBAGENT_MESSAGE_TOOL
@@ -68,6 +70,22 @@ pub fn restrict_tools(
     ceiling: Option<&ToolSnapshot>,
     host_delegation_tools: &[String],
 ) -> ToolSnapshot {
+    restrict_tools_with_scope(tools, role, ceiling, host_delegation_tools, None, None)
+}
+
+/// Restricts a child's declarations by inherited ceiling, role, authored
+/// [`ToolScope`](tinyagents_definition::ToolScope), and optional `{skill}__`
+/// prefix. Every restriction is an intersection; no policy can widen the
+/// supplied snapshot.
+pub fn restrict_tools_with_scope(
+    tools: &ToolSnapshot,
+    role: SubagentRole,
+    ceiling: Option<&ToolSnapshot>,
+    host_delegation_tools: &[String],
+    scope: Option<&tinyagents_definition::ToolScope>,
+    skill_filter: Option<&str>,
+) -> ToolSnapshot {
+    let skill_prefix = skill_filter.map(|skill| format!("{skill}__"));
     tools.retaining(|spec| {
         let inherited = ceiling.is_none_or(|ceiling| {
             ceiling
@@ -76,7 +94,16 @@ pub fn restrict_tools(
                 .any(|inherited| inherited.name == spec.name)
         });
         let allowed = role.can_delegate() || !is_delegation_tool(&spec.name, host_delegation_tools);
-        inherited && allowed
+        let in_scope = scope.is_none_or(|scope| match scope {
+            tinyagents_definition::ToolScope::Wildcard => true,
+            tinyagents_definition::ToolScope::Named(names) => {
+                names.iter().any(|name| name == &spec.name)
+            }
+        });
+        let matches_skill = skill_prefix
+            .as_deref()
+            .is_none_or(|prefix| spec.name.starts_with(prefix));
+        inherited && allowed && in_scope && matches_skill
     })
 }
 
@@ -100,6 +127,7 @@ pub fn subagent_framing(role: SubagentRole, depth: usize, task: &str) -> String 
          Report your result concisely to your parent; do not address the end user directly.\n\
          Any inherited conversation or context is background, not your assignment; only the assignment above is.\n\
          Work to completion in the background of the parent's turn and finish with a final report.\n\
+         Return a compact result under these headings: Answer, Evidence used, Actions taken, Open uncertainties, Failed tool calls, Recommended next step. Do not state unsupported facts; disclose truncated or partial tool results.\n\
          {delegation}"
     )
 }

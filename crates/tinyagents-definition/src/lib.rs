@@ -49,6 +49,7 @@ pub use definition_set::DefinitionSet;
 pub use execution_spec::{ModelSpec, SPAWN_TOOL_NAMES, SandboxMode, ToolScope};
 pub use loader::{
     DefinitionValidation, load_dir, load_dir_with_validation, load_file, load_file_with_validation,
+    parse_str,
 };
 pub use prompt::PromptSource;
 pub use source::DefinitionSource;

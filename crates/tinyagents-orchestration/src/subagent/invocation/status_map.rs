@@ -35,6 +35,7 @@ impl From<SubAgentJobStatus> for OrchestrationTaskStatus {
         match status {
             SubAgentJobStatus::Queued => Self::Pending,
             SubAgentJobStatus::Running => Self::Running,
+            SubAgentJobStatus::AwaitingInput => Self::Awaiting,
             SubAgentJobStatus::Completed => Self::Completed,
             SubAgentJobStatus::Failed | SubAgentJobStatus::Incomplete => Self::Failed,
             SubAgentJobStatus::Cancelled => Self::Cancelled,
@@ -48,6 +49,7 @@ impl From<SubAgentJobStatus> for AgentRunStatus {
         match status {
             SubAgentJobStatus::Queued => Self::Pending,
             SubAgentJobStatus::Running => Self::Running,
+            SubAgentJobStatus::AwaitingInput => Self::AwaitingUser,
             SubAgentJobStatus::Completed => Self::Completed,
             SubAgentJobStatus::Failed | SubAgentJobStatus::Incomplete => Self::Failed,
             SubAgentJobStatus::Cancelled => Self::Cancelled,
@@ -55,9 +57,9 @@ impl From<SubAgentJobStatus> for AgentRunStatus {
     }
 }
 
-/// Converts a run-ledger status to a job status. `AwaitingUser`, `Paused` and
-/// `Interrupted` have no job equivalent (a job never pauses, and an interrupted
-/// run was never observed to finish) and fail with [`NoEquivalentStatus`].
+/// Converts a run-ledger status to a job status. `Paused` and `Interrupted`
+/// have no job equivalent (an interrupted run was never observed to finish)
+/// and fail with [`NoEquivalentStatus`].
 impl TryFrom<AgentRunStatus> for SubAgentJobStatus {
     type Error = NoEquivalentStatus;
 
@@ -65,15 +67,14 @@ impl TryFrom<AgentRunStatus> for SubAgentJobStatus {
         match status {
             AgentRunStatus::Pending => Ok(Self::Queued),
             AgentRunStatus::Running => Ok(Self::Running),
+            AgentRunStatus::AwaitingUser => Ok(Self::AwaitingInput),
             AgentRunStatus::Completed => Ok(Self::Completed),
             AgentRunStatus::Failed => Ok(Self::Failed),
             AgentRunStatus::Cancelled => Ok(Self::Cancelled),
-            AgentRunStatus::AwaitingUser | AgentRunStatus::Paused | AgentRunStatus::Interrupted => {
-                Err(NoEquivalentStatus::new(
-                    status.as_str(),
-                    "SubAgentJobStatus",
-                ))
-            }
+            AgentRunStatus::Paused | AgentRunStatus::Interrupted => Err(NoEquivalentStatus::new(
+                status.as_str(),
+                "SubAgentJobStatus",
+            )),
         }
     }
 }
@@ -106,6 +107,10 @@ impl TryFrom<SubAgentJobStatus> for CompletionStatus {
             SubAgentJobStatus::Running => {
                 Err(NoEquivalentStatus::new("running", "CompletionStatus"))
             }
+            SubAgentJobStatus::AwaitingInput => Err(NoEquivalentStatus::new(
+                "awaiting_input",
+                "CompletionStatus",
+            )),
         }
     }
 }
@@ -141,11 +146,11 @@ impl TryFrom<OrchestrationTaskStatus> for SubAgentJobStatus {
         match status {
             T::Pending => Ok(Self::Queued),
             T::Running | T::CancelRequested => Ok(Self::Running),
+            T::Awaiting => Ok(Self::AwaitingInput),
             T::Completed => Ok(Self::Completed),
             T::Failed => Ok(Self::Failed),
             T::Cancelled => Ok(Self::Cancelled),
             T::TimedOut => Ok(Self::Incomplete),
-            T::Awaiting => Err(NoEquivalentStatus::new("awaiting", "SubAgentJobStatus")),
             T::Abandoned => Err(NoEquivalentStatus::new("abandoned", "SubAgentJobStatus")),
         }
     }

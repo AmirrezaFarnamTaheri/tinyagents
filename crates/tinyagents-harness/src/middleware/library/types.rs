@@ -637,7 +637,9 @@ pub struct TraceCounts {
 /// the middleware's allowlist, which stay available in either mode so a host
 /// can keep read-only tools and a handful of plan-mode-specific tools (e.g.
 /// `plan_exit`, `request_plan_review`, `todo`) reachable while planning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
 pub enum RunMode {
     /// Every registered tool may be exposed and executed. The default.
     #[default]
@@ -724,4 +726,20 @@ pub fn plan_mode_middleware(
     policies: std::collections::HashMap<String, ToolPolicy>,
 ) -> PlanModeMiddleware {
     PlanModeMiddleware::new(mode, policies)
+}
+
+/// Product-level tool names commonly required for plan-mode control.
+/// Hosts may extend this list for their own safe planning tools.
+pub const fn plan_mode_allowlist() -> &'static [&'static str] {
+    &[
+        "plan_exit",
+        "request_plan_review",
+        "todo",
+        "goal_get",
+        "goal_set",
+        "goal_complete",
+        "goal_pause",
+        "goal_resume",
+        "goal_clear",
+    ]
 }

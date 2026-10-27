@@ -45,6 +45,7 @@ impl LangfuseClient {
             endpoint,
             auth,
             client: reqwest::Client::new(),
+            headers: reqwest::header::HeaderMap::new(),
         })
     }
 
@@ -71,6 +72,21 @@ impl LangfuseClient {
                 token: token.into(),
             },
         )
+    }
+
+    /// Creates a proxy client with an injected HTTP transport and extra
+    /// request headers. The supplied headers are applied to OTLP and batch
+    /// requests; the bearer token remains owned by this client.
+    pub fn proxy_with_transport(
+        base_url: impl Into<String>,
+        token: impl Into<String>,
+        transport: reqwest::Client,
+        headers: reqwest::header::HeaderMap,
+    ) -> Result<Self> {
+        let mut langfuse = Self::proxy(base_url, token)?;
+        langfuse.client = transport;
+        langfuse.headers = headers;
+        Ok(langfuse)
     }
 
     /// Reads configuration from environment variables.
@@ -186,6 +202,7 @@ impl LangfuseClient {
 
     /// Attaches this client's credentials to `request`.
     fn authorized(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let request = request.headers(self.headers.clone());
         match &self.auth {
             LangfuseAuth::Basic {
                 public_key,

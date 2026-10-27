@@ -2,6 +2,58 @@
 //! snapshots, `clear`, and lane independence.
 
 use super::*;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[derive(Debug)]
+struct MutableAdmission(AtomicBool);
+
+impl QueueAdmission for MutableAdmission {
+    fn acquire(&self) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
+        self.0
+            .load(Ordering::SeqCst)
+            .then(|| Arc::new(()) as Arc<dyn QueueAdmissionPermit>)
+            .ok_or(QueueAdmissionError::Rejected)
+    }
+}
+
+#[derive(Debug)]
+struct RetryOnce(AtomicBool);
+
+impl QueueAdmission for RetryOnce {
+    fn acquire(&self) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
+        if self.0.swap(false, Ordering::SeqCst) {
+            Err(QueueAdmissionError::Retry)
+        } else {
+            Ok(Arc::new(()))
+        }
+    }
+}
+
+#[tokio::test]
+async fn transient_admission_result_retains_item_for_the_next_boundary() {
+    let queue = RunQueue::new();
+    queue
+        .push_guarded(
+            QueueLane::Followup,
+            "recover after migration",
+            Arc::new(RetryOnce(AtomicBool::new(true))),
+        )
+        .await;
+
+    assert!(
+        queue
+            .take_admitted(QueueLane::Followup, QueueMode::All)
+            .await
+            .is_empty()
+    );
+    assert_eq!(queue.status().await.followups, 1);
+    let retried = queue
+        .take_admitted(QueueLane::Followup, QueueMode::All)
+        .await;
+    assert_eq!(retried.len(), 1);
+    assert_eq!(retried[0].value, "recover after migration");
+}
 
 #[tokio::test]
 async fn new_queue_is_empty() {
@@ -78,6 +130,53 @@ async fn take_one_at_a_time_pops_only_the_oldest_item() {
             .take(QueueLane::Steer, QueueMode::OneAtATime)
             .await
             .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn take_discards_items_whose_retained_admission_was_revoked() {
+    let queue = RunQueue::new();
+    let admission = Arc::new(MutableAdmission(AtomicBool::new(true)));
+    queue
+        .push_guarded(QueueLane::Followup, "child result", admission.clone())
+        .await;
+    queue.push(QueueLane::Followup, "ordinary follow-up").await;
+    admission.0.store(false, Ordering::SeqCst);
+
+    assert_eq!(
+        queue.take(QueueLane::Followup, QueueMode::All).await,
+        vec!["ordinary follow-up"],
+        "legacy extraction must not transfer a guarded payload without its permit"
+    );
+    assert_eq!(
+        queue
+            .take_admitted(QueueLane::Followup, QueueMode::All)
+            .await
+            .into_iter()
+            .map(|item| item.value)
+            .collect::<Vec<_>>(),
+        Vec::<&str>::new(),
+        "a revoked item is rejected at the lifecycle admission boundary"
+    );
+}
+
+#[tokio::test]
+async fn one_at_a_time_skips_a_revoked_oldest_item_without_blocking_the_lane() {
+    let queue = RunQueue::new();
+    let admission = Arc::new(MutableAdmission(AtomicBool::new(false)));
+    queue
+        .push_guarded(QueueLane::Steer, "revoked", admission)
+        .await;
+    queue.push(QueueLane::Steer, "current").await;
+
+    assert_eq!(
+        queue
+            .take_admitted(QueueLane::Steer, QueueMode::OneAtATime)
+            .await
+            .into_iter()
+            .map(|item| item.value)
+            .collect::<Vec<_>>(),
+        vec!["current"]
     );
 }
 
@@ -163,4 +262,61 @@ async fn remove_where_with_no_match_removes_nothing() {
 
     assert_eq!(removed, 0);
     assert_eq!(queue.status().await.total, 2);
+}
+
+#[tokio::test]
+async fn editing_changes_only_the_first_pending_match_in_delivery_order() {
+    let queue = RunQueue::new();
+    queue.push(QueueLane::Steer, 1).await;
+    queue.push(QueueLane::Followup, 1).await;
+    assert!(
+        queue
+            .edit_first_where(|item| *item == 1, |item| *item = 2)
+            .await
+    );
+    assert_eq!(
+        queue.snapshot().await,
+        vec![(QueueLane::Steer, 2), (QueueLane::Followup, 1)]
+    );
+    queue.drain(QueueLane::Steer).await;
+    assert!(
+        !queue
+            .edit_first_where(
+                |item| *item == 2,
+                |_| panic!("consumed item must not be edited")
+            )
+            .await
+    );
+}
+
+#[tokio::test]
+async fn moving_can_reorder_and_promote_a_followup_without_dropping_other_items() {
+    let queue = RunQueue::new();
+    for item in [1, 2, 3] {
+        queue.push(QueueLane::Followup, item).await;
+    }
+    assert!(
+        queue
+            .move_first_where(|item| *item == 3, QueueLane::Followup, 0)
+            .await
+    );
+    assert!(
+        queue
+            .move_first_where(|item| *item == 2, QueueLane::Steer, usize::MAX)
+            .await
+    );
+    assert_eq!(
+        queue.snapshot().await,
+        vec![
+            (QueueLane::Steer, 2),
+            (QueueLane::Followup, 3),
+            (QueueLane::Followup, 1)
+        ]
+    );
+    assert!(
+        !queue
+            .move_first_where(|item| *item == 99, QueueLane::Collect, 0)
+            .await
+    );
+    assert_eq!(queue.status().await.total, 3);
 }

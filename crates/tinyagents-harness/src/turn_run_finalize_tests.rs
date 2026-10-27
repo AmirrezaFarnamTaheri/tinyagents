@@ -114,6 +114,39 @@ fn a_stop_is_reported_only_for_an_early_end() {
 }
 
 #[test]
+fn typed_breaker_cause_prevents_a_cap_classification() {
+    let mut inputs = inputs();
+    inputs.pause_at_cap = true;
+    inputs.max_iterations = 1;
+    let failure_cause = crate::no_progress::ClassifiedStopCause {
+        class: "permission".into(),
+        operation: "write_file".into(),
+        summary: "human-readable note may change".into(),
+    };
+    let run = AgentRun {
+        model_calls: 1,
+        ..AgentRun::default()
+    };
+    assert!(!detect_hit_cap_with_cause(
+        &run,
+        &inputs,
+        Some(&failure_cause)
+    ));
+    let stop = turn_stop_for_with_cause(
+        Some("different prose"),
+        Some(failure_cause),
+        false,
+        true,
+        |_| "ignored",
+    )
+    .expect("typed cause yields a stop");
+    assert_eq!(
+        stop.status_message(),
+        "stopped: breaker permission on write_file"
+    );
+}
+
+#[test]
 fn only_leading_system_messages_count_as_the_frozen_prefix() {
     let messages = vec![
         Message::system("abc"),

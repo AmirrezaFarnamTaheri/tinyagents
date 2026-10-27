@@ -7,15 +7,50 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use super::*;
-use crate::context::{MiddlewareControl, RunConfig, RunContext};
+use crate::context::{LoopTarget, MiddlewareControl, RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, EventRecord, RecordingListener};
 use crate::middleware::{BoxModelFuture, MiddlewareStack, ModelBaseCall, ToolInvocationIdentity};
+use crate::middleware::{MiddlewareModelOutcome, ModelHandler, ModelMiddleware};
 use crate::retry::{RateLimiter, RetryPolicy};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelRequest, ModelResponse, ResponseFormat};
 use tinyinference_llm::tool::{ToolCall, ToolFormat, ToolSchema};
 use tinytools::{SandboxMode, ToolAccess, ToolPolicy, ToolResult, ToolRuntime, ToolSideEffects};
+
+#[cfg(feature = "json-schema")]
+fn schema_string_values<'a>(
+    root: &'a serde_json::Value,
+    mut schema: &'a serde_json::Value,
+) -> Vec<String> {
+    while let Some(reference) = schema.get("$ref").and_then(serde_json::Value::as_str) {
+        let pointer = reference.strip_prefix('#').expect("local schema reference");
+        schema = root.pointer(pointer).expect("schema reference resolves");
+    }
+
+    let mut values: Vec<String> =
+        if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array) {
+            values
+                .iter()
+                .map(|value| value.as_str().expect("string enum value").to_owned())
+                .collect()
+        } else {
+            schema
+                .get("oneOf")
+                .and_then(serde_json::Value::as_array)
+                .expect("string enum or oneOf schema")
+                .iter()
+                .map(|variant| {
+                    variant["const"]
+                        .as_str()
+                        .expect("string oneOf const")
+                        .to_owned()
+                })
+                .collect()
+        };
+    values.sort();
+    values
+}
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -80,6 +115,27 @@ impl ModelBaseCall<(), ()> for FakeModelBase {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         let result = (self.behavior)(n, &request);
         Box::pin(async move { result })
+    }
+}
+
+struct CommandModelMiddleware;
+
+#[async_trait::async_trait]
+impl ModelMiddleware<(), ()> for CommandModelMiddleware {
+    fn name(&self) -> &str {
+        "test.command"
+    }
+
+    async fn wrap_model(
+        &self,
+        _ctx: &mut RunContext,
+        _state: &(),
+        _request: ModelRequest,
+        _next: ModelHandler<'_, (), ()>,
+    ) -> Result<MiddlewareModelOutcome> {
+        Ok(MiddlewareModelOutcome::Command {
+            control: MiddlewareControl::JumpTo(LoopTarget::End),
+        })
     }
 }
 
@@ -721,6 +777,105 @@ fn response_with_usage(model: &str, input: u64, output: u64) -> ModelResponse {
         source: ModelResolutionSource::RegistryDefault,
     });
     response
+}
+
+#[tokio::test]
+async fn workload_observers_only_report_successful_fallback_and_carry_one_response() {
+    use tinyinference_llm::model::CapabilitySet;
+
+    let (mut ctx, recorder) = ctx_with_recorder();
+    let carried = Arc::new(AtomicUsize::new(0));
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push_model_middleware(Arc::new(RequiredCapabilitiesMiddleware::new(
+        CapabilitySet {
+            image_in: true,
+            ..CapabilitySet::default()
+        },
+    )));
+    stack.push_model_middleware(Arc::new(FallbackObserverMiddleware::new("primary")));
+    let carried_by_middleware = Arc::clone(&carried);
+    stack.push_model_middleware(Arc::new(UsageCarryMiddleware::new(move |response| {
+        if response.usage.is_some() {
+            carried_by_middleware.fetch_add(1, Ordering::SeqCst);
+        }
+    })));
+
+    let failed = FakeModelBase::new(|_, request| {
+        assert!(request.required_capabilities.as_ref().unwrap().image_in);
+        Err(TinyAgentsError::Model("primary failed".into()))
+    });
+    assert!(
+        stack
+            .run_wrapped_model(&mut ctx, &(), ModelRequest::default(), &failed)
+            .await
+            .is_err()
+    );
+    assert!(
+        events(&recorder)
+            .iter()
+            .all(|event| !matches!(event, AgentEvent::FallbackSelected { .. }))
+    );
+    assert_eq!(carried.load(Ordering::SeqCst), 0);
+
+    let success = FakeModelBase::new(|_, request| {
+        assert!(request.required_capabilities.as_ref().unwrap().image_in);
+        Ok(response_with_usage("backup", 8, 3))
+    });
+    stack
+        .run_wrapped_model(&mut ctx, &(), ModelRequest::default(), &success)
+        .await
+        .expect("successful resolved fallback");
+    let selections: Vec<_> = events(&recorder)
+        .into_iter()
+        .filter_map(|event| match event {
+            AgentEvent::FallbackSelected { from, to } => Some((from, to)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(selections, vec![("primary".into(), "backup".into())]);
+    assert_eq!(carried.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn workload_observers_preserve_model_control_outcomes_without_fabricating_responses() {
+    for (observe_fallback, carry_usage) in [(true, false), (false, true), (true, true)] {
+        let (mut ctx, recorder) = ctx_with_recorder();
+        let carried = Arc::new(AtomicUsize::new(0));
+        let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+        if observe_fallback {
+            stack.push_model_middleware(Arc::new(FallbackObserverMiddleware::new("primary")));
+        }
+        if carry_usage {
+            let carried_by_middleware = Arc::clone(&carried);
+            stack.push_model_middleware(Arc::new(UsageCarryMiddleware::new(move |_| {
+                carried_by_middleware.fetch_add(1, Ordering::SeqCst);
+            })));
+        }
+        stack.push_model_middleware(Arc::new(CommandModelMiddleware));
+
+        let base = FakeModelBase::new(|_, _| Ok(ok_response()));
+        let outcome = stack
+            .run_wrapped_model(&mut ctx, &(), ModelRequest::default(), &base)
+            .await
+            .expect("control outcomes are successful short-circuits");
+        assert!(
+            matches!(
+                outcome,
+                MiddlewareModelOutcome::Command {
+                    control: MiddlewareControl::JumpTo(LoopTarget::End)
+                }
+            ),
+            "observer converted a command into a fabricated model response"
+        );
+        assert_eq!(base.calls(), 0, "short-circuit must not call the model");
+        assert_eq!(carried.load(Ordering::SeqCst), 0);
+        assert!(events(&recorder).iter().all(|event| {
+            !matches!(
+                event,
+                AgentEvent::FallbackSelected { .. } | AgentEvent::UsageRecorded { .. }
+            )
+        }));
+    }
 }
 
 #[tokio::test]
@@ -1583,7 +1738,9 @@ async fn dynamic_prompt_skips_when_none() {
 #[tokio::test]
 async fn redaction_masks_response_and_tool_text() {
     let (mut ctx, _recorder) = ctx_with_recorder();
-    let redaction = Arc::new(RedactionMiddleware::new(["sk-secret", "hunter2"]));
+    // `sk` is a prefix of `sk-secret`: the longer secret must win, or its
+    // tail (`-secret`) would leak.
+    let redaction = Arc::new(RedactionMiddleware::new(["sk", "sk-secret", "hunter2"]));
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
     stack.push(redaction.clone());
 
@@ -1901,6 +2058,24 @@ async fn plan_mode_allowlist_keeps_specific_tools_available() {
         .expect("allowlisted tool stays executable in plan mode");
 }
 
+#[test]
+fn common_plan_mode_allowlist_covers_review_exit_and_host_planning_tools() {
+    let names = plan_mode_allowlist();
+    for required in [
+        "plan_exit",
+        "request_plan_review",
+        "todo",
+        "goal_get",
+        "goal_set",
+        "goal_complete",
+        "goal_pause",
+        "goal_resume",
+        "goal_clear",
+    ] {
+        assert!(names.contains(&required), "missing {required}");
+    }
+}
+
 #[tokio::test]
 async fn plan_mode_treats_unclassified_tools_as_side_effecting() {
     // Fail-closed: a tool with no policy entry at all is hidden/denied in
@@ -1942,4 +2117,27 @@ async fn run_mode_handle_set_takes_effect_immediately_on_shared_clones() {
         .run_before_tool(&mut ctx, &(), &mut call)
         .await
         .expect_err("plan mode now denies the same call");
+}
+
+#[cfg(feature = "json-schema")]
+#[test]
+fn run_mode_schema_and_serde_use_the_wire_discriminants() {
+    let schema = serde_json::to_value(
+        schemars::generate::SchemaSettings::draft2020_12()
+            .for_serialize()
+            .into_generator()
+            .into_root_schema_for::<RunMode>(),
+    )
+    .unwrap();
+    let mode_values = schema_string_values(&schema, &schema);
+    assert_eq!(mode_values, vec!["build".to_owned(), "plan".to_owned()]);
+    assert_eq!(
+        serde_json::to_value(RunMode::Build).unwrap(),
+        json!("build")
+    );
+    assert_eq!(serde_json::to_value(RunMode::Plan).unwrap(), json!("plan"));
+    assert_eq!(
+        serde_json::from_value::<RunMode>(json!("plan")).unwrap(),
+        RunMode::Plan
+    );
 }

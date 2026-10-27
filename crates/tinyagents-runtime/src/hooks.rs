@@ -1,10 +1,21 @@
 use async_trait::async_trait;
 use tinyagents_harness::terminal::TerminalOutcome;
 
+use crate::types::PostCommitObservation;
 use crate::{
     CommitReceipt, ResumePreparation, RuntimeError, SessionStateView, SessionTerminal,
     SessionTurnOutcome, SessionTurnRequest, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
+
+/// Receives captured execution facts after a successful durable commit.
+#[async_trait]
+pub trait PostCommitSink<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
+    /// Observes a committed turn. Errors cannot roll back the durable append.
+    async fn after_commit(
+        &self,
+        observation: &PostCommitObservation<C>,
+    ) -> Result<(), RuntimeError>;
+}
 
 /// Host observation/preparation around a session turn.
 ///
@@ -95,3 +106,67 @@ impl<C: Clone + Send + Sync + 'static> SessionHooks<C> for NoopSessionHooks {
         Ok(())
     }
 }
+
+/// Runtime-specific binding for the neutral hooks callback adapter.
+pub struct RuntimeSessionHookTypes<C: Clone + Send + Sync + 'static>(std::marker::PhantomData<C>);
+
+impl<C: Clone + Send + Sync + 'static> tinyagents_hooks::SessionHookTypes
+    for RuntimeSessionHookTypes<C>
+{
+    type Context = C;
+    type Request = SessionTurnRequest;
+    type Options = TurnOptions<C>;
+    type StateView<'a> = SessionStateView<'a>;
+    type ResumePreparation = ResumePreparation;
+    type TurnPreparation = TurnPreparation;
+    type Outcome = SessionTurnOutcome;
+    type TranscriptOptions = TranscriptTurnOptions<C>;
+    type CommitReceipt = CommitReceipt<C>;
+    type Terminal = SessionTerminal;
+    type Error = RuntimeError;
+}
+
+/// Compatibility alias retaining the old runtime generic parameter.
+pub type FnSessionHooks<C = ()> = tinyagents_hooks::FnSessionHooks<RuntimeSessionHookTypes<C>>;
+
+/// Compatibility future type for runtime callbacks.
+pub type SessionHookFuture<'a, T> = tinyagents_hooks::SessionHookFuture<'a, T, RuntimeError>;
+
+#[async_trait]
+impl<C: Clone + Send + Sync + 'static> SessionHooks<C>
+    for tinyagents_hooks::FnSessionHooks<RuntimeSessionHookTypes<C>>
+{
+    async fn before_resume(
+        &self,
+        request: &mut SessionTurnRequest,
+        options: &mut TurnOptions<C>,
+        state: SessionStateView<'_>,
+    ) -> Result<ResumePreparation, RuntimeError> {
+        tinyagents_hooks::FnSessionHooks::before_resume(self, request, options, state).await
+    }
+    async fn before_turn(
+        &self,
+        request: &mut SessionTurnRequest,
+        options: &mut TurnOptions<C>,
+        state: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> {
+        tinyagents_hooks::FnSessionHooks::before_turn(self, request, options, state).await
+    }
+    async fn before_commit(
+        &self,
+        outcome: &SessionTurnOutcome,
+        options: &TranscriptTurnOptions<C>,
+    ) -> Result<(), RuntimeError> {
+        tinyagents_hooks::FnSessionHooks::before_commit(self, outcome, options).await
+    }
+    async fn after_commit(&self, receipt: CommitReceipt<C>) -> Result<(), RuntimeError> {
+        tinyagents_hooks::FnSessionHooks::after_commit(self, receipt).await
+    }
+    async fn on_terminal(&self, terminal: SessionTerminal) -> Result<(), RuntimeError> {
+        tinyagents_hooks::FnSessionHooks::on_terminal(self, terminal).await
+    }
+}
+
+#[cfg(test)]
+#[path = "hooks_tests.rs"]
+mod tests;

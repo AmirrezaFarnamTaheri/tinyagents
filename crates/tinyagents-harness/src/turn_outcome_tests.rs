@@ -1,4 +1,108 @@
 use super::*;
+
+#[test]
+fn deferred_terminal_emits_stop_before_finalization() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    DeferredTurnTerminal {
+        run_id: RunId::new("run"),
+        events,
+    }
+    .finish(Some(crate::turn_stop::TurnStop::wind_down()), 4);
+    let events = listener.events();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        events[0].event,
+        AgentEvent::TurnStopped { turn: 4, .. }
+    ));
+    assert!(matches!(events[1].event, AgentEvent::RunFinalized { .. }));
+}
+
+#[test]
+fn deferred_terminal_failure_emits_failure_before_finalization() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    DeferredTurnTerminal {
+        run_id: RunId::new("run"),
+        events,
+    }
+    .finish_cancelled();
+    let events = listener.events();
+    assert_eq!(events.len(), 2);
+    assert!(
+        matches!(&events[0].event, AgentEvent::RunFailed { error, .. } if error == "turn cancelled after harness completion")
+    );
+    assert!(matches!(events[1].event, AgentEvent::RunFinalized { .. }));
+}
+
+#[test]
+fn deferred_terminal_failure_uses_content_free_error_and_outcome() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    DeferredTurnTerminal {
+        run_id: RunId::new("run-failed"),
+        events,
+    }
+    .finish_failed();
+    let events = listener.events();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        &events[0].event,
+        AgentEvent::RunFailed { run_id, error, outcome: Some(outcome) }
+            if run_id.as_str() == "run-failed"
+                && error == "host turn failed after harness completion"
+                && outcome == &TerminalOutcome::new(
+                    TerminalReason::Internal,
+                    "host turn failed after harness completion"
+                )
+    ));
+    assert!(matches!(
+        &events[1].event,
+        AgentEvent::RunFinalized { run_id } if run_id.as_str() == "run-failed"
+    ));
+}
+
+#[test]
+fn tool_call_outcome_equality_covers_every_observed_field() {
+    let original = ToolCallOutcome {
+        call_id: "call-1".into(),
+        name: "read_file".into(),
+        arguments: serde_json::json!({"path": "notes.txt"}),
+        success: false,
+        content: "denied".into(),
+        duration_ms: 17,
+    };
+    assert_eq!(original, original.clone());
+
+    let mut changed = original.clone();
+    changed.call_id.push_str("-changed");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.name.push_str("_changed");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.arguments["path"] = serde_json::json!("other.txt");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.success = true;
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.content.push_str(" changed");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.duration_ms += 1;
+    assert_ne!(original, changed);
+}
 use tinyinference_llm::message::{AssistantMessage, ContentBlock};
 use tinyinference_llm::tool::ToolCall;
 

@@ -51,6 +51,8 @@ pub(crate) struct TerminalRunSummary {
     /// Names of calls that reached a tool executor, in execution order.
     /// Mirrors [`crate::middleware::AgentRun::executed_tools`].
     pub(crate) executed_tools: Vec<String>,
+    /// Per-tool outcome records forwarded to the learning sink.
+    pub(crate) tool_outcomes: Vec<crate::host::ToolOutcomeRecord>,
 }
 
 impl TerminalRunSummary {
@@ -60,6 +62,7 @@ impl TerminalRunSummary {
             text: run.text(),
             usage: run.usage,
             executed_tools: run.executed_tools.clone(),
+            tool_outcomes: run.tool_outcomes.clone(),
         }
     }
 }
@@ -242,7 +245,7 @@ impl std::fmt::Debug for StateUpdate {
 /// channel.
 ///
 /// This is the harness-native complement to the graph
-/// `Command`/`Interrupt` vocabulary (in `tinyagents-graph`): the agent loop drains any requested control at its safe
+/// control requests: the agent loop drains any requested control at its safe
 /// checkpoints (after each model response) and acts on it, so behaviors like
 /// "stop after an early-exit tool" or "pause on budget" no longer need a
 /// bespoke side channel. Requests are visible via
@@ -456,6 +459,12 @@ pub struct RunContext<Ctx = ()> {
     /// How many calls the current batch has admitted so far; the position
     /// `truncated_call_positions` is matched against. Reset per batch.
     pub(crate) batch_admissions: usize,
+    /// Whether the tool calls now running came from a dead-call retry: the
+    /// call sent with reasoning off after a reply that died at its output cap.
+    /// Such a call has lost the reasoning that led to the last action and tends
+    /// to repeat it, so the repeated-failure breaker does not count its
+    /// failures toward the identical-repeat stop. Set for every model call.
+    pub(crate) dead_call_retry: bool,
     /// An optional host-supplied workspace/sandbox descriptor threaded into every
     /// [`ToolExecutionContext`][crate::tool::ToolExecutionContext] this
     /// run creates, so tools discover their allowed root from context rather
@@ -503,6 +512,9 @@ pub struct RunContext<Ctx = ()> {
     /// Set by a no-progress / repeat guard that paused the run, holding its
     /// root-cause summary, so the loop can report `TerminalReason::Halted`.
     pub(crate) halted_by_guard: Option<String>,
+    /// Typed classifier cause for a guard halt, preserved independently from
+    /// the human-readable summary.
+    pub(crate) halted_by_guard_cause: Option<crate::no_progress::ClassifiedStopCause>,
     /// The kind of the most recent `LimitReached` event this run emitted.
     pub(crate) last_limit: std::sync::Mutex<Option<crate::events::LimitKind>>,
     /// The [`CallId`] the agent loop minted for the model call currently in
@@ -533,6 +545,12 @@ pub struct RunContext<Ctx = ()> {
     /// discarding a response would also discard output a consumer already
     /// received as deltas.
     pub call_streamed: bool,
+    /// When the model call most recently dispatched by the agent loop first
+    /// streamed output (text, reasoning or a tool call), in the attempt that
+    /// produced its result. Cleared when the loop's innermost model call
+    /// begins, and `None` for a buffered call. The turn observer reads it to
+    /// report a call's time to first token.
+    pub(crate) call_first_output_at: Option<std::time::Instant>,
     /// Identifies the current shape of the prompt prefix: `0` until a
     /// middleware that rewrites it (a compaction, a truncation) calls
     /// [`RunContext::mark_prompt_prefix_changed`], then a process-unique
@@ -600,8 +618,8 @@ pub struct RunContext<Ctx = ()> {
     /// [`RunContext::with_compaction_sink`]; a child context inherits its
     /// parent's sink, matching how `stores`/`events`/`tool_effect_ledger`
     /// propagate. `tinyagents-harness` cannot depend on
-    /// `tinyagents-session` (the dependency runs the other way), so this is
-    /// a trait object rather than a concrete `Arc<EntryTree>` — see
+    /// `tinyagents-session` (the dependency runs the other way), so persistence
+    /// remains a host-provided trait object — see
     /// [`crate::summarization::CompactionSink`]'s docs.
     pub compaction_sink: Option<std::sync::Arc<dyn crate::summarization::CompactionSink>>,
 }

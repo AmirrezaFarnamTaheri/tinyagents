@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use tinyagents_harness::agent_loop::PartialRunOutcome;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::events::EventListener;
+use tinyagents_harness::host::PrebuiltModelResolver;
 use tinyagents_harness::middleware::AgentRun;
 use tinyagents_harness::middleware::{
     ApprovalResolver, Middleware, ToolCallPolicy, ToolPolicyGateMiddleware,
@@ -30,7 +31,7 @@ use tinyagents_harness::middleware::{
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::steering::SteeringHandle;
 use tinyagents_harness::tool::EarlyExitHook;
-use tinyagents_harness::turn_run_finalize::{TurnEndInputs, detect_hit_cap};
+use tinyagents_harness::turn_run_finalize::{TurnEndInputs, detect_hit_cap_with_cause};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::ChatModel;
 
@@ -61,7 +62,7 @@ pub struct TurnPlan<State, C> {
     /// Fired once when the turn completes (see [`TurnControls::defer_turn_completed`](super::TurnControls::defer_turn_completed)).
     pub completion: Option<Arc<dyn TurnCompletionSink>>,
     /// Refuse to run when the harness's declared tools differ from the
-    /// session's frozen [`crate::ToolSnapshot`]. On by default.
+    /// session's frozen [`tinyagents_harness::tool::ToolSnapshot`]. On by default.
     pub enforce_tool_snapshot: bool,
 }
 
@@ -171,6 +172,7 @@ pub struct TurnTail {
     max_iterations: usize,
     tools: ToolSetReport,
     completion: Option<Arc<dyn TurnCompletionSink>>,
+    outcomes: tinyagents_harness::turn_outcome::ToolOutcomeSink,
 }
 
 impl TurnTail {
@@ -189,11 +191,12 @@ impl TurnTail {
     /// `None` when the turn failed before producing one (no cap is detected
     /// then).
     pub fn finish(self, run: Option<&AgentRun>) -> TurnReport {
+        let tool_outcomes = tinyagents_harness::turn_outcome::drain_tool_outcomes(&self.outcomes);
         // Stop forwarding and deregister now, not at end of scope.
         drop(self.guard);
         let early_exit = self.hook.and_then(|hook| hook.take());
         let hit_cap = run.is_some_and(|run| {
-            detect_hit_cap(
+            detect_hit_cap_with_cause(
                 run,
                 &TurnEndInputs {
                     max_iterations: self.max_iterations,
@@ -202,6 +205,7 @@ impl TurnTail {
                     breaker_halt: None,
                     wrap_up_injected: false,
                 },
+                run.failure_cause.as_ref(),
             )
         });
         let report = TurnReport {
@@ -211,6 +215,7 @@ impl TurnTail {
             model_calls: run.map_or(0, |run| run.model_calls),
             max_iterations: self.max_iterations,
             tools: self.tools,
+            tool_outcomes,
             completion_deferred: self.controls.defer_turn_completed,
             ..TurnReport::default()
         }
@@ -382,12 +387,18 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> TurnDriver<State, C
 
         let mut harness: AgentHarness<State, C> = AgentHarness::new();
         harness.with_policy(policy);
-        for (index, (name, model)) in models.into_iter().enumerate() {
-            harness.register_model(name.clone(), model);
-            if index == 0 {
-                harness.set_default_model(name);
-            }
+        if let Some((primary_name, primary_model)) = models.first().cloned() {
+            let routes = models.iter().skip(1).cloned().collect::<Vec<_>>();
+            let resolver =
+                PrebuiltModelResolver::new(primary_model, routes).with_primary_name(primary_name);
+            harness.with_model_resolver(Arc::new(resolver));
         }
+        let outcome_sink = tinyagents_harness::turn_outcome::new_tool_outcome_sink();
+        harness.push_middleware(Arc::new(
+            tinyagents_harness::middleware::library::ToolOutcomeCaptureMiddleware::new(Arc::clone(
+                &outcome_sink,
+            )),
+        ));
         for middleware in context {
             harness.push_middleware(middleware);
         }
@@ -478,6 +489,7 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> TurnDriver<State, C
                 max_iterations,
                 tools: tool_report,
                 completion,
+                outcomes: outcome_sink,
             },
         })
     }
@@ -498,6 +510,15 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
         } = prepared.run().await;
 
         let mut outcome = outcome_from_partial(partial, input_len);
+        let tool_outcomes = report.tool_outcomes.clone();
+        match &mut outcome {
+            Ok(done) => done.tool_outcomes = tool_outcomes,
+            Err(failure) => {
+                if let Some(partial) = &mut failure.partial {
+                    partial.tool_outcomes = tool_outcomes;
+                }
+            }
+        }
         // An early-exit tool's output stands in for the paused assistant turn,
         // which carries the call and no answer.
         if let (Some(exit), Ok(done)) = (&report.early_exit, &mut outcome) {

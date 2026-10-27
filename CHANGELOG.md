@@ -1,5 +1,65 @@
 # Changelog
 
+## 3.0.0 — 2026-10-22
+
+**Breaking.** This release completes the TinyAgents slim-down: generic tool
+types and tool-call parsing live in TinyTools, while host-specific execution
+policy and adapters remain with their hosts. Public crates and modules removed
+during the 2.x migration are no longer part of the TinyAgents workspace.
+
+- Bump the surviving TinyAgents workspace crates to 3.0.0.
+- Update the nested TinyTools pin to the 0.6-compatible epic revision.
+
+The unreleased entries below describe the changes accumulated before this
+major release.
+
+## Unreleased: model observations report who served a call and its first token
+
+**Breaking.** `TurnObservation::Model` and `TurnObservation::ModelDispatch`
+gain `served_by`, `response_id` and `first_token_ms`, and
+`PhysicalDispatchOutcome` gains `served_by`, `response_id` and
+`first_output`. Code that builds these values must set the new fields; code
+that matches them with `..` is unaffected. `served_by` is a routing gateway's
+top-level `provider` (OpenRouter's upstream provider), `response_id` is the
+provider's response id (`gen-…` on OpenRouter) and `first_token_ms` is the
+time to the first streamed text, reasoning or tool-call output. See
+`docs/modules/harness/observability.md`.
+
+OTLP export (`otlp_requests`) now splits a generation's reasoning tokens
+(`gen_ai.usage.reasoning_tokens`) out of `output` into Langfuse's
+`output_reasoning_tokens` usage bucket. `total` is unchanged.
+
+## Unreleased: `AgentProgress::ContextCompacting`
+
+**Breaking.** Added `AgentProgress::ContextCompacting` to the public
+`AgentProgress` enum. Downstream exhaustive matches must handle the new
+variant.
+
+## Unreleased: settled completions drop their result (tinyagents#354)
+
+`CompletionRouter` now empties a record's `result` when the record settles:
+`mark_delivered`, `tombstone` and `cancel_parent` store the record with its
+id, parent key, status, state, attempts and timestamps but no text, artifact
+reference or omitted-character count, so a delivered child's output or a
+deleted parent's withdrawn completions do not sit in the store until
+`compact(retain)`. `mark_failed` still returns the full record to the host's
+give-up writer and stores the emptied one. Dedupe, tombstones and reopen
+behaviour are unchanged.
+
+## Unreleased: dedicated hooks crate (tinyagents#470)
+
+**Breaking.** Stop-hook and lifecycle-hook APIs now live in
+`tinyagents_hooks::{stop,lifecycle}`. `tinyagents-runtime::command_hooks`
+remains as a one-release compatibility re-export; new integrations should
+depend on `tinyagents-hooks` directly. The workspace version is bumped to
+`2.2.0` for this package-boundary change.
+
+- Added `tinyagents-hooks` with typed tool hooks, command hooks, stop policies,
+  lifecycle middleware, per-scope hook lists, and safe tool-output summaries.
+- Added `BudgetStopHook`, the optional `goals`-feature
+  `GoalBudgetStopHook`, and `StopHookMiddleware::with_halt_summary`.
+- Added per-tool outcome records to completed-turn summaries.
+
 ## Unreleased: Langfuse v4 trace export over OTLP
 
 Langfuse v4 ingests traces only over OTLP, and Langfuse Cloud removes the
@@ -68,7 +128,6 @@ Fixes (the two deferred tinyagents#463 findings):
 The Release workflow derives the next version from the highest of the
 workspace version and the latest `v*` tag instead of the (stale) workspace
 version alone, so it no longer proposes a tag that already exists.
-
 ## Unreleased: locator-based transcript reads and writes (tinyagents#453)
 
 Hosts can now do through a `TranscriptLocator` everything they used the
@@ -220,6 +279,7 @@ drivers.
 | `JsonlTaskStore`, `JsonlCompletionStore` (tasks) | `DriverTaskStore`, `DriverCompletionStore` |
 | session SQLite functions (`record_session_start`, `search_sessions`, `apply_retention`, `with_connection`, ...), `run_ledger` free functions and `sqlite` ledger | `DriverRunLedger` through `SessionHistoryStore` and `RunLedgerStore` |
 | `session::transcript::import` (ledger import) | `session::legacy` |
+| `SessionCompactionSink` (session) | A host implementation of `tinyagents_harness::summarization::CompactionSink` attached with `RunContext::with_compaction_sink`; only compactions with trusted live boundaries are persisted, and the session crate no longer supplies a sink. |
 
 The `sqlite` cargo features on harness and graph remain as no-ops so existing
 manifests keep resolving, and `storage-drivers` is a no-op because the driver
@@ -228,8 +288,8 @@ stores are now unconditional.
 ### Signature changes
 
 - `JsonlSink::new` takes an `Arc<dyn AppendStore>`.
-- `SessionTeamLedger::new`, `SessionWorkflowStore::new` and
-  `SessionCompactionSink::new` take an `Arc<dyn RunLedgerStore>`.
+- `SessionTeamLedger::new` and `SessionWorkflowStore::new` take an
+  `Arc<dyn RunLedgerStore>`.
 - `testkit::conformance::run_ledger_conformance` is async and takes an
   `Arc<dyn RunLedgerStore>`.
 - Transcript view projection takes an optional `SpawnCallLookup` instead of a

@@ -27,6 +27,7 @@
 //! - [`HarnessRunStatus`] — a compact run status snapshot readable without
 //!   holding an in-process stream.
 
+mod generation_enrichment;
 mod types;
 
 pub mod call_dedupe;
@@ -37,6 +38,8 @@ pub mod ordered_sender;
 pub use call_dedupe::{CallDedupe, IterationCursor, advance_iteration};
 pub use cap_pauser::{CapPauser, PauseRecorder};
 pub use compaction_log::log_compacted;
+pub(crate) use generation_enrichment::is_valid_provider_id;
+pub use generation_enrichment::{GenerationEnrichment, GenerationPricing};
 pub use ordered_sender::{DEFAULT_MAX_OVERFLOW, OrderedSender, SendFailure};
 pub use types::*;
 // EventSinkInner is pub(crate) so bring it into scope explicitly for impls

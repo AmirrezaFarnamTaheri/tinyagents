@@ -7,10 +7,12 @@ journal.
 
 ## Design
 
-Nothing here performs I/O. The host owns credentials, URL resolution, the HTTP
-transport, and the progress-event collector that builds `TraceSpan`s during a
-run. This module only shapes data, so every function is deterministic apart
-from id minting and is unit-tested without a network or a clock.
+Nothing here performs I/O. Hosts own credentials, URL resolution, transport
+selection, and product metadata. The [`collector::SpanCollector`] folds the
+harness's native durable `AgentObservation` stream into spans, so hosts do not
+need to translate those events into a second progress vocabulary. Event
+timestamps supply lifecycle timing, and incomplete calls are handled
+deterministically when the collector is finished.
 
 Product identity stays out of the crate: the host passes an `ExportBrand`
 (product slug and version), which becomes the OTLP `service.name`, the
@@ -21,6 +23,13 @@ Product identity stays out of the crate: the host passes an `ExportBrand`
 - `types` (re-exported at the module root): `TraceSpan`, `SpanKind`,
   `SpanStatus`, `RunType`, `TraceContext`, `trace_session_id`.
 - `ExportBrand`: product identity stamped onto exported telemetry.
+- `collector::SpanCollector`: event-driven generation, tool, subagent and run
+  spans with payload capture gated by `TraceContext`. Feed root and child
+  observations through `record`; `record_event` is a root-run convenience for
+  live events without observation identity. Hosts can add provider/pricing
+  metadata to a completed generation with `enrich_generation(run_id, call_id,
+  GenerationEnrichment)`, while native charged usage and recorded costs remain
+  authoritative.
 - `serialize`: content caps (`MAX_TOOL_CONTENT_CHARS`,
   `MAX_ERROR_MESSAGE_CHARS`, `MAX_MODEL_CONTENT_CHARS`),
   `capture_model_content` (keeps a large request structured, newest messages
@@ -60,5 +69,14 @@ Product identity stays out of the crate: the host passes an `ExportBrand`
   `x-langfuse-ingestion-version: 4`); Langfuse Cloud removes the legacy
   `/api/public/ingestion` trace path on 2026-11-16. v4 duplicates a span id it
   receives twice instead of merging, so export each finished span once.
+- A generation's `langfuse.observation.usage_details` are flat, and Langfuse
+  stores them unchanged, so the buckets do not overlap: `input` excludes
+  `cache_read_input_tokens` (from `gen_ai.usage.cached_input_tokens`), and
+  `output` excludes `output_reasoning_tokens` (from
+  `gen_ai.usage.reasoning_tokens`). `total` is input plus output. A
+  `gen_ai.response.first_token_unix_ms` attribute becomes
+  `langfuse.observation.completion_start_time`, from which Langfuse derives
+  time to first token. Any other non-usage attribute becomes
+  `langfuse.observation.metadata.<key>` with dots replaced by underscores.
 - Callers decide whether content capture is on at all; these helpers do not
   redact secrets. Run them on events that already passed a `RedactingSink`.

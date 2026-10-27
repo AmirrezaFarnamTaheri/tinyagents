@@ -12,8 +12,7 @@
 //! - LOOP-6  — `Started` events had no terminal partner on error paths.
 //! - LOOP-8  — steering applied part of a rejected batch, and a pause was unresumable.
 //! - LOOP-9  — a panicking listener wedged the event sink forever.
-//! - C6      — `StreamChunk` had no producer.
-
+//!
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -32,8 +31,7 @@ use tinyagents_harness::steering::{
     SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringOutcome, SteeringPolicy,
     apply_pending_steering,
 };
-use tinyagents_harness::stream::{StreamChunk, StreamMode, StreamSink, project_event};
-use tinyinference_llm::message::{Message, MessageDelta};
+use tinyinference_llm::message::Message;
 
 // ── LOOP-2: jitter must never collapse the backoff ───────────────────────────
 
@@ -331,37 +329,6 @@ fn loop8_a_pause_is_latched_and_resumable_across_checkpoints() {
         SteeringOutcome::Continue
     );
     assert!(handle.pause_state().is_none());
-}
-
-// ── C6: the stream projection ────────────────────────────────────────────────
-
-#[test]
-fn c6_events_project_onto_stream_chunks() {
-    let delta = AgentEvent::ModelDelta {
-        run_id: RunId::new("r1"),
-        call_id: CallId::new("c1"),
-        delta: MessageDelta::text("hi"),
-    };
-    assert!(matches!(
-        project_event(&delta),
-        Some(StreamChunk::Message(_))
-    ));
-
-    // The Interrupt variant finally has a producer.
-    let interrupt = AgentEvent::ControlApplied {
-        control: "interrupt".into(),
-        detail: "needs approval".into(),
-    };
-    assert!(matches!(
-        project_event(&interrupt),
-        Some(StreamChunk::Interrupt(_))
-    ));
-
-    // Mode filtering happens producer-side.
-    let sink = StreamSink::new([StreamMode::Interrupts]);
-    assert!(!sink.push_event(&delta));
-    assert!(sink.push_event(&interrupt));
-    assert_eq!(sink.drain().len(), 1);
 }
 
 // ── C5: the no-progress tracker is drivable from a hook ──────────────────────

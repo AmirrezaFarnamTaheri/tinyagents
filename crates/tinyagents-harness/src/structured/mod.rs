@@ -61,7 +61,7 @@ mod repair;
 mod types;
 mod validate;
 
-pub use repair::JsonRepair;
+pub use repair::{JsonRepair, parse_lenient, parse_lenient_last_object};
 pub use types::*;
 
 use async_trait::async_trait;

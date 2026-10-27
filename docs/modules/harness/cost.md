@@ -9,7 +9,7 @@ render spend in web UIs.
 - Price prompt, completion, cached, and reasoning tokens.
 - Track per-request fixed fees when needed.
 - Enforce per-run and per-thread budgets.
-- Roll costs up across sub-agents and graph nodes.
+- Roll costs up across sub-agents.
 - Emit cost events.
 - Keep price data updateable outside provider adapter code.
 - Mark estimated versus provider-confirmed cost.

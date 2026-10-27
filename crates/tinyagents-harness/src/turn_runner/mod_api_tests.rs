@@ -1,0 +1,152 @@
+use super::*;
+use crate::progress::AgentProgress;
+use crate::run_queue::{QueueLane, QueuedMessage};
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Payload {
+    thread: String,
+    inherited: Option<String>,
+    queued_at_ms: u64,
+}
+
+impl RequeuePayload for Payload {
+    fn requeued(thread_id: &str, queued_at_ms: u64) -> Self {
+        Self {
+            thread: thread_id.to_owned(),
+            queued_at_ms,
+            ..Self::default()
+        }
+    }
+
+    fn adopt(&mut self, running: &Self) {
+        if self.inherited.is_none() {
+            self.inherited.clone_from(&running.inherited);
+        }
+    }
+}
+
+#[test]
+fn requeued_payload_can_inherit_running_turn_metadata() {
+    let running = Payload {
+        thread: "thread-1".into(),
+        inherited: Some("client-context".into()),
+        queued_at_ms: 1,
+    };
+    let mut queued = Payload::requeued("thread-1", 2);
+
+    queued.adopt(&running);
+
+    assert_eq!(queued.thread, "thread-1");
+    assert_eq!(queued.queued_at_ms, 2);
+    assert_eq!(queued.inherited.as_deref(), Some("client-context"));
+}
+
+#[test]
+fn turn_request_is_a_queue_message_with_a_rebuilt_host_payload() {
+    let request = TurnRequest {
+        scope: ScopeKey {
+            agent_id: "agent-1".into(),
+            profile_id: Some("profile-1".into()),
+        },
+        thread_id: "thread-1".into(),
+        request_id: "request-1".into(),
+        text: "follow up".into(),
+        payload: Payload {
+            thread: "thread-1".into(),
+            inherited: Some("client-context".into()),
+            queued_at_ms: 1,
+        },
+        host_authored: false,
+        disposition: QueueDisposition::Steer,
+        deadline: None,
+        idle_timeout: None,
+    };
+
+    let recovered = <TurnRequest<Payload> as QueuedMessage>::requeued(
+        "request-2".into(),
+        request.text().into(),
+        "thread-1",
+        2,
+    );
+
+    assert_eq!(request.id(), "request-1");
+    assert_eq!(recovered.request_id, "request-2");
+    assert_eq!(recovered.text, "follow up");
+    assert_eq!(recovered.thread_id, "thread-1");
+    assert_eq!(recovered.payload.queued_at_ms, 2);
+    assert_eq!(recovered.payload.inherited, None);
+    assert_eq!(recovered.disposition, QueueDisposition::Steer);
+}
+
+#[test]
+fn requeued_turn_request_keeps_its_original_queue_lane() {
+    let recovered = <TurnRequest as QueuedMessage>::requeued_in_lane(
+        "request-2".into(),
+        "additional context".into(),
+        "thread-1",
+        QueueLane::Collect,
+        2,
+    );
+
+    assert_eq!(recovered.disposition, QueueDisposition::Collect);
+}
+
+#[test]
+fn work_tracker_emits_balanced_signals_for_overlapping_tool_calls() {
+    let mut tracker = WorkTracker::default();
+    let started = |call_id: &str| AgentProgress::ToolCallStarted {
+        call_id: call_id.to_owned(),
+        tool_name: "tool".into(),
+        arguments: serde_json::Value::Null,
+        iteration: 1,
+        display_label: None,
+        display_detail: None,
+    };
+
+    assert!(matches!(
+        tracker.observe(&started("a")),
+        Some(TurnSignal::WorkStarted)
+    ));
+    assert!(tracker.observe(&started("b")).is_none());
+    assert!(tracker.observe(&tool_completed("a")).is_none());
+    assert!(matches!(
+        tracker.observe(&tool_completed("b")),
+        Some(TurnSignal::WorkFinished)
+    ));
+}
+
+#[test]
+fn failure_classifier_default_preserves_the_legacy_class_and_message() {
+    struct Legacy;
+    impl FailureClassifier for Legacy {
+        fn classify(&self, _error: &str) -> (String, String) {
+            ("unavailable".into(), "Try again".into())
+        }
+    }
+
+    assert_eq!(
+        Legacy.classify_failure("provider unavailable"),
+        FailureClassification {
+            class: "unavailable".into(),
+            message: "Try again".into(),
+            details: None,
+        }
+    );
+}
+
+fn tool_completed(call_id: &str) -> AgentProgress {
+    AgentProgress::ToolCallCompleted {
+        call_id: call_id.to_owned(),
+        tool_name: "tool".into(),
+        success: true,
+        output_chars: 0,
+        output: String::new(),
+        arguments: None,
+        elapsed_ms: 0,
+        iteration: 1,
+        failure: None,
+        display_label: None,
+        display_detail: None,
+        structured: None,
+    }
+}

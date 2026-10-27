@@ -39,7 +39,7 @@ pub(super) const WRAPPER_NAMES: &[&str] = &[
 const NAME_KEYS: &[&str] = &["name", "tool", "tool_name", "function"];
 
 /// The pack tool the `{skill, tool, args}` shape belongs to.
-const USE_SKILL: &str = crate::tool::packs::USE_SKILL;
+const USE_SKILL: &str = crate::tool::USE_SKILL_TOOL;
 
 /// Whether `name` is one of the pseudo wrapper tool names.
 pub(super) fn is_wrapper_name(name: &str) -> bool {

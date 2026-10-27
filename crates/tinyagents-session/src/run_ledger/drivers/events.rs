@@ -6,7 +6,7 @@ use super::dto::{StreamEvent, stored_as_is};
 use super::storage::{AGENTS, CAS_ATTEMPTS, EVENT_HEADS, EVENTS, event_stream, key, put_op};
 use super::*;
 use serde::{Deserialize, Serialize};
-use tinystoragedrivers_core::{ErrorKind, Precondition, Versioned, WriteOp};
+use tinyagents_storage_kit::{ErrorKind, Precondition, Versioned, WriteOp};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct EventHead {
@@ -22,13 +22,13 @@ pub(super) fn head_after(highest: u64) -> Option<u64> {
     (highest < i64::MAX as u64).then_some(highest + 1)
 }
 
-struct EventCommit {
-    event: RunEvent,
-    writes: Vec<WriteOp>,
+pub(super) struct EventCommit {
+    pub(super) event: RunEvent,
+    pub(super) writes: Vec<WriteOp>,
 }
 
 impl DriverRunLedger {
-    async fn event_commit(&self, input: &RunEventAppend) -> Result<EventCommit> {
+    pub(super) async fn event_commit(&self, input: &RunEventAppend) -> Result<EventCommit> {
         let head = self.read::<EventHead>(EVENT_HEADS, &input.run_id).await?;
         let sequence = match &head {
             // A run migrated from v1 has events but no head (the v1 head's id
@@ -130,10 +130,10 @@ impl DriverRunLedger {
             if expected.is_some_and(|expected| previous.doc.status != expected) {
                 let checks = vec![
                     check,
-                    tinystoragedrivers_core::ReadCheck {
+                    tinystoragedrivers_types::ReadCheck {
                         collection: AGENTS.into(),
                         id: key(&[id])?,
-                        expected: tinystoragedrivers_core::ExpectedDocument::Version(
+                        expected: tinystoragedrivers_types::ExpectedDocument::Version(
                             previous.version,
                         ),
                     },

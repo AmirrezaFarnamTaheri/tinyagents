@@ -134,6 +134,20 @@ pub trait TranscriptHistory: TranscriptRead {
     /// Appends one durable message while preserving all of its fields.
     fn append(&self, message: TranscriptMessage) -> anyhow::Result<()>;
 
+    /// Adopt imported model-context messages only while this transcript has
+    /// never been written. Returns `true` when this call installed the import
+    /// and `false` when a competing or earlier turn already owns the session.
+    ///
+    /// Store implementations must make the empty check and write atomic.
+    /// The default refuses the operation so a storage backend cannot silently
+    /// provide a racy import.
+    fn adopt_if_empty(&self, messages: &[TranscriptMessage]) -> anyhow::Result<bool> {
+        if messages.is_empty() {
+            return Ok(false);
+        }
+        anyhow::bail!("transcript store does not support atomic history adoption")
+    }
+
     /// Replaces the logical model context by appending a compaction record.
     fn replace(&self, messages: &[TranscriptMessage]) -> anyhow::Result<()>;
 
@@ -344,6 +358,21 @@ pub trait TranscriptLocator: Send + Sync {
         self.open_stem(&session_stem(session), seed)
     }
 
+    /// Atomically install imported history for a not-yet-written session.
+    /// A previously written session wins unchanged; concurrent importers
+    /// serialize through the bound transcript's append contract.
+    fn adopt_messages_if_absent(
+        &self,
+        session: &SessionRef,
+        seed: TranscriptMeta,
+        messages: &[TranscriptMessage],
+    ) -> anyhow::Result<bool> {
+        if messages.is_empty() {
+            return Ok(false);
+        }
+        self.open_session(session, seed)?.adopt_if_empty(messages)
+    }
+
     /// Folds any pre-identity transcripts of `thread_id` into `session`, once.
     ///
     /// A conversation written before session identity existed is spread across
@@ -402,7 +431,7 @@ pub trait TranscriptLocator: Send + Sync {
     /// set through the ordinary turn path (`prev: &[]`), so usage, request ids
     /// and display partials are recorded exactly as on any other turn.
     ///
-    /// Bounded by [`MAX_GENERATIONS`] — the same limit [`Self::head_generation`]
+    /// Bounded by the maximum generation count — the same limit [`Self::head_generation`]
     /// and [`Self::session_chain`] stop probing at. Enforcing it here, at the
     /// only place a new generation is minted, is what keeps those two bounded
     /// scans complete: without it a chain could grow past what they are
@@ -596,6 +625,7 @@ pub(super) fn seed_meta_for_discovered(agent_name: &str) -> TranscriptMeta {
         updated: String::new(),
         turn_count: 0,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,

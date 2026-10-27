@@ -228,6 +228,31 @@ async fn successful_repeat_tracker_halt_maps_to_summary_and_pause() {
     );
 }
 
+#[tokio::test]
+async fn successful_repeat_halt_carries_typed_operation_into_the_run() {
+    let handle = SteeringHandle::allow_all();
+    let mw = new_mw(handle.clone(), Arc::new(std::sync::Mutex::new(None)));
+    let mut ctx = ctx();
+
+    for _ in 0..DEFAULT_REPEAT_CALL_THRESHOLD {
+        let mut response = repeated_success_response("lookup", json!({"id": 1}));
+        mw.after_model(&mut ctx, &(), &mut response).await.unwrap();
+        let mut result = TaToolResult::success("ok");
+        let invocation = ToolInvocationIdentity::new("repeat-1", "lookup");
+        mw.after_tool(&mut ctx, &(), &invocation, &mut result)
+            .await
+            .unwrap();
+    }
+
+    assert_eq!(drain_pause_count(&handle), 1);
+    let cause = ctx
+        .take_halted_by_guard_cause()
+        .expect("typed repeat cause");
+    assert_eq!(cause.class, "repeating_step");
+    assert_eq!(cause.operation, "lookup");
+    assert!(cause.summary.contains("successful tool-call batch"));
+}
+
 /// Another guard sharing the slot stopped the run earlier in the batch: its
 /// summary names the cause and must survive this guard tripping as well.
 #[tokio::test]
@@ -270,6 +295,28 @@ async fn the_halt_marker_names_the_first_cause() {
     assert_eq!(drain_pause_count(&handle), 1);
     assert_eq!(ctx.halted_by_guard.as_deref(), Some("first cause"));
     assert_eq!(summary.lock().unwrap().as_deref(), Some("first cause"));
+}
+
+#[test]
+fn classified_halt_preserves_typed_cause_for_run_finalization() {
+    let handle = SteeringHandle::allow_all();
+    let mw = new_mw(handle, Arc::new(std::sync::Mutex::new(None)));
+    let mut ctx = ctx();
+    mw.halt_classified(
+        &mut ctx,
+        crate::no_progress::ClassifiedStopCause {
+            class: "permission".into(),
+            operation: "file_write".into(),
+            summary: "note wording can change".into(),
+        },
+    );
+    assert_eq!(
+        ctx.halted_by_guard.as_deref(),
+        Some("note wording can change")
+    );
+    let cause = ctx.take_halted_by_guard_cause().expect("typed cause");
+    assert_eq!(cause.class, "permission");
+    assert_eq!(cause.operation, "file_write");
 }
 
 #[tokio::test]

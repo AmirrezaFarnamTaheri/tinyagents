@@ -28,9 +28,11 @@
 //! (memory, security, budget, progress) are trait objects supplied separately;
 //! nothing in this module is a behaviour seam.
 
+mod context;
 mod required_output;
 mod types;
 
+pub use context::*;
 pub use required_output::{
     find_required_block, output_satisfies_contract, repair_instruction, synthesize_block,
 };

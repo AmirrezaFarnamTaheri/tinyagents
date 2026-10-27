@@ -9,6 +9,127 @@ use serde_json::{Map, json};
 use tinyinference_llm::model::ModelProfile;
 
 #[test]
+fn dynamic_prompt_tier_markers_preserve_literal_body_slices() {
+    let body = format!(
+        "é stable\r\n  {context}\t\r\ncontext\r\n<!--prompt-tier:unknown-->\ninline {volatile} marker\r\n{volatile}\n📎 tail",
+        context = PROMPT_TIER_CONTEXT_MARKER,
+        volatile = PROMPT_TIER_VOLATILE_MARKER,
+    );
+
+    assert_eq!(
+        split_prompt_tiers(&body, PromptTier::Volatile),
+        vec![
+            TieredPromptPart::new(PromptTier::Volatile, "é stable\r\n"),
+            TieredPromptPart::new(
+                PromptTier::Context,
+                "context\r\n<!--prompt-tier:unknown-->\ninline <!--prompt-tier:volatile--> marker\r\n",
+            ),
+            TieredPromptPart::new(PromptTier::Volatile, "📎 tail"),
+        ],
+        "trimmed marker lines change tier, while CRLF body bytes, unknown comments, and inline markers stay literal"
+    );
+}
+
+#[test]
+fn dynamic_prompt_tier_markers_keep_defaults_and_discard_empty_slices() {
+    assert_eq!(
+        split_prompt_tiers("  only this body  ", PromptTier::Stable),
+        vec![TieredPromptPart::new(
+            PromptTier::Stable,
+            "  only this body  ",
+        )]
+    );
+    assert_eq!(
+        split_prompt_tiers(
+            &format!(
+                "{context}\n{context}\ncontent",
+                context = PROMPT_TIER_CONTEXT_MARKER
+            ),
+            PromptTier::Volatile,
+        ),
+        vec![TieredPromptPart::new(PromptTier::Context, "content")]
+    );
+    assert!(split_prompt_tiers(" \n ", PromptTier::Stable).is_empty());
+}
+
+#[test]
+fn tiered_prompt_composition_keeps_stable_prefix_when_later_context_changes() {
+    struct Section(&'static str, PromptTier);
+    impl DynamicPromptSection<String> for Section {
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn render(&self, context: &String) -> Result<Vec<TieredPromptPart>> {
+            Ok(vec![TieredPromptPart::new(
+                self.1,
+                if self.1 == PromptTier::Stable {
+                    "fixed"
+                } else {
+                    context
+                },
+            )])
+        }
+    }
+
+    let mut composer = PromptComposer::new();
+    composer.push(Section("volatile", PromptTier::Volatile));
+    composer.push(Section("stable", PromptTier::Stable));
+    composer.push(Section("context", PromptTier::Context));
+    let first = composer.build(&"project A".to_string()).unwrap();
+    let second = composer.build(&"project B".to_string()).unwrap();
+    assert_eq!(
+        first.parts[0],
+        (PromptTier::Stable, "fixed\n\n".to_string())
+    );
+    assert_eq!(first.parts[0], second.parts[0]);
+    assert_eq!(first.parts[1].1, "project A\n\n");
+    assert_eq!(second.parts[1].1, "project B\n\n");
+    assert_eq!(first.parts[2].0, PromptTier::Volatile);
+    assert_ne!(first.parts[2].1, second.parts[2].1);
+    assert!(first.breakpoints[0] < first.text.len());
+
+    let mut request = PromptBuilder::new();
+    request.push_tiered_system_prompt(&first);
+    let built = request.build(vec![]);
+    assert_eq!(built.messages.len(), 3);
+    assert!(built.cache_segments[0].id.contains("tier:stable"));
+    assert!(built.cache_segments[1].id.contains("tier:context"));
+    assert!(!built.cache_segments[2].cacheable);
+}
+
+#[test]
+fn prompt_tier_order_is_deterministic_and_each_section_renders_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Counted(AtomicUsize);
+    impl DynamicPromptSection<()> for Counted {
+        fn name(&self) -> &str {
+            "counted"
+        }
+        fn render(&self, _: &()) -> Result<Vec<TieredPromptPart>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![
+                TieredPromptPart::new(PromptTier::Context, "context"),
+                TieredPromptPart::new(PromptTier::Stable, "stable"),
+            ])
+        }
+    }
+    let section = std::sync::Arc::new(Counted(AtomicUsize::new(0)));
+    let mut composer = PromptComposer::new();
+    composer.push(section.clone());
+    composer.push(|_: &()| {
+        Ok(vec![TieredPromptPart::new(
+            PromptTier::Volatile,
+            "volatile",
+        )])
+    });
+    let a = composer.build(&()).unwrap();
+    let b = composer.build(&()).unwrap();
+    assert_eq!(section.0.load(Ordering::SeqCst), 2);
+    assert_eq!(a.text, "stable\n\ncontext\n\nvolatile\n");
+    assert_eq!(a.parts, b.parts);
+}
+
+#[test]
 fn gated_families_get_execution_discipline_and_others_do_not() {
     for model in [
         "openrouter/deepseek/deepseek-v4-flash",

@@ -11,7 +11,6 @@ use tinyagents_session::transcript::{
     DisplayRecord, MessageUsage, TranscriptMessage, TranscriptMeta, TranscriptPartial,
     TranscriptToolCall, TranscriptTurn, TurnUsage,
 };
-use tinystoragedrivers_sqlite::SqliteStorage;
 
 fn meta(turn_count: usize, input_tokens: u64, output_tokens: u64) -> TranscriptMeta {
     TranscriptMeta {
@@ -27,6 +26,7 @@ fn meta(turn_count: usize, input_tokens: u64, output_tokens: u64) -> TranscriptM
         updated: format!("2026-09-19T10:00:0{turn_count}Z"),
         turn_count,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens,
         output_tokens,
         cached_input_tokens: 3,
@@ -64,12 +64,10 @@ fn usage(iteration: u32, input: u64, output: u64) -> TurnUsage {
 fn append_only_transcript_reopens_with_compacted_context_and_full_display_history() {
     let database = tempfile::tempdir().unwrap();
     let open = || {
-        DriverSessionStores::new(
-            std::sync::Arc::new(
-                SqliteStorage::open(database.path().join("sessions.sqlite")).unwrap(),
-            ),
-            tinystoragedrivers_core::Scope::local(),
-        )
+        DriverSessionStores::new(storage::fixed_factory(storage::sqlite(
+            database.path(),
+            "sessions.sqlite",
+        )))
         .unwrap()
         .for_agent("researcher")
         .transcripts

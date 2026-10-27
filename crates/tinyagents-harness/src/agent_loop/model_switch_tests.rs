@@ -4,6 +4,7 @@
 //! fallback chain) belongs to the new model.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -126,10 +127,81 @@ fn two_models(
 ) -> (AgentHarness<()>, Arc<ScriptedModel>, Arc<ScriptedModel>) {
     let (a, b) = (Arc::new(a), Arc::new(b));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("a", a.clone());
-    harness.register_model("b", b.clone());
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        a.clone(),
+        [("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>)],
+    )
+    .with_primary_name("a");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.register_tool(Arc::new(FakeTool::returning("lookup", "ok")));
     (harness, a, b)
+}
+
+struct CountingResolver {
+    inner: crate::host::PrebuiltModelResolver<()>,
+    named_calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl crate::host::ModelResolver<()> for CountingResolver {
+    async fn resolve(
+        &self,
+        request: &crate::host::ModelResolveRequest,
+    ) -> crate::error::Result<Arc<dyn ChatModel<()>>> {
+        self.inner.resolve(request).await
+    }
+
+    async fn resolve_named(
+        &self,
+        name: &str,
+    ) -> crate::error::Result<Option<Arc<dyn ChatModel<()>>>> {
+        self.named_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.resolve_named(name).await
+    }
+
+    fn preview(
+        &self,
+        request: &crate::host::ModelResolveRequest,
+    ) -> Option<Arc<dyn ChatModel<()>>> {
+        self.inner.preview(request)
+    }
+
+    fn selected_name(&self, request: &crate::host::ModelResolveRequest) -> Option<String> {
+        self.inner.selected_name(request)
+    }
+}
+
+#[tokio::test]
+async fn sticky_switch_reuses_the_model_binding_for_unchanged_inputs() {
+    let a = Arc::new(ScriptedModel::replies(vec!["from a"]).with_profile(profile("openai", "a")));
+    let b = Arc::new(ScriptedModel::replies(vec!["from b"]).with_profile(profile("openai", "b")));
+    let inner = crate::host::PrebuiltModelResolver::new(
+        a,
+        [("b".to_owned(), b.clone() as Arc<dyn ChatModel<()>>)],
+    )
+    .with_primary_name("a");
+    let named_calls = Arc::new(AtomicUsize::new(0));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_model_resolver(Arc::new(CountingResolver {
+        inner,
+        named_calls: named_calls.clone(),
+    }));
+
+    let handle = SteeringHandle::allow_all_with_model_switch();
+    handle.send(switch("b"));
+    let recorder = EventRecorder::new();
+    let run = harness
+        .invoke_in_context(&(), context(&handle, &recorder), vec![Message::user("hi")])
+        .await
+        .expect("the switched model runs");
+
+    assert_eq!(run.text(), Some("from b".to_owned()));
+    assert_eq!(b.requests().len(), 1);
+    assert_eq!(
+        named_calls.load(Ordering::SeqCst),
+        0,
+        "the eligible binding resolved for this request is reused by both switch checks"
+    );
 }
 
 /// Answers from a script and, on its first call, queues `command` on the
@@ -213,8 +285,12 @@ async fn mid_run_switch_applies_to_the_next_call_and_stays_sticky() {
         ModelResponse::assistant("done"),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("a", a);
-    harness.register_model("b", b.clone());
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        a.clone(),
+        [("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>)],
+    )
+    .with_primary_name("a");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.register_tool(Arc::new(FakeTool::returning("lookup", "ok")));
     let recorder = EventRecorder::new();
 
@@ -449,8 +525,14 @@ fn failover_harness(
     models: Vec<(&str, Arc<dyn ChatModel<()>>)>,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    for (name, model) in models {
-        harness.register_model(name, model);
+    let mut models = models.into_iter();
+    if let Some((primary_name, primary)) = models.next() {
+        let resolver = crate::host::PrebuiltModelResolver::new(
+            primary,
+            models.map(|(name, model)| (name.to_string(), model)),
+        )
+        .with_primary_name(primary_name);
+        harness.with_model_resolver(Arc::new(resolver));
     }
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
@@ -655,11 +737,20 @@ async fn rejection_after_middleware_restores_request_model_and_reports_once() {
 
 #[tokio::test]
 async fn switch_wins_over_a_model_chosen_by_before_model_middleware() {
-    let (mut harness, _, b) = two_models(
-        ScriptedModel::replies(vec!["from a"]),
-        ScriptedModel::replies(vec!["from b"]),
-    );
-    harness.register_model("c", Arc::new(ScriptedModel::replies(vec!["from c"])));
+    let a = Arc::new(ScriptedModel::replies(vec!["from a"]));
+    let b = Arc::new(ScriptedModel::replies(vec!["from b"]));
+    let c = Arc::new(ScriptedModel::replies(vec!["from c"]));
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        a.clone(),
+        [
+            ("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>),
+            ("c".to_string(), c.clone() as Arc<dyn ChatModel<()>>),
+        ],
+    )
+    .with_primary_name("a");
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_model_resolver(Arc::new(resolver));
+    harness.register_tool(Arc::new(FakeTool::returning("lookup", "ok")));
     harness.push_middleware(Arc::new(Tweak {
         model: Some("c"),
         tool_calling: false,
@@ -676,6 +767,10 @@ async fn switch_wins_over_a_model_chosen_by_before_model_middleware() {
     assert_eq!(run.text(), Some("from b".to_string()));
     assert_eq!(model_started(&recorder), vec!["b"]);
     assert_eq!(b.requests().len(), 1);
+    assert!(
+        c.requests().is_empty(),
+        "the switch wins over the available middleware route"
+    );
 }
 
 #[tokio::test]
@@ -687,7 +782,15 @@ async fn rejected_switch_keeps_the_model_a_middleware_picked() {
     let c = Arc::new(
         ScriptedModel::replies(vec!["from c"]).with_profile(tool_capable("openai", "gpt-5-mini")),
     );
-    harness.register_model("c", c.clone());
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        a.clone(),
+        [
+            ("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>),
+            ("c".to_string(), c.clone() as Arc<dyn ChatModel<()>>),
+        ],
+    )
+    .with_primary_name("a");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.push_middleware(Arc::new(Tweak {
         model: Some("c"),
         tool_calling: true,

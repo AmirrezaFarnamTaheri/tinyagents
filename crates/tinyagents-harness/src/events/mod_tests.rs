@@ -162,6 +162,20 @@ fn completed_events_deserialize_without_started_at_ms() {
 }
 
 #[test]
+fn model_response_cached_event_round_trips_without_a_cache_key() {
+    let event = AgentEvent::ModelResponseCached {
+        call_id: crate::ids::CallId::new("call-1"),
+    };
+    assert_eq!(event.kind(), "model.response_cached");
+
+    let value = serde_json::to_value(&event).unwrap();
+    assert_eq!(value["kind"], "model_response_cached");
+    assert_eq!(value["call_id"], "call-1");
+    assert!(value.get("key").is_none());
+    assert_eq!(serde_json::from_value::<AgentEvent>(value).unwrap(), event);
+}
+
+#[test]
 fn smoke_harness_run_status_lifecycle() {
     let run_id = RunId::new("run-status");
     let component = ComponentId::new("agent");
@@ -613,6 +627,43 @@ fn terminal_and_lifecycle_events_have_stable_kinds() {
         .kind(),
         "message.appended"
     );
+    assert_eq!(
+        AgentEvent::TurnStopped {
+            turn: 2,
+            stop: crate::turn_stop::TurnStop::wind_down(),
+        }
+        .kind(),
+        "turn.stopped"
+    );
+}
+
+#[test]
+fn turn_stopped_events_round_trip_without_breaking_old_run_records() {
+    let event = AgentEvent::TurnStopped {
+        turn: 3,
+        stop: crate::turn_stop::TurnStop::breaker_with_cause(
+            "private note is not serialized",
+            crate::turn_stop::TurnFailureClass::new("uncertain_side_effect"),
+            Some("web_answer_tool".into()),
+        ),
+    };
+    let json = serde_json::to_value(&event).expect("serialize event");
+    assert_eq!(json["kind"], "turn_stopped");
+    assert_eq!(json["turn"], 3);
+    assert_eq!(json["stop"]["kind"], "breaker");
+    assert_eq!(json["stop"]["failure_class"], "uncertain_side_effect");
+    let back: AgentEvent = serde_json::from_value(json).expect("deserialize event");
+    assert_eq!(back, event);
+
+    let old: AgentEvent = serde_json::from_value(serde_json::json!({
+        "kind": "run_completed",
+        "run_id": "legacy-run"
+    }))
+    .expect("legacy run event remains readable");
+    assert!(matches!(
+        old,
+        AgentEvent::RunCompleted { outcome: None, .. }
+    ));
 }
 
 #[test]

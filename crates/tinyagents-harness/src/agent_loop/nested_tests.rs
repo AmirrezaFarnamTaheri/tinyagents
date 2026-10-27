@@ -237,13 +237,13 @@ fn parent_call(id: &str, tool: &str) -> ToolCall {
 /// A harness whose model makes `calls` in one turn, then says "done".
 fn harness_with(calls: Vec<ToolCall>, limits: RunLimits) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
         "mock",
         Arc::new(MockModel::with_responses(vec![
             response(calls),
             text_response("done"),
         ])),
-    );
+    )));
     harness.with_policy(RunPolicy {
         limits,
         ..RunPolicy::default()

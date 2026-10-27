@@ -1,40 +1,34 @@
 # TinyAgents System Specification
 
-TinyAgents is a small, provider-neutral agent harness for Rust, plus a durable
-typed state-graph runtime. It takes its shape from LangChain (models, tools,
-middleware, structured output, streaming, usage/cost) and LangGraph
-(`START`/`END`, nodes, conditional edges, channels/reducers, checkpoints,
-interrupts, subgraphs, time travel) — rebuilt as ordinary, typed Rust. The
-system is organized as five public crates:
+TinyAgents is a small, provider-neutral agent harness for Rust. It takes its
+shape from LangChain (models, tools, middleware, structured output, streaming,
+usage/cost) — rebuilt as ordinary, typed Rust. The system is organized as
+focused workspace packages:
 
 1. the harness
-2. the graph
+2. reusable harness tools
 3. the registry
 4. durable sessions
 5. host-neutral session runtime
+6. host-neutral orchestration
 
 The goal is to make agent systems easy to define, inspect, run, test, and
 serialize without hiding the Rust types that make production systems reliable.
 
 ## Reference Positioning
 
-TinyAgents synthesizes the reference systems rather than cloning either one:
-
-- LangGraph contributes the durable execution model: explicit state graphs,
-  virtual `START` and `END`, Pregel-style supersteps, reducers/channels,
-  commands, `Send` fanout, checkpointing, interrupts, subgraphs, streaming, and
-  time travel.
-- LangChain contributes the harness model: provider-neutral models, tools,
-  middleware, runtime context, memory, retrieval, structured output, tracing,
-  usage, cost, and conformance tests for integrations.
+TinyAgents builds on the harness model: provider-neutral models, tools,
+middleware, runtime context, memory, retrieval, structured output, tracing,
+usage, cost, and conformance tests for integrations.
 
 The target architecture is layered: the harness owns model/tool execution and
-policies, the graph owns deterministic state transition and durability, the
-registry owns named capabilities. No layer should bypass another layer's safety, policy,
+policies, the session crate owns durable conversation state, and the registry
+owns named capabilities. No layer should bypass another layer's safety, policy,
 observability, or test contracts.
 
 ## Detailed Module Docs
 
+- [Harness tools crate](../../crates/tinyagents-harness-tools/README.md)
 - [Harness module](../modules/harness/README.md)
   - [Context](../modules/harness/context.md)
   - [Model and providers](../modules/harness/model.md)
@@ -45,6 +39,7 @@ observability, or test contracts.
   - [Tool](../modules/harness/tool.md)
   - [Tool exposure and discovery](../modules/harness/tool-discovery.md)
   - [Middleware](../modules/harness/middleware.md)
+  - [Tool wrapping and execution observation](../modules/harness/middleware-tool-wrap.md)
   - [Sub-agent and orchestrator steering](../modules/harness/subagent-steering.md)
   - [Structured output](../modules/harness/structured-output.md)
   - [Limits, retry, fallback, and rate limiting](../modules/harness/limits-retry.md)
@@ -57,25 +52,6 @@ observability, or test contracts.
   - [Observability and events](../modules/harness/observability.md)
   - [Performance and capacity testing](../modules/harness/performance.md)
   - [Testkit](../modules/harness/testkit.md)
-- [Graph module](../modules/graph/README.md)
-  - [Package and core types](../modules/graph/package.md)
-  - [Builder and compile contract](../modules/graph/builder.md)
-  - [Node model](../modules/graph/nodes.md)
-  - [State, channels, and updates](../modules/graph/state-channels.md)
-  - [Edges, routing, commands, and sends](../modules/graph/routing.md)
-  - [Execution model and parallelization](../modules/graph/execution.md)
-  - [Parallel agents and context forking](../modules/graph/parallel-agents-forking.md)
-  - [Checkpointing, durability, state inspection, and time travel](../modules/graph/checkpointing.md)
-  - [Interrupts and resume](../modules/graph/interrupts.md)
-  - [Streaming and events](../modules/graph/streaming.md)
-  - [Observability and tracing](../modules/graph/observability.md)
-  - [Runtime context and policies](../modules/graph/runtime-policy.md)
-  - [Fault tolerance](../modules/graph/fault-tolerance.md)
-  - [Subgraphs](../modules/graph/subgraphs.md)
-  - [Sub-agents and recursion](../modules/graph/subagents-recursion.md)
-  - [Memory and stores boundary](../modules/graph/memory-boundary.md)
-  - [Visualization, introspection, and testkit](../modules/graph/visualization-testkit.md)
-  - [Implementation milestones](../modules/graph/milestones.md)
 - [Registry module](../modules/registry/README.md)
   - [Design](../modules/registry/design.md)
   - [Model catalog and local snapshots](../modules/registry/model-catalog.md)
@@ -90,16 +66,12 @@ it.
 ## Design Goals
 
 - Make simple agent workflows concise.
-- Make complex workflows explicit, inspectable, and testable.
-- Treat graph execution as a first-class runtime, not an incidental callback
-  chain.
+- Make agent workflows explicit, inspectable, and testable.
 - Keep model providers, tools, memory, and tracing behind stable traits.
 - Allow parent orchestrators and humans to steer orchestrator agents and
   sub-agents through typed, policy-checked, observable commands.
 - Prefer deterministic state transitions around inherently nondeterministic LLM
   calls.
-- Keep every generated or hand-authored graph explainable as topology,
-  capabilities, policies, state channels, checkpoints, and events.
 
 ## Module 1: Harness
 
@@ -129,15 +101,6 @@ resume. The `tools` array stays stable between discoveries when no per-turn
 exposure middleware changes the advertised set.
 `RunPolicy::tool_schemas` optionally projects and byte-budgets every schema.
 
-## Module 2: Graph
-
-The graph is the durable, typed state-graph runtime: `START`/`END`, nodes,
-reducers/channels, routing, supersteps, checkpointing, interrupts, streaming,
-subgraphs, and execution guarantees. See [`graph-spec.md`](graph-spec.md) for
-the full specification, and
-[`docs/modules/graph/README.md`](../modules/graph/README.md) for the
-per-topic implementation docs.
-
 ## Package Layout
 
 The repository root is a virtual Cargo workspace. There is no `tinyagents`
@@ -147,13 +110,13 @@ they use. Shared runtime errors live in `tinyagents-harness`.
 ```text
 crates/
   tinyagents-harness/           # models, tools, middleware, providers, runtime
-  tinyagents-graph/             # durable typed state graphs
-  tinyagents-tasks/             # graph-independent detached-task registry, task stores, orchestration tools
+  tinyagents-harness-tools/     # reusable tool implementations and stateful support
+  tinyagents-tasks/             # detached-task registry, task stores, orchestration tools
   tinyagents-registry/          # named capabilities and model catalog
   tinyagents-session/           # durable session history and run ledger
   tinyagents-definition/        # host-owned agent definition vocabulary
   tinyagents-runtime/           # host-neutral stateful harness sessions
-  tinyagents-orchestration/     # host-neutral team/workflow composition over graph+harness+session
+  tinyagents-orchestration/     # host-neutral multi-agent composition over harness+session
   tinyagents-integration-tests/ # cross-crate tests and runnable examples
 ```
 
@@ -170,8 +133,9 @@ All four milestones below have shipped as of v1.5.0.
 
 ### Milestone 1: Core Runtime (shipped)
 
-Chat message primitives, the model and tool traits, the state graph with
-direct and conditional edges, and the initial test/example suite.
+Chat message primitives, the model and tool traits, and the initial
+test/example suite. The original state-graph runtime was removed in TinyAgents
+#61.
 
 ### Milestone 2: Harness (shipped)
 
@@ -187,9 +151,9 @@ mock provider.
 
 ### Milestone 4: Production Runtime Features (shipped)
 
-Streaming events, checkpointing and resume support, the graph run status
-store, event journal with listener replay, graph export, and an embedded
-Langfuse tracing integration (`LangfuseClient`, `GraphLangfuseExporter`).
+Streaming events, session checkpointing and resume support, an event journal
+with listener replay, and an embedded Langfuse tracing integration. The graph
+run status store and graph exporter were removed in TinyAgents #61.
 
 ## Open Questions
 
@@ -199,10 +163,6 @@ Historical decisions that have since been settled, kept for context:
   than becoming one crate per provider.
 - Memory and embeddings are async, matching the rest of the harness surface.
 
-Remaining open question:
-
-- Should graph nodes support typed route enums as a stronger alternative to
-  string-keyed conditional routing before further serialization work lands?
 
 Transcript accounting preserves cost provenance in durable usage records.
 Hosts should use `TranscriptSpend::cost_split` to separate charged or estimated

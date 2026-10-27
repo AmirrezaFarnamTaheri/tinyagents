@@ -126,7 +126,7 @@ pub fn record_cancelled(store: &dyn TaskStore, task_id: &str) -> tinyagents_harn
 /// Watch a child's status channel and mirror its first terminal status into
 /// `store`. A dropped sender without a terminal status is recorded as
 /// [`DetachedSubagentStatus::ended_without_result`]. A failed write is retried
-/// up to [`STATUS_WRITE_ATTEMPTS`] times before the watcher gives up; hosts
+/// up to `STATUS_WRITE_ATTEMPTS` times before the watcher gives up; hosts
 /// that must observe persistence failures call [`record_status`] themselves.
 pub fn spawn_status_watcher(
     store: Arc<dyn TaskStore>,

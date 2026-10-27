@@ -8,6 +8,11 @@ types: the host supplies a `TurnPlanner` and per-turn `TurnControls`.
 | `TurnDriver` | `SessionDriver` that plans, assembles one `AgentHarness`, runs it and fills a `TurnReport` |
 | `TurnPlanner` / `TurnPlan` | per-turn recipe: models, run policy, tools, context middleware, tool policy, listeners, completion sink |
 | `ToolSetBuilder` | registers an admitted subset of shared tool sets (fail-closed allowlist, spawn-tool refusal for children, thread-scoped tools, session-deferred tools, typed dispatch, execution scope) |
+
+Static sets use `set`/`sets`; dynamic turn surfaces use `synthesized_set` and
+`refresh_synthesized_sets`. Refresh replaces only synthesized executors and
+returns a stable name diff, leaving static tools untouched. Apply that diff to
+host visibility before calling `register`.
 | `TurnControls` | model-call cap and pause-at-cap, early-exit tools, deferred completion, scope, steering feed, registrar |
 | `RunQueueFeed` | `SteeringFeed` over a harness `RunQueue`: pre-run drain, poll loop, requeue of unapplied steers on drop |
 

@@ -4,7 +4,7 @@
 //! typed control over a *child* it is currently running: an orchestrating agent
 //! (or human, or graph supervisor) injects [`SteeringCommand`]s into a live
 //! sub-agent loop without killing or restarting it. It is the mid-run
-//! counterpart to `SubAgentSession` reuse in `tinyagents-orchestration` (which
+//! counterpart to durable child-session reuse in `tinyagents-orchestration` (which
 //! resumes a *completed* child) — together they cover both ways an orchestrator
 //! keeps a sub-agent "in play".
 //!
@@ -431,7 +431,7 @@ impl SteeringHandle {
 /// - When `ctx` has no [`SteeringHandle`], returns
 ///   [`SteeringOutcome::Continue`] without emitting anything.
 /// - Only commands addressed to this run are drained: see
-///   [`SteeringHandle::drain`] and [`SteeringHandle::for_child`]. Commands
+///   [`SteeringHandle::drain`] and `SteeringHandle::for_child`. Commands
 ///   addressed to a different run stay queued for it.
 /// - Each command is checked **individually** against the run's
 ///   [`SteeringPolicy`]. A disallowed command is rejected on its own — an
@@ -578,6 +578,11 @@ pub fn apply_pending_steering<Ctx>(
         Ok(SteeringOutcome::Continue)
     }
 }
+
+/// Longest steer text (in bytes) a parent agent may send a child, checked
+/// where agent-origin steers are produced. Matches the session ledger's
+/// `MAX_TOOL_OUTPUT_BYTES`: a steer is an instruction, not a payload channel.
+pub const MAX_STEER_TEXT_BYTES: usize = 32 * 1024;
 
 /// Validation failure from [`RecentRequestIds::claim`].
 #[non_exhaustive]

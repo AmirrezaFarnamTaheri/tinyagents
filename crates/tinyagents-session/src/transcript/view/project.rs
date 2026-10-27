@@ -168,7 +168,7 @@ pub fn project_transcripts(
 ///   `role:"tool"` line pairs to one by id, falling back to FIFO order.
 /// - A prompt-guided round (calls in the visible text, results folded into one
 ///   `[Tool results]` user line) projects to the same shape: see
-///   [`prompt_tools`].
+///   `prompt_tools`.
 /// - Interrupted partials and compaction markers pass through as their items.
 /// - A [`DisplayItem::TurnBoundary`] is emitted whenever `request_id` changes.
 pub fn project_records(records: &[DisplayRecord]) -> Vec<DisplayItem> {
@@ -289,6 +289,7 @@ impl Projector {
                     display_content: sanitized,
                     request_id: msg.request_id.clone(),
                     ts: msg.ts.clone(),
+                    extra_metadata: msg.message.extra_metadata.clone(),
                 });
             }
             "assistant" => self.assistant(msg),
@@ -304,6 +305,7 @@ impl Projector {
                     model: msg.turn_usage.as_ref().map(|tu| tu.model.clone()),
                     iteration: msg.iteration,
                     ts: msg.ts.clone(),
+                    extra_metadata: msg.message.extra_metadata.clone(),
                 });
             }
         }
@@ -389,6 +391,7 @@ impl Projector {
                 model: msg.turn_usage.as_ref().map(|tu| tu.model.clone()),
                 iteration: Some(iteration),
                 ts: msg.ts.clone(),
+                extra_metadata: msg.message.extra_metadata.clone(),
             });
         }
 

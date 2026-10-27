@@ -1,9 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tinyagents_harness::retry::RetryPolicy;
-
 use super::*;
+use tinyagents_harness::retry::RetryPolicy;
 
 fn transient() -> TinyAgentsError {
     TinyAgentsError::Tool("flaky".into())
@@ -72,8 +71,7 @@ fn does_not_retry_after_tools_ran_unless_the_policy_allows_it() {
 
 #[test]
 fn the_orchestration_path_names_the_same_policy_type_as_the_graph() {
-    let policy: tinyagents_graph::SubAgentPolicy =
-        SubAgentPolicy::default().with_timeout(Duration::from_secs(1));
+    let policy: SubAgentPolicy = SubAgentPolicy::default().with_timeout(Duration::from_secs(1));
     assert_eq!(policy.timeout, Some(Duration::from_secs(1)));
 }
 
@@ -110,6 +108,19 @@ fn retry_attempts_inherit_the_first_attempts_host_extensions() {
         retry.run_context.host::<OriginTag>(),
         Some(&OriginTag("web"))
     );
+}
+
+#[test]
+fn retry_attempts_keep_tool_scope_and_skill_filter() {
+    let prepared = prepared_with_origin(false)
+        .with_tool_scope(tinyagents_definition::ToolScope::Named(vec![
+            "docs__search".into(),
+        ]))
+        .with_skill_filter("docs");
+    let mut source = AttemptSource::from_prepared(&prepared);
+    let retry = source.next(1, CancellationToken::new()).unwrap();
+    assert_eq!(retry.tool_scope, prepared.tool_scope);
+    assert_eq!(retry.skill_filter.as_deref(), Some("docs"));
 }
 
 #[test]

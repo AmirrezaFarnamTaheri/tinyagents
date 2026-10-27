@@ -1,6 +1,8 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use crate::testkit::conformance::transcript_history_conformance;
-use tinystoragedrivers_core::{MemoryStorage, Precondition, Scope, StorageBackend};
+use tinyagents_storage_kit::{Precondition, Scope, WriteCondition, WriteOptions};
+use tinystoragedrivers_types::{Filter, Query, Sort};
 
 pub(in crate::port::drivers) fn meta(thread_id: &str) -> TranscriptMeta {
     let mut meta = discovered_seed("planner");
@@ -16,13 +18,58 @@ fn message(role: &str, content: &str) -> TranscriptMessage {
     serde_json::from_value(json!({ "role": role, "content": content })).unwrap()
 }
 
-fn docs() -> Arc<dyn DocumentStore> {
-    let storage = MemoryStorage::new();
-    Arc::clone(storage.for_scope(&Scope::local()).unwrap().documents())
+struct TestDocs {
+    docs: Arc<dyn DocumentStore>,
+    connection: tinystoragedrivers_connect::sqlite::SqliteConnection,
+    scope: Scope,
+    _directory: tempfile::TempDir,
 }
 
-fn locator(docs: &Arc<dyn DocumentStore>) -> DriverTranscriptLocator {
-    DriverTranscriptLocator::new(Arc::clone(docs), Blocking::new().unwrap(), "memory://test")
+impl std::ops::Deref for TestDocs {
+    type Target = Arc<dyn DocumentStore>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.docs
+    }
+}
+
+fn docs() -> TestDocs {
+    use tinystoragedrivers_connect::sqlite::SqliteConnection;
+    use tinystoragedrivers_document::sqlite::SqliteDocuments;
+
+    let directory = tempfile::tempdir().unwrap();
+    let connection = SqliteConnection::open(directory.path().join("transcripts.db")).unwrap();
+    let scope = Scope::new("local").unwrap();
+    let docs =
+        Arc::new(SqliteDocuments::new(connection.clone(), scope.clone())) as Arc<dyn DocumentStore>;
+    TestDocs {
+        docs,
+        connection,
+        scope,
+        _directory: directory,
+    }
+}
+
+fn locator(docs: &TestDocs) -> DriverTranscriptLocator {
+    use tinystoragedrivers_document::sqlite::SqliteDocuments;
+
+    let connection = docs.connection.clone();
+    let scope = docs.scope.clone();
+    let opener: ConditionedEntryOpener = Arc::new(move |condition| {
+        Ok(Arc::new(SqliteDocuments::conditioned(
+            connection.clone(),
+            scope.clone(),
+            condition.clone(),
+        )) as Arc<dyn DocumentStore>)
+    });
+    DriverTranscriptLocator::new_with_conditioned_entry_opener(
+        Arc::clone(&docs.docs),
+        Blocking::new().unwrap(),
+        "memory://test",
+        tinyagents_harness::store::SchemaAdmission::Declare,
+        docs.scope.clone(),
+        opener,
+    )
 }
 
 /// Lets the reservation of `stem` lapse, as if its owner stopped long ago.
@@ -89,11 +136,106 @@ fn on_bridge<T: Send + 'static>(
     Blocking::new().unwrap().run(future).unwrap().unwrap()
 }
 
+/// Expires and takes over a reserved successor while the old handle is
+/// opening its conditioned entry store, after claim and immediately before
+/// the first insert.
+fn take_over_reservation(docs: Arc<dyn DocumentStore>, stem: String) {
+    on_bridge(async move {
+        let id = Key::of(["session", stem.as_str()])?;
+        let lease = docs
+            .get("tsd.leases", id.as_str())
+            .await?
+            .expect("successor reservation exists");
+        let mut body = lease.doc;
+        body["expires_ms"] = json!(0);
+        docs.put(
+            "tsd.leases",
+            id.as_str(),
+            body,
+            Precondition::Version(lease.version),
+        )
+        .await?;
+        Leases::new(&docs)
+            .acquire("session", &stem, "replacement-holder", 30_000)
+            .await?
+            .expect("expired reservation can be taken over");
+        Ok(())
+    });
+}
+
 #[test]
 fn a_handle_meets_the_transcript_history_contract() {
     let docs = docs();
     let history = locator(&docs).open_stem("contract", meta("t")).unwrap();
     transcript_history_conformance(history.as_ref());
+}
+
+#[test]
+fn a_reserved_generation_rejects_entry_insert_after_lease_takeover() {
+    use tinystoragedrivers_connect::sqlite::SqliteConnection;
+    use tinystoragedrivers_document::sqlite::SqliteDocuments;
+
+    let directory = tempfile::tempdir().unwrap();
+    let connection = SqliteConnection::open(directory.path().join("transcripts.db")).unwrap();
+    let scope = Scope::new("local").unwrap();
+    let base =
+        Arc::new(SqliteDocuments::new(connection.clone(), scope.clone())) as Arc<dyn DocumentStore>;
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (conditioned_open_tx, conditioned_open_rx) = std::sync::mpsc::channel();
+    let (takeover_done_tx, takeover_done_rx) = std::sync::mpsc::channel();
+    let takeover_done_rx = std::sync::Mutex::new(takeover_done_rx);
+    let opener_scope = scope.clone();
+    let opener: ConditionedEntryOpener = {
+        let armed = Arc::clone(&armed);
+        Arc::new(move |condition: &WriteCondition| {
+            if armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                conditioned_open_tx.send(()).unwrap();
+                takeover_done_rx.lock().unwrap().recv().unwrap();
+            }
+            Ok(Arc::new(SqliteDocuments::conditioned(
+                connection.clone(),
+                opener_scope.clone(),
+                condition.clone(),
+            )) as Arc<dyn DocumentStore>)
+        })
+    };
+    let locator = DriverTranscriptLocator::new_with_conditioned_entry_opener(
+        Arc::clone(&base),
+        Blocking::new().unwrap(),
+        "sqlite://transcript-reservation-race",
+        tinyagents_harness::store::SchemaAdmission::Declare,
+        scope,
+        opener,
+    );
+    let parent = SessionRef::scoped("reservation-race", "planner");
+    let (successor, history) = locator
+        .begin_generation(&parent, meta("reservation-race"))
+        .unwrap();
+    let stem = session_stem(&successor);
+    armed.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let writer = std::thread::spawn(move || {
+        let rows = vec![message("user", "first successor write")];
+        history.append_turn(turn(&[], &rows, &meta("reservation-race")))
+    });
+    conditioned_open_rx.recv().unwrap();
+    take_over_reservation(Arc::clone(&base), stem.clone());
+    takeover_done_tx.send(()).unwrap();
+    let result = writer.join().unwrap();
+
+    assert!(
+        result.is_err(),
+        "the old reservation holder must not insert after another holder takes over"
+    );
+    assert_eq!(
+        entries(&base, &stem).len(),
+        0,
+        "the stale insert must leave no entry"
+    );
+    assert!(
+        reservation_epoch(&base, &stem) > 1,
+        "the test took over the lease"
+    );
 }
 
 #[test]
@@ -365,15 +507,17 @@ fn lookups_find_the_newest_written_root() {
     let _unwritten = locator.open_stem("never", meta("t")).unwrap();
     assert!(locator.root_for_thread("t").is_none());
 
+    let mut old_meta = meta("t");
+    old_meta.created = "2026-01-01T00:00:00Z".into();
     locator
-        .open_stem("old", meta("t"))
+        .open_stem("old", old_meta)
         .unwrap()
         .append(message("user", "old"))
         .unwrap();
-    // Creation time is kept in whole milliseconds.
-    std::thread::sleep(std::time::Duration::from_millis(3));
+    let mut new_meta = meta("t");
+    new_meta.created = "2026-01-02T00:00:00Z".into();
     locator
-        .open_stem("new", meta("t"))
+        .open_stem("new", new_meta)
         .unwrap()
         .append(message("user", "new"))
         .unwrap();
@@ -400,6 +544,55 @@ fn lookups_find_the_newest_written_root() {
     assert_eq!(
         locator.handle("new", meta("t")).partials().unwrap().len(),
         1
+    );
+}
+
+#[tokio::test]
+async fn migrated_roots_keep_their_historical_creation_order() {
+    let backend = MemoryStorage::new();
+    let scope = Scope::new("legacy-session-order").unwrap();
+    let storage = backend.for_scope(&scope).unwrap();
+    let docs = storage.documents();
+
+    // These are v1 session_transcripts rows. Their source ids deliberately
+    // make the newer record migrate first, opposite to their historical time.
+    for (id, stem, created_at) in [
+        ("0:newer", "newer", "2026-02-01T00:00:00Z"),
+        ("1:older", "older", "2026-01-01T00:00:00Z"),
+    ] {
+        docs.put_with(
+            "session_transcripts",
+            id,
+            json!({
+                "stem": stem,
+                "subagent": false,
+                "written": true,
+                "thread_id": "legacy-thread",
+                "agent_id": "planner",
+                "agent_name": "planner",
+                "indexed_seq": 1,
+                "created_at": created_at,
+            }),
+            Precondition::None,
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+
+    crate::port::drivers::open_agent_storage(&storage)
+        .await
+        .unwrap();
+    let locator = DriverTranscriptLocator::new(
+        Arc::clone(docs),
+        Blocking::new().unwrap(),
+        "legacy-migration-order",
+    );
+
+    assert_eq!(
+        locator.root_for_thread("legacy-thread").unwrap().path(),
+        Path::new("legacy-migration-order/newer"),
+        "root selection follows the v1 created_at value, not the target write order"
     );
 }
 
@@ -431,7 +624,7 @@ fn ids_are_unambiguous_and_bounded() {
     let long = "x".repeat(1_000);
     let hashed = index_id(&long).unwrap();
     assert!(hashed.starts_with('~') && hashed.len() == 53, "{hashed}");
-    assert!(entry_id(&long, 9).unwrap().len() < tinystoragedrivers_core::MAX_ID_LEN);
+    assert!(entry_id(&long, 9).unwrap().len() < tinystoragedrivers_types::MAX_ID_LEN);
     assert!(is_subagent("parent__child"));
     assert!(!is_subagent("__child"));
     assert!(!is_subagent("plain"));
@@ -481,8 +674,9 @@ fn the_index_keeps_its_creation_time() {
     let (first, second) = (first.unwrap(), second.unwrap());
     assert!(
         first.doc.get("created_at").is_none(),
-        "the time is metadata"
+        "the legacy source field is normalized"
     );
+    assert_eq!(first.doc["created_ms"], 1_767_225_600_000_i64);
     assert!(first.meta.created_ms > 0);
     assert_eq!(first.meta.created_ms, second.meta.created_ms);
     assert!(second.meta.updated_ms >= first.meta.updated_ms);

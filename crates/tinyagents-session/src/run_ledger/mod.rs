@@ -13,6 +13,8 @@ pub mod command_center;
 pub mod drivers;
 pub mod error;
 pub mod history;
+pub mod import;
+pub mod inbox;
 pub mod port;
 pub mod recovery;
 mod status_map;
@@ -22,8 +24,12 @@ pub mod types;
 pub use drivers::DriverRunLedger;
 pub use error::{LedgerError, LedgerResult};
 pub use history::{
-    MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryStore,
-    SessionStart,
+    MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryImport,
+    SessionHistoryImportReport, SessionHistoryStore, SessionStart,
+};
+pub use import::{
+    AgentFamilyImport, AgentFamilyImportReport, ImportCounts, LegacyLedgerRows,
+    LegacyLedgerRowsReport,
 };
 pub use port::RunLedgerStore;
 
@@ -37,11 +43,11 @@ pub use tool_effects::{
 pub use types::{
     AgentRun, AgentRunKind, AgentRunListRequest, AgentRunListResponse, AgentRunStatus,
     AgentRunUpsert, AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember,
-    AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask,
-    AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome, CompletionOutcome,
-    RunEvent, RunEventAppend, RunEventListRequest, RunEventListResponse, RunTelemetry,
-    RunTelemetryUpsert, RunTransition, WorkflowLeaseClaim, WorkflowRun, WorkflowRunListRequest,
-    WorkflowRunListResponse, WorkflowRunStatus, WorkflowRunUpsert,
+    AgentTeamMemberRunAdmission, AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus,
+    AgentTeamTask, AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome,
+    CompletionOutcome, RunEvent, RunEventAppend, RunEventListRequest, RunEventListResponse,
+    RunTelemetry, RunTelemetryUpsert, RunTransition, WorkflowLeaseClaim, WorkflowRun,
+    WorkflowRunListRequest, WorkflowRunListResponse, WorkflowRunStatus, WorkflowRunUpsert,
 };
 
 #[cfg(test)]

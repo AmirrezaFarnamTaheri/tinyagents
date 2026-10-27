@@ -23,9 +23,10 @@
 //! [`INDEX`] holds one small document per stem (id `Key::of([stem])`) with the
 //! lookup fields (`thread_id`, `agent_id`, `agent_name`, `subagent`), so
 //! "newest root transcript of this thread" is one indexed query instead of a
-//! scan of every log. Its creation time is the document's `_created_ms`
-//! metadata, which the driver keeps. It is refreshed after each write that
-//! changes the fields. A successor generation is reserved as a `tsd.leases`
+//! scan of every log. Its application `created_ms` field preserves the
+//! transcript's original creation time across cross-collection migration,
+//! independently of host-assigned record metadata. It is refreshed after each
+//! write that changes the fields. A successor generation is reserved as a `tsd.leases`
 //! record (see `transcripts_reservation.rs`) before its predecessor is sealed.
 
 use std::future::Future;
@@ -35,14 +36,16 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tinyagents_harness::store::SchemaAdmission;
-use tinystoragedrivers_core::primitives::{Leases, Repo};
-use tinystoragedrivers_core::{
-    Blocking, CREATED_FIELD, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter,
-    ID_FIELD, IndexSpec, Key, Query, Sort, StorageError, WriteOptions,
+use tinyagents_storage_kit::primitives::{Lease, Leases, Repo};
+use tinyagents_storage_kit::{Blocking, DocumentStoreExt};
+use tinyagents_storage_kit::{
+    CollectionSpec, ErrorKind, Filter, ID_FIELD, IndexSpec, Key, Query, Scope, Sort, StorageError,
+    WriteCondition, WriteOptions,
 };
+use tinystoragedrivers_api::DocumentStore;
 use tokio::sync::{Mutex, OnceCell};
 
-use super::super::memory::MAX_GENERATIONS;
+use super::super::helpers::MAX_GENERATIONS;
 use crate::transcript::{
     SessionRef, SessionTranscript, TranscriptHistory, TranscriptLocator, TranscriptMessage,
     TranscriptMeta, TranscriptPartial, TranscriptRead, TranscriptTurn, TurnUsage,
@@ -53,6 +56,7 @@ pub(super) use reservation::leases_spec;
 
 /// One document per transcript stem: the lookup fields.
 pub(super) const INDEX: &str = "session.transcripts";
+const CREATED_FIELD: &str = "created_ms";
 /// One document per write to a transcript: its append-only log.
 pub(super) const ENTRIES: &str = "session.transcript_entries";
 
@@ -198,18 +202,27 @@ pub(super) fn collection_specs() -> [CollectionSpec; 2] {
         CollectionSpec::new(ENTRIES)
             .index(IndexSpec::new("by_stem", ["stem", "seq"]))
             .index(IndexSpec::new("by_stem_written", ["stem", "written"])),
+        // Named `*_created`, not `by_thread` and friends: those names are
+        // persisted by earlier releases on `_created_ms` record metadata, and
+        // a store refuses an index redeclared with different fields.
         CollectionSpec::new(INDEX)
-            .index(IndexSpec::new("by_thread", ["thread_id", CREATED_FIELD]))
             .index(IndexSpec::new(
-                "by_agent_name",
+                "by_thread_created",
+                ["thread_id", CREATED_FIELD],
+            ))
+            .index(IndexSpec::new(
+                "by_agent_name_created",
                 ["agent_name", CREATED_FIELD],
             ))
-            .index(IndexSpec::new("by_agent_id", ["agent_id", CREATED_FIELD])),
+            .index(IndexSpec::new(
+                "by_agent_id_created",
+                ["agent_id", CREATED_FIELD],
+            )),
     ]
 }
 
-/// `query` ordered newest first by the index document's creation time, ties
-/// broken by id so the order is stable.
+/// `query` ordered newest first by the transcript's original creation time,
+/// ties broken by id so the order is stable.
 fn newest_first(query: Query) -> Query {
     query
         .sort(Sort::desc(CREATED_FIELD))
@@ -298,12 +311,17 @@ pub struct DriverTranscriptHistory {
 
 struct HistoryInner {
     docs: Arc<dyn DocumentStore>,
+    scope: Option<Scope>,
+    conditioned_entries: Option<ConditionedEntryOpener>,
     tables: Arc<Tables>,
     declared: Arc<Declared>,
     stem: String,
     seed: TranscriptMeta,
     replay: Mutex<Replay>,
 }
+
+pub(crate) type ConditionedEntryOpener =
+    Arc<dyn Fn(&WriteCondition) -> Result<Arc<dyn DocumentStore>, StorageError> + Send + Sync>;
 
 impl std::fmt::Debug for DriverTranscriptHistory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -432,20 +450,47 @@ impl HistoryInner {
             let Some(entry) = build(&replay, &self.seed)? else {
                 return Ok(false);
             };
-            self.claim_reservation(&mut replay).await?;
+            let claimed = self.claim_reservation(&mut replay).await?;
             let seq = replay.next_seq;
             let mut doc = serde_json::to_value(&entry).map_err(|error| serialization(&error))?;
             if let Value::Object(fields) = &mut doc {
                 fields.insert("stem".into(), json!(self.stem));
                 fields.insert("seq".into(), json!(seq));
             }
-            match self
-                .tables
-                .entries
-                .insert(&entry_id(&self.stem, seq)?, &doc)
-                .await
-            {
+            let reserved = claimed.is_some();
+            let insert = if let Some(lease) = claimed {
+                let opener = self.conditioned_entries.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "session generation {} requires atomic lease-conditioned entry writes",
+                        self.stem
+                    )
+                })?;
+                let scope = self.scope.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "session generation {} has no bound storage scope",
+                        self.stem
+                    )
+                })?;
+                let condition = lease.write_condition(scope.clone())?;
+                let docs = opener(&condition)?;
+                Repo::new(&docs, ENTRIES)?
+                    .with_options(WriteOptions::new().schema(SCHEMA_VERSION))
+                    .insert(&entry_id(&self.stem, seq)?, &doc)
+                    .await
+            } else {
+                self.tables
+                    .entries
+                    .insert(&entry_id(&self.stem, seq)?, &doc)
+                    .await
+            };
+            match insert {
                 Ok(_) => {
+                    // Keep the reservation on a failed insert so retries must
+                    // renew the same epoch and can never fall back to an
+                    // unconditioned write after a takeover.
+                    if reserved {
+                        replay.reservation = None;
+                    }
                     replay.apply(seq, entry);
                     // The entry is durable: report the write as done. A
                     // failed index refresh is retried a few times here, then
@@ -487,13 +532,13 @@ impl HistoryInner {
     /// process took the reservation over in the meantime (this one stalled
     /// past the reservation's lifetime), the generation is theirs and this
     /// handle's writes are refused instead of overwriting it.
-    async fn claim_reservation(&self, replay: &mut Replay) -> anyhow::Result<()> {
+    async fn claim_reservation(&self, replay: &mut Replay) -> anyhow::Result<Option<Lease>> {
         let Some(held) = replay.reservation.as_ref() else {
-            return Ok(());
+            return Ok(None);
         };
-        reservation::claim(&self.tables.leases, &self.stem, held).await?;
-        replay.reservation = None;
-        Ok(())
+        Ok(Some(
+            reservation::claim(&self.tables.leases, &self.stem, held).await?,
+        ))
     }
 
     /// Releases the reservation of a generation this handle never wrote.
@@ -533,6 +578,9 @@ impl HistoryInner {
             return Ok(());
         }
         let meta = replay.meta.as_ref().unwrap_or(&self.seed);
+        let created_ms = chrono::DateTime::parse_from_rfc3339(&meta.created)
+            .map(|created| created.timestamp_millis())
+            .unwrap_or_default();
         let fields = json!({
             "stem": self.stem,
             "subagent": is_subagent(&self.stem),
@@ -540,6 +588,7 @@ impl HistoryInner {
             "thread_id": meta.thread_id,
             "agent_id": meta.agent_id,
             "agent_name": meta.agent_name,
+            "created_ms": created_ms,
         });
         if replay.indexed.as_ref() == Some(&fields) {
             return Ok(());
@@ -706,6 +755,25 @@ impl TranscriptHistory for DriverTranscriptHistory {
         .map(|_| ())
     }
 
+    fn adopt_if_empty(&self, messages: &[TranscriptMessage]) -> anyhow::Result<bool> {
+        let messages = normalized(messages.to_vec());
+        if messages.is_empty() {
+            return Ok(false);
+        }
+        self.commit(move |replay, seed| {
+            if replay.written {
+                return Ok(None);
+            }
+            anyhow::ensure!(!replay.sealed, "transcript generation is sealed");
+            Ok(Some(Entry {
+                written: true,
+                meta: Some(seed.clone()),
+                set: Some(messages.clone()),
+                ..Entry::default()
+            }))
+        })
+    }
+
     fn replace(&self, messages: &[TranscriptMessage]) -> anyhow::Result<()> {
         let messages = normalized(messages.to_vec());
         self.commit(move |replay, seed| {
@@ -756,6 +824,8 @@ impl TranscriptHistory for DriverTranscriptHistory {
 #[derive(Clone)]
 pub struct DriverTranscriptLocator {
     docs: Arc<dyn DocumentStore>,
+    scope: Option<Scope>,
+    conditioned_entries: Option<ConditionedEntryOpener>,
     tables: Arc<Tables>,
     bridge: Blocking,
     label: String,
@@ -771,6 +841,11 @@ impl std::fmt::Debug for DriverTranscriptLocator {
 }
 
 impl DriverTranscriptLocator {
+    #[cfg(test)]
+    pub(crate) fn documents(&self) -> &Arc<dyn DocumentStore> {
+        &self.docs
+    }
+
     /// Transcripts in `docs`, with synchronous calls run on `bridge`.
     ///
     /// `label` names where `docs` points (driver, database, scope). It is
@@ -788,9 +863,42 @@ impl DriverTranscriptLocator {
         label: impl Into<String>,
         schema_admission: SchemaAdmission,
     ) -> Self {
+        Self::with_conditioned_entry_opener(docs, bridge, label, schema_admission, None, None)
+    }
+
+    /// Transcripts whose first entry in a reserved generation is opened with
+    /// the lease's native atomic write condition.
+    pub(crate) fn new_with_conditioned_entry_opener(
+        docs: Arc<dyn DocumentStore>,
+        bridge: Blocking,
+        label: impl Into<String>,
+        schema_admission: SchemaAdmission,
+        scope: Scope,
+        opener: ConditionedEntryOpener,
+    ) -> Self {
+        Self::with_conditioned_entry_opener(
+            docs,
+            bridge,
+            label,
+            schema_admission,
+            Some(scope),
+            Some(opener),
+        )
+    }
+
+    fn with_conditioned_entry_opener(
+        docs: Arc<dyn DocumentStore>,
+        bridge: Blocking,
+        label: impl Into<String>,
+        schema_admission: SchemaAdmission,
+        scope: Option<Scope>,
+        conditioned_entries: Option<ConditionedEntryOpener>,
+    ) -> Self {
         Self {
             tables: Arc::new(Tables::new(&docs)),
             docs,
+            scope,
+            conditioned_entries,
             bridge,
             label: label.into(),
             declared: Arc::new(Declared {
@@ -815,6 +923,8 @@ impl DriverTranscriptLocator {
         DriverTranscriptHistory {
             inner: Arc::new(HistoryInner {
                 docs: Arc::clone(&self.docs),
+                scope: self.scope.clone(),
+                conditioned_entries: self.conditioned_entries.clone(),
                 tables: Arc::clone(&self.tables),
                 declared: Arc::clone(&self.declared),
                 stem: stem.to_string(),
@@ -900,6 +1010,7 @@ fn discovered_seed(stem: &str) -> TranscriptMeta {
         updated: String::new(),
         turn_count: 0,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,

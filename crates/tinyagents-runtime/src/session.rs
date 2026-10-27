@@ -1,4 +1,5 @@
 use std::{future::Future, sync::Arc};
+use tinyagents_harness::tool::ToolSnapshot;
 
 use tinyagents_harness::CancellationToken;
 use tinyagents_harness::terminal::{TerminalOutcome, TerminalReason};
@@ -8,10 +9,11 @@ use tinyagents_session::transcript::{
 };
 use tinyinference_llm::message::Message;
 
+use crate::identity::{IdentityConfig, same_admission};
 use crate::{
     CommitReceipt, DriverRequest, PrefixSnapshot, ResumeMode, ResumePreparation, RuntimeError,
     SessionDriver, SessionHooks, SessionResume, SessionStateView, SessionTerminal,
-    SessionTurnOutcome, SessionTurnRequest, ToolSnapshot, TranscriptCodec, TranscriptCommitReceipt,
+    SessionTurnOutcome, SessionTurnRequest, TranscriptCodec, TranscriptCommitReceipt,
     TranscriptDelta, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 
@@ -24,10 +26,24 @@ pub struct Session<C: Clone + Send + Sync + 'static = ()> {
     driver: Arc<dyn SessionDriver<C>>,
     codec: Option<Arc<dyn TranscriptCodec<C>>>,
     hooks: Arc<dyn SessionHooks<C>>,
+    /// Prefix configured when this session instance was constructed. A reset
+    /// discovered through another live instance clears the old frozen prefix
+    /// but keeps this current host configuration available to its hooks.
+    configured_prefix: PrefixSnapshot,
+    post_commit_sinks: Vec<Arc<dyn crate::hooks::PostCommitSink<C>>>,
+    identity_config: Option<IdentityConfig<C>>,
+    established_identity: Option<crate::SessionIdentity>,
+    identity: Option<crate::SessionIdentity>,
     prefix: PrefixSnapshot,
     default_tools: ToolSnapshot,
     history: Vec<Message>,
     persisted: Vec<TranscriptMessage>,
+    /// Lossless rows aligned with the replay history passed to the codec.
+    ///
+    /// This can be shorter than persisted after orphan-head repair. The
+    /// original rows remain the write baseline so a successful turn rolls
+    /// forward into a successor generation without erasing its source.
+    reconcile_prior: Vec<TranscriptMessage>,
     target: Option<TranscriptTarget>,
     transcript: Option<Arc<dyn TranscriptHistory>>,
     committed_turns: usize,
@@ -49,18 +65,27 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         driver: Arc<dyn SessionDriver<C>>,
         codec: Option<Arc<dyn TranscriptCodec<C>>>,
         hooks: Arc<dyn SessionHooks<C>>,
+        post_commit_sinks: Vec<Arc<dyn crate::hooks::PostCommitSink<C>>>,
         prefix: PrefixSnapshot,
         default_tools: ToolSnapshot,
         target: Option<TranscriptTarget>,
+        identity_config: Option<IdentityConfig<C>>,
     ) -> Self {
+        let configured_prefix = prefix.frozen();
         Self {
             driver,
             codec,
             hooks,
-            history: prefix.messages().to_vec(),
-            prefix: prefix.frozen(),
+            post_commit_sinks,
+            identity_config,
+            established_identity: None,
+            identity: None,
+            history: configured_prefix.messages().to_vec(),
+            prefix: configured_prefix.clone(),
+            configured_prefix,
             default_tools,
             persisted: Vec::new(),
+            reconcile_prior: Vec::new(),
             target,
             transcript: None,
             committed_turns: 0,
@@ -112,7 +137,88 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             ));
         }
         self.history = self.with_prefix(history);
-        self.persisted = raw;
+        self.persisted = raw.clone();
+        self.reconcile_prior = raw;
+        Ok(())
+    }
+
+    fn resolve_and_bind(
+        &mut self,
+        options: &TurnOptions<C>,
+        hook_target: Option<&TranscriptTarget>,
+    ) -> Result<(), RuntimeError> {
+        let Some(config) = self.identity_config.as_ref() else {
+            return Ok(());
+        };
+        self.identity = None;
+        let request = crate::SessionIdentityRequest {
+            thread_id: options.thread_id.clone(),
+            session_key: config.session_key.clone(),
+            parent: config.parent.clone(),
+            child_key: config.child_key.clone(),
+        };
+        let resolved = config
+            .resolver
+            .resolve(&request, &options.run_context.data)?;
+        if resolved.agent_id.is_empty() {
+            return Err(RuntimeError::InvalidSessionState(
+                "resolver returned empty agent id".into(),
+            ));
+        }
+        let first_session = match (&request.parent, &request.child_key) {
+            (Some(parent), Some(child_key)) => SessionRef::child_of(parent, child_key),
+            (None, None) => SessionRef::scoped(&request.session_key, &resolved.agent_id),
+            _ => {
+                return Err(RuntimeError::InvalidSessionState(
+                    "identity request has an incomplete child lineage".into(),
+                ));
+            }
+        };
+        let identity = crate::SessionIdentity {
+            session: first_session.clone(),
+            agent_id: resolved.agent_id,
+            stores: resolved.stores,
+        };
+        if options
+            .session
+            .as_ref()
+            .is_some_and(|selected| selected.first_generation() != first_session.first_generation())
+        {
+            return Err(RuntimeError::InvalidSessionState(
+                "TurnOptions.session conflicts with resolved identity".into(),
+            ));
+        }
+        let session = if let Some(previous) = self.established_identity.as_ref() {
+            if !same_admission(previous, &identity) {
+                return Err(RuntimeError::InvalidSessionState(
+                    "session identity or pinned store changed".into(),
+                ));
+            }
+            self.target
+                .as_ref()
+                .and_then(|target| target.session.clone())
+                .filter(|current| current.first_generation() == first_session.first_generation())
+                .unwrap_or(first_session)
+        } else {
+            first_session
+        };
+        let mut meta = config.meta.clone();
+        meta.agent_id = Some(identity.agent_id.clone());
+        let target = TranscriptTarget::for_session(
+            identity.stores.stores().transcripts.clone(),
+            session.clone(),
+            meta,
+        );
+        if hook_target.is_some_and(|selected| !selected.same_binding(&target)) {
+            return Err(RuntimeError::InvalidSessionState(
+                "before_resume target conflicts with resolved identity".into(),
+            ));
+        }
+        self.target = Some(target);
+        let mut identity = identity;
+        identity.session = session;
+        self.established_identity = Some(identity.clone());
+        self.identity = Some(identity);
         Ok(())
     }
 
@@ -125,6 +231,14 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         if options.cancellation.is_cancelled() {
             return Err(RuntimeError::Cancelled);
         }
+        self.resolve_and_bind(options, None)?;
+        self.resume_admitted(options).await
+    }
+
+    async fn resume_admitted(
+        &mut self,
+        options: &TurnOptions<C>,
+    ) -> Result<SessionResume, RuntimeError> {
         let Some(target) = self.target.as_ref() else {
             return Ok(SessionResume {
                 loaded: false,
@@ -203,6 +317,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 history: self.history.clone(),
             });
         };
+        let scanned_session_id = transcript.meta.session_id.clone();
         if let Some(selected) = session_binding.as_ref() {
             let expected = selected.session_id();
             if transcript
@@ -220,7 +335,36 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .codec
             .as_ref()
             .ok_or(RuntimeError::MissingDependency("TranscriptCodec"))?;
-        let mut decoded = codec.decode_history(&transcript)?;
+        let replay_rows =
+            tinyagents_session::transcript::repair_orphaned_tool_head(&transcript.messages);
+        let mut reconcile_prior = replay_rows.as_ref().to_vec();
+        let mut decoded = match replay_rows {
+            std::borrow::Cow::Borrowed(_) => codec.decode_history(&transcript)?,
+            std::borrow::Cow::Owned(messages) => {
+                let mut replay_transcript = transcript.clone();
+                replay_transcript.messages = messages;
+                codec.decode_history(&replay_transcript)?
+            }
+        };
+        // Keep the lossless prior rows aligned with the decoded replay view.
+        // Some legacy codecs recognize tool rows whose raw role is not
+        // `tool`; when decoded repair removes such a leading tool message, its
+        // corresponding raw row must not remain at that positional index for
+        // the default reconciler to reuse for the following user message.
+        let decoded_system_prefix = decoded
+            .iter()
+            .take_while(|message| matches!(message, Message::System(_)))
+            .count();
+        let decoded_orphan_count = decoded[decoded_system_prefix..]
+            .iter()
+            .take_while(|message| matches!(message, Message::Tool(_)))
+            .count();
+        if decoded_orphan_count != 0 && reconcile_prior.len() == decoded.len() {
+            reconcile_prior
+                .drain(decoded_system_prefix..decoded_system_prefix + decoded_orphan_count);
+        }
+        decoded = tinyagents_session::transcript::repair_orphaned_tool_head_messages(&decoded)
+            .into_owned();
         // A compacted head can start with a System summary immediately after
         // the original frozen prompt. Its role does not make it prefix
         // material. Determine how many *stored* rows to strip independently
@@ -243,8 +387,39 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .as_ref()
             .is_some_and(|session| session.generation > 0)
             || transcript.meta.parent_session_id.is_some();
+        // An explicit history reset suppresses prompt-boundary recovery from
+        // the sealed parent. The marker distinguishes it from an ordinary
+        // empty successor whose legacy prompt still needs to be inferred.
+        let reset_head = transcript.meta.prefix_reset && recorded_boundary.is_none();
+        let changed_head = self
+            .transcript
+            .as_ref()
+            .is_some_and(|bound| bound.path() != read.path());
+        if changed_head {
+            // Another live Session instance may have advanced this identity to
+            // a new generation. Rebuild cached transcript state from that head
+            // instead of retaining the old handle's turn count or tool belt.
+            // An explicit reset head is unfrozen and starts with this instance's
+            // configured prefix; a committed successor below restores its
+            // authoritative persisted prefix (including an explicit Some(0)).
+            if reset_head || recorded_boundary.is_some() {
+                self.prefix = if reset_head {
+                    self.configured_prefix.clone()
+                } else {
+                    PrefixSnapshot::default()
+                };
+            }
+            self.history = self.prefix.messages().to_vec();
+            self.persisted.clear();
+            self.persisted_prefix_len = None;
+            self.recorded_tools = None;
+            self.recorded_tools_json = None;
+            self.committed_turns = 0;
+            self.transcript = None;
+        }
         let mut recovered_boundary = None;
-        if recorded_boundary.is_none() && cached_boundary.is_none() && compacted_head {
+        if recorded_boundary.is_none() && cached_boundary.is_none() && compacted_head && !reset_head
+        {
             // Without the sealed root there is no safe boundary in a head
             // containing a System summary. If a replacement prefix was
             // supplied, fail rather than replaying unverifiable old System
@@ -378,6 +553,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .map_or(0, |tools| tools.specs().len())
         );
         self.persisted = transcript.messages;
+        self.reconcile_prior = reconcile_prior;
         // The discovered metadata, not the builder seed, is authoritative for
         // the subsequent append. This keeps resume-only host fields intact.
         if let Some(target) = self.target.as_mut() {
@@ -455,7 +631,25 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     self.recorded_tools =
                         Self::decode_recorded_tools(destination_transcript.tools.as_ref());
                     self.persisted_prefix_len = destination_transcript.meta.prefix_message_count;
-                    self.persisted = destination_transcript.messages;
+                    self.persisted = destination_transcript.messages.clone();
+                    let destination = target
+                        .session
+                        .as_ref()
+                        .map(|session| target.locator.head_generation(session))
+                        .and_then(|head| target.locator.read_session_transcript(&head));
+                    let same_source = destination_transcript
+                        .meta
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|session_id| {
+                            scanned_session_id.as_deref() == Some(session_id)
+                        })
+                        || destination
+                            .as_ref()
+                            .is_some_and(|destination| destination.path() == read.path());
+                    if !same_source {
+                        self.reconcile_prior = destination_transcript.messages.clone();
+                    }
                     if let Some(target) = self.target.as_mut() {
                         target.meta = destination_transcript.meta;
                     }
@@ -471,6 +665,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     self.recorded_tools = None;
                     self.persisted_prefix_len = None;
                     self.persisted = Vec::new();
+                    self.reconcile_prior = Vec::new();
                     if let Some(target) = self.target.as_mut() {
                         target.meta = pre_scan_meta;
                         if let Some(session) = target.session.clone() {
@@ -490,6 +685,77 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             loaded: true,
             history,
         })
+    }
+
+    /// Starts a fresh model context for the bound durable session.
+    ///
+    /// The current generation is sealed and retained as the parent of an
+    /// empty successor. Repeating this operation on an empty or absent
+    /// session is a no-op, so it never manufactures a timestamped identity or
+    /// an unbounded chain of empty generations.
+    pub async fn reset_history(&mut self) -> Result<bool, RuntimeError> {
+        let Some(target) = self.target.as_ref() else {
+            return Ok(false);
+        };
+        let Some(bound) = target.session.as_ref() else {
+            return Ok(false);
+        };
+
+        // Generation locks are keyed by the first generation, so resetting a
+        // current head serializes with turns bound to either the root or head.
+        let root = bound.first_generation();
+        let _turn = lock_session_turn(target.locator.as_ref(), &root).await;
+        let head = target.locator.head_generation(bound);
+        let Some(read) = target.locator.read_session_transcript(&head) else {
+            return Ok(false);
+        };
+        let transcript = read
+            .read_session()
+            .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        let Some(transcript) = transcript else {
+            return Ok(false);
+        };
+        if transcript.messages.is_empty()
+            && transcript.meta.prefix_message_count.is_none()
+            && transcript.tools.is_none()
+            && transcript.meta.turn_count == 0
+        {
+            return Ok(false);
+        }
+
+        let mut seed = transcript.meta.clone();
+        seed.turn_count = 0;
+        seed.prefix_message_count = None;
+        seed.prefix_reset = true;
+        seed.session_id = None;
+        seed.parent_session_id = None;
+        let (successor, handle) = target
+            .locator
+            .begin_generation_from_baseline(&head, seed, &transcript.messages)
+            .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        // Generation allocation reserves the successor but leaves it
+        // unwritten. Persist an explicit empty context now so a process restart
+        // before the next user turn still resolves the successor as the head.
+        handle
+            .replace(&[])
+            .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+
+        let target = self.target.as_mut().expect("target was checked above");
+        target.session = Some(successor.clone());
+        target.meta.session_id = Some(successor.session_id());
+        target.meta.parent_session_id = successor.parent_session_id();
+        target.meta.turn_count = 0;
+        target.meta.prefix_message_count = None;
+        target.meta.prefix_reset = true;
+        self.transcript = Some(handle);
+        self.prefix = PrefixSnapshot::default();
+        self.history.clear();
+        self.persisted.clear();
+        self.persisted_prefix_len = None;
+        self.recorded_tools = None;
+        self.recorded_tools_json = None;
+        self.committed_turns = 0;
+        Ok(true)
     }
 
     /// Runs one user turn: wraps `input` in a [`SessionTurnRequest`] and drives
@@ -532,6 +798,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         options: &mut TurnOptions<C>,
         terminal_guard: &mut TerminalGuard<C>,
     ) -> Result<SessionTurnOutcome, RuntimeError> {
+        let original_input = request.input.clone();
         if options.cancellation.is_cancelled() {
             return Err(RuntimeError::Cancelled);
         }
@@ -542,7 +809,9 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .before_resume(request, options, self.state_view(false)),
         )
         .await?;
+        let hook_target = resume_preparation.transcript.clone();
         self.apply_resume_preparation(resume_preparation)?;
+        self.resolve_and_bind(options, hook_target.as_ref())?;
         // Resume preparation may install a lazy target or change the selected
         // session, so choose the shared locks only after applying it. The lock
         // still covers the complete resume read and subsequent write.
@@ -551,7 +820,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         let resumed = if options.resume == ResumeMode::Never {
             false
         } else {
-            self.resume(options).await?.loaded
+            self.resume_admitted(options).await?.loaded
         };
         // `resume` is synchronous after its read, so this explicit boundary
         // makes cancellation between loading and before-turn preparation
@@ -661,7 +930,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     self.remember_sent_tools(record_tools.as_ref());
                     self.prefix = prefix;
                     self.history = partial_history;
-                    self.persisted = raw;
+                    self.persisted = raw.clone();
+                    self.reconcile_prior = raw;
                     if receipt.is_some() {
                         self.committed_turns += 1;
                     }
@@ -703,7 +973,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         self.remember_sent_tools(record_tools.as_ref());
         self.prefix = prefix;
         self.history = committed.history.clone();
-        self.persisted = raw;
+        self.persisted = raw.clone();
+        self.reconcile_prior = raw;
         self.committed_turns += 1;
         // Post-commit hooks may deliver another background message into this
         // session. Do not hold the non-reentrant turn lock while they run.
@@ -717,7 +988,19 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             options: codec_options,
             transcript,
         };
-        let finalization = terminal_guard.finalize_commit(receipt);
+        let observation = crate::PostCommitObservation {
+            receipt: receipt.clone(),
+            input: original_input,
+            usage: turn_usage.clone(),
+            tool_outcomes: outcome.tool_outcomes.clone(),
+            thread_id,
+            agent_id: self
+                .identity
+                .as_ref()
+                .map(|identity| identity.agent_id().to_owned()),
+        };
+        let finalization =
+            terminal_guard.finalize_commit(receipt, observation, self.post_commit_sinks.clone());
         // This await deliberately does not observe cancellation. If this turn
         // future is dropped, dropping `JoinHandle` detaches rather than aborts
         // the owned finalization task.
@@ -867,9 +1150,12 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             history: &self.history,
             raw_history: &self.persisted,
             prefix: &self.prefix,
+            prefix_is_frozen: self.persisted_prefix_len.is_some()
+                || !self.prefix.messages().is_empty(),
             transcript_target: self.target.as_ref(),
             committed_turns: self.committed_turns,
             resumed,
+            identity: self.established_identity.as_ref(),
         }
     }
 
@@ -880,7 +1166,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         options: &TranscriptTurnOptions<C>,
     ) -> Result<Vec<TranscriptMessage>, RuntimeError> {
         match &self.codec {
-            Some(codec) => codec.reconcile(&self.persisted, previous, next, options),
+            Some(codec) => codec.reconcile(&self.reconcile_prior, previous, next, options),
             None => Ok(Vec::new()),
         }
     }
@@ -945,6 +1231,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .messages()
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
             self.transcript = Some(handle);
+            self.reconcile_prior = persisted.clone();
             self.persisted = persisted;
         }
 
@@ -1002,6 +1289,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         };
         meta.turn_count += 1;
         meta.prefix_message_count = Some(prefix_len);
+        meta.prefix_reset = false;
         meta.updated = chrono::Utc::now().to_rfc3339();
         // Record every ordinary turn's declarations. Comparing against this
         // session's cached snapshot is unsafe when another live Session has
@@ -1053,7 +1341,12 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 next_len,
             }
         };
-        Ok(Some(TranscriptCommitReceipt { path, delta }))
+        let rows = if extends {
+            raw[previous_len..next_len].to_vec()
+        } else {
+            raw.to_vec()
+        };
+        Ok(Some(TranscriptCommitReceipt { path, delta, rows }))
     }
 
     /// Records the declarations a successfully completed ordinary turn sent.
@@ -1141,7 +1434,12 @@ impl<C: Clone + Send + Sync + 'static> TerminalGuard<C> {
         Some((terminal, outcome))
     }
 
-    fn finalize_commit(&mut self, receipt: CommitReceipt<C>) -> tokio::task::JoinHandle<()> {
+    fn finalize_commit(
+        &mut self,
+        receipt: CommitReceipt<C>,
+        observation: crate::PostCommitObservation<C>,
+        sinks: Vec<Arc<dyn crate::hooks::PostCommitSink<C>>>,
+    ) -> tokio::task::JoinHandle<()> {
         let terminal = SessionTerminal::Completed(receipt.outcome.clone());
         let outcome = self
             .driver_success_outcome
@@ -1153,7 +1451,14 @@ impl<C: Clone + Send + Sync + 'static> TerminalGuard<C> {
         self.committed = true;
         let hooks = self.hooks.clone();
         tokio::spawn(async move {
-            let _ = hooks.after_commit(receipt).await;
+            if let Err(error) = hooks.after_commit(receipt).await {
+                tracing::warn!("[session] after_commit hook failed: {error}");
+            }
+            for sink in sinks {
+                if let Err(error) = sink.after_commit(&observation).await {
+                    tracing::warn!("[session] post-commit sink failed: {error}");
+                }
+            }
             let _ = hooks.on_terminal_outcome(outcome).await;
             let _ = hooks.on_terminal(terminal).await;
         })

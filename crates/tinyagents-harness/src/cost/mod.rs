@@ -9,19 +9,33 @@
 //! from the registry catalog. [`CostTotals`] supports `+`/`+=` accumulation so
 //! a run can roll up cost across many calls.
 
+mod dispatch_admission;
 mod gateway_charge;
+mod model_budget;
 mod turn_cost;
 mod types;
 
 use std::ops::{Add, AddAssign};
 
+pub(crate) use dispatch_admission::with_dispatch_outcome_scope;
+pub use dispatch_admission::{
+    ControlledDispatchError, DispatchModelOptions, DispatchRefusal, DispatchRefusalReason,
+    PhysicalDispatchAdmission, PhysicalDispatchPermit,
+};
 pub use gateway_charge::GatewayChargeModel;
+pub(crate) use gateway_charge::has_authoritative_billing_source;
+pub(crate) use gateway_charge::provider_cost_usd;
+pub use model_budget::{ControlledChatModel, ModelBudget};
 use tinyinference_llm::usage::Usage;
 pub use turn_cost::{
     CallCost, CallUsage, CostSource, CostTally, PricingLookup, TurnCost, call_cost,
     estimate_call_cost_usd,
 };
 pub use types::*;
+
+#[cfg(test)]
+#[path = "dispatch_admission_tests.rs"]
+mod dispatch_admission_tests;
 
 impl CostTotals {
     /// Creates an empty cost accumulator.
@@ -87,7 +101,7 @@ fn select_tier(pricing: &ModelPricing, input_tokens: u64) -> Option<&PriceTier> 
 /// non-cached/non-reasoning remainder only.
 ///
 /// When `pricing` declares [`ModelPricing::tiers`], the tier matching this
-/// call's `usage.input_tokens` (see [`select_tier`]) supplies the input,
+/// call's `usage.input_tokens` (see `select_tier`) supplies the input,
 /// output, cache-read, and cache-write rates, falling back to the flat
 /// [`ModelPricing`] fields for any rate the tier leaves unset. Reasoning
 /// tokens are always priced at the flat

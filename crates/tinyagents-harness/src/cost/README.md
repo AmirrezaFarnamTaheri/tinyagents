@@ -22,13 +22,23 @@ aggregation logic at every recursion boundary.
   independently.
 - [`estimate_cost`] (`mod.rs`) — prices a `tinyinference_llm::usage::Usage`
   record against a `ModelPricing` entry, returning a `CostTotals`.
+- [`ModelBudget`] (`model_budget.rs`) — wraps concrete unit-state models with
+  gateway charge normalization and a shared physical-call budget ledger.
+- [`roll_up_subagent_usage`] (`types.rs`) — folds parent and nested child usage
+  once by run identity, preserving token counts, cached-token subset semantics,
+  child details and cost certainty across replayed completion rows.
+- [`UsageContribution`] and [`roll_up_inclusive_subagent_usage`] (`types.rs`)
+  — totals-only rollup for hosts whose flat child entries already include
+  descendant usage. Each entry is counted once without identity inference or
+  recursion; token sums saturate and cost certainty is retained.
 
 ## Files
 
 | File       | Role                                                       |
 | ---------- | --------------------------------------------------------------- |
 | `types.rs` | `ModelPricing`, `CostTotals`.                                   |
-| `mod.rs`   | `CostTotals` arithmetic impls, `estimate_cost`.                  |
+| `mod.rs`   | `CostTotals` arithmetic impls, exports, and `estimate_cost`.      |
+| `model_budget.rs` | `ModelBudget` composition for the ledger, call bound, and provider wrapper. |
 | `mod_tests.rs` | Unit tests: per-token-class pricing, missing-price handling, accumulation. |
 
 ## Operational constraints

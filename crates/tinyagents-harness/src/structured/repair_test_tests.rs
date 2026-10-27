@@ -72,3 +72,49 @@ fn does_not_confuse_brackets_inside_strings() {
         .expect("brackets inside a string are literal");
     assert_eq!(value["text"], "a { and a [ walk in");
 }
+
+#[test]
+fn last_object_parser_prefers_the_last_fenced_object_and_repairs_commas() {
+    let (value, repair) = parse_lenient_last_object(
+        "```json\n{\"id\": 1}\n```\n```JSON\n{\"id\": 2,}\n```\nlast {\"id\": 3}",
+    )
+    .expect("the final fenced object parses");
+    assert_eq!(value, json!({ "id": 2 }));
+    assert!(repair.is_repaired());
+}
+
+#[test]
+fn last_object_parser_handles_escaped_braces_unicode_and_incomplete_fences() {
+    let (value, repair) = parse_lenient_last_object(
+        r#"```json
+{"id":1}
+```
+```json
+{"id":2,"text":"escaped \" quote and } { brace — ✓",}
+```
+```json
+{"id":3
+"#,
+    )
+    .expect("the last complete fenced object is still available");
+    assert_eq!(value["id"], 2);
+    assert_eq!(value["text"], "escaped \" quote and } { brace — ✓");
+    assert_eq!(repair, JsonRepair::TrailingComma);
+}
+
+#[test]
+fn last_object_parser_uses_the_last_outer_balanced_object() {
+    let (value, _) =
+        parse_lenient_last_object("{\"id\": 1} then {\"nested\": {\"id\": 2}, \"text\": \"} {\"}")
+            .expect("the last complete outer object parses");
+    assert_eq!(value["nested"]["id"], 2);
+    assert_eq!(value["text"], "} {");
+}
+
+#[test]
+fn last_object_parser_ignores_incomplete_tails_but_rejects_empty_input() {
+    let (value, _) = parse_lenient_last_object("{\"id\": 1} trailing {\"unfinished\":").unwrap();
+    assert_eq!(value, json!({ "id": 1 }));
+    assert!(parse_lenient_last_object("```json\n\n```").is_none());
+    assert!(parse_lenient_last_object("just words").is_none());
+}

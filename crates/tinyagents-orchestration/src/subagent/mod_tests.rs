@@ -8,11 +8,11 @@ use std::{
 };
 
 use async_trait::async_trait;
+use tinyagents_harness::tool::ToolSnapshot;
 use tinyagents_harness::{
     CancellationToken,
     context::{RunConfig, RunContext},
 };
-use tinyagents_runtime::ToolSnapshot;
 use tinyinference_llm::{message::Message, usage::UsageTotals};
 
 use super::*;
@@ -167,6 +167,12 @@ impl SubagentExecutor<String> for FakeExecutor {
         };
         Ok(SubagentOutcome {
             task_id: execution.prepared.task_id,
+            worker_thread_id: None,
+            tier: None,
+            model_override: None,
+            cost_usd: None,
+            cost_source: None,
+            extensions: Default::default(),
             output: "result".into(),
             history: vec![Message::assistant("result")],
             status,
@@ -329,16 +335,23 @@ fn request(task_id: &str, data: &str) -> SubagentRequest<String> {
     SubagentRequest::fresh_from_parent(&parent, child, task_id, (), "do work", None).unwrap()
 }
 
-fn request_with_parent(task_id: &str, run_context: RunContext<String>) -> SubagentRequest<String> {
+async fn request_with_parent(
+    task_id: &str,
+    run_context: RunContext<String>,
+) -> SubagentRequest<String> {
     let task_key = SubagentTaskKey::from_context(&run_context, task_id, Some("thread-1".into()));
-    SubagentRequest::continue_with_key(task_key, run_context, (), "do work", None).unwrap()
+    SubagentRequest::continue_with_key(task_key, run_context, (), "do work", None, None)
+        .await
+        .unwrap()
 }
 
-fn continuation_request(
+async fn continuation_request(
     task_key: SubagentTaskKey,
     run_context: RunContext<String>,
 ) -> SubagentRequest<String> {
-    SubagentRequest::continue_with_key(task_key, run_context, (), "do work", None).unwrap()
+    SubagentRequest::continue_with_key(task_key, run_context, (), "do work", None, None)
+        .await
+        .unwrap()
 }
 
 fn driver(
@@ -479,6 +492,12 @@ impl SubagentExecutor<String> for MismatchedExecutor {
     ) -> Result<SubagentOutcome, SubagentError> {
         Ok(SubagentOutcome {
             task_id: "other-task".into(),
+            worker_thread_id: None,
+            tier: None,
+            model_override: None,
+            cost_usd: None,
+            cost_source: None,
+            extensions: Default::default(),
             output: String::new(),
             history: Vec::new(),
             status: SubagentOutcomeKind::Completed,
@@ -514,6 +533,12 @@ impl SubagentExecutor<String> for PauseThenCompleteExecutor {
         self.actions.lock().unwrap().push(Action::Execute);
         Ok(SubagentOutcome {
             task_id: execution.prepared.task_id,
+            worker_thread_id: None,
+            tier: None,
+            model_override: None,
+            cost_usd: None,
+            cost_source: None,
+            extensions: Default::default(),
             output: if call == 1 {
                 "waiting".into()
             } else {
@@ -567,12 +592,20 @@ impl SubagentExecutor<String> for NestedExecutor {
                         (),
                         "nested work",
                         None,
-                    )?,
+                        None,
+                    )
+                    .await?,
                     execution.cancellation,
                 )
                 .await?;
             return Ok(SubagentOutcome {
                 task_id,
+                worker_thread_id: None,
+                tier: None,
+                model_override: None,
+                cost_usd: None,
+                cost_source: None,
+                extensions: Default::default(),
                 output: "parent result".into(),
                 history: Vec::new(),
                 status: SubagentOutcomeKind::Completed,
@@ -589,6 +622,12 @@ impl SubagentExecutor<String> for NestedExecutor {
         }
         Ok(SubagentOutcome {
             task_id,
+            worker_thread_id: None,
+            tier: None,
+            model_override: None,
+            cost_usd: None,
+            cost_source: None,
+            extensions: Default::default(),
             output: "child result".into(),
             history: Vec::new(),
             status: SubagentOutcomeKind::Completed,
@@ -649,7 +688,7 @@ async fn caller_owned_child_context_keeps_its_lineage_into_execution() {
         .unwrap();
     driver(planner, executor.clone(), persistence)
         .run(
-            request_with_parent("lineage", child),
+            request_with_parent("lineage", child).await,
             CancellationToken::new(),
         )
         .await
@@ -673,7 +712,9 @@ async fn opaque_host_request_reaches_the_planner_unchanged() {
         },
         "do work",
         None,
+        None,
     )
+    .await
     .unwrap();
     SubagentDriver::new(SubagentCapabilities {
         planner: Some(planner.clone()),
@@ -926,7 +967,7 @@ async fn fresh_request_rejects_an_unrelated_or_thread_mismatched_context() {
         "fresh".to_owned(),
     );
     assert!(matches!(
-        SubagentRequest::continue_with_key(key, fresh_wrong_thread, (), "input", None),
+        SubagentRequest::continue_with_key(key, fresh_wrong_thread, (), "input", None, None).await,
         Err(SubagentError::InvalidRequest(_))
     ));
 }
@@ -1087,14 +1128,14 @@ async fn same_task_id_from_distinct_parent_runs_never_shares_lifecycle_state() {
 
     driver
         .run(
-            request_with_parent("same-task", first_parent),
+            request_with_parent("same-task", first_parent).await,
             CancellationToken::new(),
         )
         .await
         .unwrap();
     driver
         .run(
-            request_with_parent("same-task", second_parent),
+            request_with_parent("same-task", second_parent).await,
             CancellationToken::new(),
         )
         .await
@@ -1180,7 +1221,7 @@ async fn continuation_keeps_original_key_with_a_fresh_owned_context() {
     let key = SubagentTaskKey::from_context(&original, "continued", Some("thread-1".into()));
     lifecycle
         .run(
-            continuation_request(key.clone(), original),
+            continuation_request(key.clone(), original).await,
             CancellationToken::new(),
         )
         .await
@@ -1188,7 +1229,7 @@ async fn continuation_keeps_original_key_with_a_fresh_owned_context() {
     let fresh = RunContext::new(RunConfig::new("fresh-turn-context"), "second".into());
     let completed = lifecycle
         .run(
-            continuation_request(key.clone(), fresh),
+            continuation_request(key.clone(), fresh).await,
             CancellationToken::new(),
         )
         .await
@@ -1444,6 +1485,45 @@ fn absent_host_capabilities_fail_closed() {
     assert_eq!(error, SubagentError::MissingCapability("planner"));
 }
 
+#[test]
+fn awaiting_user_subagent_session_remains_reusable_for_same_task_key() {
+    let selector = SubagentSessionSelector {
+        parent_session: "parent-session".into(),
+        parent_thread_id: Some("parent-thread".into()),
+        agent_id: "researcher".into(),
+        model: Some("mock".into()),
+        sandbox_mode: "none".into(),
+        action_root: None,
+        task_key: "research".into(),
+    };
+    let session = DurableSubagentSession {
+        subagent_session_id: "child-session".into(),
+        parent_session: selector.parent_session.clone(),
+        parent_thread_id: selector.parent_thread_id.clone(),
+        worker_thread_id: Some("child-thread".into()),
+        agent_id: selector.agent_id.clone(),
+        display_name: None,
+        model: selector.model.clone(),
+        sandbox_mode: selector.sandbox_mode.clone(),
+        action_root: selector.action_root.clone(),
+        task_key: selector.task_key.clone(),
+        lifecycle_key: None,
+        task_title: "Research".into(),
+        current_task_id: Some("task-1".into()),
+        status: DurableSubagentStatus::AwaitingUser,
+        reusable: true,
+        latest_history: None,
+        latest_error: None,
+        created_at: "now".into(),
+        updated_at: "now".into(),
+        last_used_at: "now".into(),
+    };
+    assert!(
+        session.matches_selector(&selector),
+        "a paused child awaiting a reply must be resumed for the same task key"
+    );
+}
+
 fn admission_policy(
     parent: Option<usize>,
     total: Option<usize>,
@@ -1456,13 +1536,14 @@ fn admission_policy(
     })
 }
 
-fn sibling_request(task_id: &str) -> SubagentRequest<String> {
+async fn sibling_request(task_id: &str) -> SubagentRequest<String> {
     // Every call builds a context with the same run id, so all tasks share one
     // parent and root.
     request_with_parent(
         task_id,
         RunContext::new(RunConfig::new("shared-parent"), String::new()),
     )
+    .await
 }
 
 #[tokio::test]
@@ -1478,12 +1559,12 @@ async fn driver_rejects_a_spawn_over_the_parent_cap_and_frees_the_slot_on_finish
     let first = tokio::spawn({
         let driver = driver.clone();
         let cancel = first_cancel.clone();
-        async move { driver.run(sibling_request("first"), cancel).await }
+        async move { driver.run(sibling_request("first").await, cancel).await }
     });
     started.await.unwrap();
 
     let rejected = driver
-        .run(sibling_request("second"), CancellationToken::new())
+        .run(sibling_request("second").await, CancellationToken::new())
         .await
         .unwrap_err();
 
@@ -1516,7 +1597,7 @@ async fn driver_enforces_the_target_allowlist_and_fails_closed_without_a_target(
     ));
 
     let missing = driver
-        .run(sibling_request("no-target"), CancellationToken::new())
+        .run(sibling_request("no-target").await, CancellationToken::new())
         .await
         .unwrap_err();
     assert!(matches!(
@@ -1525,7 +1606,7 @@ async fn driver_enforces_the_target_allowlist_and_fails_closed_without_a_target(
     ));
     let wrong = driver
         .run(
-            sibling_request("wrong").with_target("coder"),
+            sibling_request("wrong").await.with_target("coder"),
             CancellationToken::new(),
         )
         .await
@@ -1538,7 +1619,7 @@ async fn driver_enforces_the_target_allowlist_and_fails_closed_without_a_target(
     );
     driver
         .run(
-            sibling_request("right").with_target("researcher"),
+            sibling_request("right").await.with_target("researcher"),
             CancellationToken::new(),
         )
         .await
@@ -1562,7 +1643,7 @@ async fn driver_refunds_the_reservation_when_planning_fails_before_launch() {
     // the next attempt is admitted (and fails the same way), not rejected.
     for task in ["a", "b"] {
         let error = driver
-            .run(sibling_request(task), CancellationToken::new())
+            .run(sibling_request(task).await, CancellationToken::new())
             .await
             .unwrap_err();
         assert!(matches!(error, SubagentError::Planning(_)), "{error}");
@@ -1588,7 +1669,7 @@ async fn driver_releases_the_live_slot_when_execution_fails() {
     ));
     for task in ["a", "b"] {
         let error = driver
-            .run(sibling_request(task), CancellationToken::new())
+            .run(sibling_request(task).await, CancellationToken::new())
             .await
             .unwrap_err();
         assert_eq!(error, SubagentError::Execution("executor failed".into()));
@@ -1609,11 +1690,11 @@ async fn driver_total_budget_is_spent_by_completed_children() {
     ));
 
     driver
-        .run(sibling_request("one"), CancellationToken::new())
+        .run(sibling_request("one").await, CancellationToken::new())
         .await
         .unwrap();
     let over = driver
-        .run(sibling_request("two"), CancellationToken::new())
+        .run(sibling_request("two").await, CancellationToken::new())
         .await
         .unwrap_err();
     assert_eq!(
@@ -1632,7 +1713,7 @@ async fn driver_continuation_takes_a_live_slot_but_no_total_budget() {
     ));
 
     driver
-        .run(sibling_request("original"), CancellationToken::new())
+        .run(sibling_request("original").await, CancellationToken::new())
         .await
         .unwrap();
     assert_eq!(
@@ -1642,7 +1723,7 @@ async fn driver_continuation_takes_a_live_slot_but_no_total_budget() {
 
     // The budget is spent, so a fresh spawn is refused...
     let fresh = driver
-        .run(sibling_request("fresh"), CancellationToken::new())
+        .run(sibling_request("fresh").await, CancellationToken::new())
         .await
         .unwrap_err();
     assert!(matches!(
@@ -1660,7 +1741,9 @@ async fn driver_continuation_takes_a_live_slot_but_no_total_budget() {
         (),
         "continue",
         Some(SubagentResume::default()),
+        None,
     )
+    .await
     .unwrap();
     driver.run(resumed, CancellationToken::new()).await.unwrap();
     assert_eq!(
@@ -1695,7 +1778,8 @@ async fn driver_scope_is_the_thread_so_turn_run_ids_share_the_cap() {
                     request_with_parent(
                         "t1",
                         RunContext::new(RunConfig::new("turn-1"), String::new()),
-                    ),
+                    )
+                    .await,
                     cancel,
                 )
                 .await
@@ -1706,7 +1790,8 @@ async fn driver_scope_is_the_thread_so_turn_run_ids_share_the_cap() {
     let second_turn = request_with_parent(
         "t2",
         RunContext::new(RunConfig::new("turn-2"), String::new()),
-    );
+    )
+    .await;
     let rejected = driver
         .run(second_turn, CancellationToken::new())
         .await
@@ -1730,18 +1815,21 @@ async fn driver_custom_scope_resolver_sees_the_task_keys_root_run_id() {
         .with_scope_key(|cfg| format!("root:{}", cfg.lineage.root_run_id.as_str())),
     );
     let child_of = |parent: &str| {
-        let mut config = RunConfig::new(parent);
-        config.lineage.root_run_id = tinyagents_harness::ids::RunId::new("tree-root");
-        request_with_parent(parent, RunContext::new(config, String::new()))
+        let parent = parent.to_owned();
+        async move {
+            let mut config = RunConfig::new(parent.clone());
+            config.lineage.root_run_id = tinyagents_harness::ids::RunId::new("tree-root");
+            request_with_parent(&parent, RunContext::new(config, String::new())).await
+        }
     };
 
     driver
-        .run(child_of("parent-a"), CancellationToken::new())
+        .run(child_of("parent-a").await, CancellationToken::new())
         .await
         .unwrap();
     // A different immediate parent in the same tree shares the root's budget.
     let over = driver
-        .run(child_of("parent-b"), CancellationToken::new())
+        .run(child_of("parent-b").await, CancellationToken::new())
         .await
         .unwrap_err();
     assert_eq!(

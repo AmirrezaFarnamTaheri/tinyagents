@@ -22,6 +22,7 @@ fn meta() -> TranscriptMeta {
         updated: "2026-01-01T00:00:00Z".into(),
         turn_count: 1,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens: 1,
         output_tokens: 2,
         cached_input_tokens: 0,
@@ -49,6 +50,20 @@ fn frozen_prefix_count_round_trips_in_meta() {
         read_transcript(&path).unwrap().meta.prefix_message_count,
         Some(2)
     );
+}
+
+#[test]
+fn reset_context_marker_round_trips_in_meta() {
+    let dir = tempdir().unwrap();
+    let path = resolve_keyed_transcript_path(dir.path(), "reset-context").unwrap();
+    let mut seed = meta();
+    seed.prefix_message_count = None;
+    seed.prefix_reset = true;
+    write_transcript(&path, &[], &seed, None).unwrap();
+
+    let restored = read_transcript(&path).unwrap().meta;
+    assert!(restored.prefix_reset);
+    assert_eq!(restored.prefix_message_count, None);
 }
 
 #[test]

@@ -2,6 +2,10 @@
 
 Date: 2026-09-19. Baseline: TinyAgents v2.1.2 (`fc33c43`).
 
+This comparison records the pre-#61 baseline. Claims about TinyAgents graph
+execution, graph checkpointing, and graph-specific gaps are historical; the
+graph runtime was removed in TinyAgents #61.
+
 This directory compares TinyAgents with three agent *runtime libraries* and
 pairs that with a deep code review of our own crates. It answers three
 questions:
@@ -22,17 +26,14 @@ as calibration for the runtime/harness split.
 |---|---|
 | [`feature-gaps.md`](feature-gaps.md) | Consolidated gap matrix across all three runtimes with a runtime-vs-host layer assignment for every item. Start here. |
 | [`plan.md`](plan.md) | Phased execution plan: PR-sized work items, dependencies, and what moves between OpenHuman and TinyAgents. |
-| [`langgraph.md`](langgraph.md) | LangGraph 1.2 / LangChain 1.4 / Deep Agents 0.7: feature inventory, ranked gaps, design lessons. |
 | [`pydantic-ai.md`](pydantic-ai.md) | Pydantic AI v2 / pydantic-graph / pydantic-ai-harness: same structure. |
 | [`pi.md`](pi.md) | pi (`earendil-works/pi`): `pi-ai`, `pi-agent-core` and its `AgentHarness`: same structure. |
 | [`code-review-harness.md`](code-review-harness.md) | `tinyagents-harness` findings (3 critical, 13 important, 14 minor), refactors, test gaps. |
-| [`code-review-graph.md`](code-review-graph.md) | `tinyagents-graph` / `-orchestration` / `-session` findings (4 critical, 12 important, 12 minor). |
 
 ## Executive summary
 
 **Where TinyAgents is ahead.** None of the three runtimes has our combination
-of a durable typed graph (channels, `Send`, subgraphs, checkpoints with time
-travel), a policy-checked steering channel, detached sub-agent registry with
+of a policy-checked steering channel, detached sub-agent registry with
 parallel failure policies, fail-closed `ToolPolicy`, prompt-cache segment
 layout and capability-set model resolution.
 LangGraph OSS puts double-texting, cron and background runs in its paid
@@ -53,17 +54,16 @@ sub-agents, no structured output, no budgets.
    boundaries or indices, so interleaved thinking/text and durable partials
    cannot be reconstructed (pi's `*_start/_delta/_end` + frame codec; LangGraph
    `StreamPart{ns, seq}`).
-3. **Durability semantics.** The graph executor discards completed
-   higher-index parallel siblings on interrupt/failure and re-runs them, and
-   routes their successors into the wrong superstep (critical findings C1/C2).
-   Checkpoints are unversioned full-state snapshots; per-node
-   retry/cache/timeout policies and delta channel history are missing.
+3. **Durability semantics.** Graph-executor findings in the original review
+   are historical and no longer describe shipped code. Session state remains
+   linear; per-node workflow retry/cache/timeout policies are outside the
+   current TinyAgents runtime.
 4. **Tools.** `ToolExecutionContext` lacks call id, store and state access;
    tool results are text/JSON only (no `ToolReturn`-style multimodal
    follow-up + metadata); no composable toolsets; no generic MCP client; no
    replay/idempotency classification for crash recovery.
-5. **Sessions and context.** Transcripts are linear (pi's entry tree with
-   forks, labels, compaction and branch-summary entries); compaction has
+5. **Sessions and context.** TinyAgents transcripts are linear; pi also has
+   a conversation entry tree with forks, labels, compaction and branch-summary entries. Compaction has
    policies but no cut-point rules, overflow detection, or durable record;
    no cross-provider handoff transform.
 6. **Models.** `ModelProfile` is capability data only (Pydantic's carries

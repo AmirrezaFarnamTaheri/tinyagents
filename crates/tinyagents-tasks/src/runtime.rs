@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+use tokio::time::Instant;
 
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
@@ -18,8 +19,8 @@ use tinyagents_harness::ids::TaskId;
 use tinyagents_harness::steering::{RecentRequestIds, SteeringHandle};
 
 use crate::{
-    CancelledDetachedTask, DetachedTaskRegistryError, DetachedTaskSnapshot,
-    DetachedTaskWaitOutcome, SteeringRegistry,
+    CancelledDetachedTask, DetachedTaskBatchWaitError, DetachedTaskBatchWaitItem,
+    DetachedTaskRegistryError, DetachedTaskSnapshot, DetachedTaskWaitOutcome, SteeringRegistry,
 };
 
 struct DetachedTaskEntry<Metadata, Status> {
@@ -36,8 +37,27 @@ struct DetachedTaskEntry<Metadata, Status> {
     steer_requests: RecentRequestIds,
 }
 
+/// Notification for a hard-aborted detached future.
+#[derive(Debug, Clone)]
+pub struct DetachedAbortEvent<Metadata, Status> {
+    /// Task id removed from the live registry.
+    pub task_id: TaskId,
+    /// Owner recorded at registration.
+    pub owner_id: String,
+    /// Application metadata needed to settle its durable run ledger.
+    pub metadata: Metadata,
+    /// Latest status observed before the future was aborted.
+    pub status: Status,
+}
+
 type RegistryGuard<'a, Metadata, Status> =
     MutexGuard<'a, HashMap<TaskId, DetachedTaskEntry<Metadata, Status>>>;
+
+enum RegistrationKind {
+    Spawned(AbortHandle),
+    Cooperative,
+    ManagedCooperative,
+}
 
 /// Ownership-aware registry for live detached task executors.
 ///
@@ -55,6 +75,7 @@ pub struct DetachedTaskRegistry<Metadata, Status> {
     inner: Arc<Mutex<HashMap<TaskId, DetachedTaskEntry<Metadata, Status>>>>,
     steering: SteeringRegistry,
     is_terminal: Arc<dyn Fn(&Status) -> bool + Send + Sync>,
+    on_abort: Arc<dyn Fn(DetachedAbortEvent<Metadata, Status>) + Send + Sync>,
     soft_cap: usize,
 }
 
@@ -75,8 +96,20 @@ where
             inner: Arc::default(),
             steering,
             is_terminal: Arc::new(is_terminal),
+            on_abort: Arc::new(|_| {}),
             soft_cap: soft_cap.max(1),
         }
+    }
+
+    /// Installs a synchronous observer called when cancellation hard-aborts a
+    /// spawned future. The observer can settle a durable ledger and publish a
+    /// terminal event before the registry drops its final runtime handles.
+    pub fn with_abort_observer(
+        mut self,
+        observer: impl Fn(DetachedAbortEvent<Metadata, Status>) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_abort = Arc::new(observer);
+        self
     }
 
     /// Registers the executor handles for a detached task.
@@ -98,7 +131,7 @@ where
             metadata,
             status,
             cancellation,
-            Some(abort),
+            RegistrationKind::Spawned(abort),
         )
     }
 
@@ -119,7 +152,30 @@ where
             metadata,
             status,
             cancellation,
-            None,
+            RegistrationKind::Cooperative,
+        )
+    }
+
+    /// Registers a cooperative task without the automatic soft-cap sweep.
+    ///
+    /// Use this only when an adapter coordinates terminal pruning with
+    /// sidecar state and protects entries that still have active waiters. The
+    /// adapter must enforce its own finite retention policy before registering.
+    pub fn register_cooperative_managed(
+        &self,
+        task_id: TaskId,
+        owner_id: impl Into<String>,
+        metadata: Metadata,
+        status: watch::Receiver<Status>,
+        cancellation: CancellationToken,
+    ) -> Result<()> {
+        self.register_entry(
+            task_id,
+            owner_id.into(),
+            metadata,
+            status,
+            cancellation,
+            RegistrationKind::ManagedCooperative,
         )
     }
 
@@ -130,9 +186,14 @@ where
         metadata: Metadata,
         status: watch::Receiver<Status>,
         cancellation: CancellationToken,
-        abort: Option<AbortHandle>,
+        registration: RegistrationKind,
     ) -> Result<()> {
-        if self.len().map_err(Self::tinyagents_error)? >= self.soft_cap {
+        let (abort, sweep_at_cap) = match registration {
+            RegistrationKind::Spawned(abort) => (Some(abort), true),
+            RegistrationKind::Cooperative => (None, true),
+            RegistrationKind::ManagedCooperative => (None, false),
+        };
+        if sweep_at_cap && self.len().map_err(Self::tinyagents_error)? >= self.soft_cap {
             self.sweep_terminal().map_err(Self::tinyagents_error)?;
         }
         let mut guard = self.lock().map_err(Self::tinyagents_error)?;
@@ -175,7 +236,7 @@ where
         if entry.owner_id != owner_id {
             return Err(DetachedTaskRegistryError::NotOwned);
         }
-        if (self.is_terminal)(&entry.status.borrow()) {
+        if self.is_settled(&entry.status) {
             return Err(DetachedTaskRegistryError::AlreadyDone);
         }
         if let Some(token) = entry.cancellation.take() {
@@ -331,6 +392,93 @@ where
         owner_id: &str,
         timeout: Duration,
     ) -> std::result::Result<DetachedTaskWaitOutcome<Status>, DetachedTaskRegistryError> {
+        self.wait_until(task_id, owner_id, Some(timeout)).await
+    }
+
+    /// Waits for tasks in input order against one shared timeout budget.
+    ///
+    /// Each task's metadata is captured before its terminal runtime entry is
+    /// pruned. A timeout leaves the current and later runtimes registered.
+    /// Every id is checked before any wait, so an unknown or foreign id fails
+    /// the batch without pruning anything; a repeated id gets the same result.
+    /// On a registry error while waiting, later ids are left untouched. `None`
+    /// waits without a deadline.
+    pub async fn wait_many(
+        &self,
+        task_ids: &[TaskId],
+        owner_id: &str,
+        timeout: Option<Duration>,
+    ) -> std::result::Result<
+        Vec<DetachedTaskBatchWaitItem<Metadata, Status>>,
+        DetachedTaskBatchWaitError,
+    > {
+        // Check every id before waiting on any: a terminal wait prunes its
+        // entry, so an error on a later id would drop an earlier finished
+        // task's result with nobody holding it.
+        let mut metadata = Vec::with_capacity(task_ids.len());
+        for task_id in task_ids {
+            match self.metadata_for(task_id, owner_id) {
+                Ok(found) => metadata.push(found),
+                Err(error) => {
+                    return Err(DetachedTaskBatchWaitError {
+                        task_id: task_id.clone(),
+                        error,
+                    });
+                }
+            }
+        }
+        let deadline = timeout.map(|duration| Instant::now() + duration);
+        let mut results: Vec<DetachedTaskBatchWaitItem<Metadata, Status>> =
+            Vec::with_capacity(task_ids.len());
+        for (task_id, metadata) in task_ids.iter().zip(metadata) {
+            // A repeated id was pruned by its first terminal wait.
+            if let Some(earlier) = results.iter().find(|item| {
+                &item.task_id == task_id
+                    && matches!(item.outcome, DetachedTaskWaitOutcome::Terminal(_))
+            }) {
+                results.push(earlier.clone());
+                continue;
+            }
+            let remaining =
+                deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+            match self.wait_until(task_id, owner_id, remaining).await {
+                Ok(outcome) => results.push(DetachedTaskBatchWaitItem {
+                    task_id: task_id.clone(),
+                    metadata,
+                    outcome,
+                }),
+                Err(error) => {
+                    return Err(DetachedTaskBatchWaitError {
+                        task_id: task_id.clone(),
+                        error,
+                    });
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    fn metadata_for(
+        &self,
+        task_id: &TaskId,
+        owner_id: &str,
+    ) -> std::result::Result<Metadata, DetachedTaskRegistryError> {
+        let guard = self.lock()?;
+        let entry = guard
+            .get(task_id)
+            .ok_or(DetachedTaskRegistryError::Unknown)?;
+        if entry.owner_id != owner_id {
+            return Err(DetachedTaskRegistryError::NotOwned);
+        }
+        Ok(entry.metadata.clone())
+    }
+
+    async fn wait_until(
+        &self,
+        task_id: &TaskId,
+        owner_id: &str,
+        timeout: Option<Duration>,
+    ) -> std::result::Result<DetachedTaskWaitOutcome<Status>, DetachedTaskRegistryError> {
         let mut status = {
             let guard = self.lock()?;
             let entry = guard
@@ -361,7 +509,11 @@ where
             }
         };
 
-        match tokio::time::timeout(timeout, waited).await {
+        let waited = match timeout {
+            Some(timeout) => tokio::time::timeout(timeout, waited).await.map_err(|_| ()),
+            None => Ok(waited.await),
+        };
+        match waited {
             Ok(Ok(terminal)) => {
                 self.remove(task_id)?;
                 Ok(DetachedTaskWaitOutcome::Terminal(terminal))
@@ -370,7 +522,7 @@ where
                 self.remove(task_id)?;
                 Err(error)
             }
-            Err(_) => Ok(DetachedTaskWaitOutcome::TimedOut(status.borrow().clone())),
+            Err(()) => Ok(DetachedTaskWaitOutcome::TimedOut(status.borrow().clone())),
         }
     }
 
@@ -420,13 +572,14 @@ where
         self.cancel_where(|_| true)
     }
 
-    /// Prunes every entry whose latest watched status is terminal.
+    /// Prunes every entry whose latest watched status is terminal, or whose
+    /// status sender is gone.
     pub fn sweep_terminal(&self) -> std::result::Result<usize, DetachedTaskRegistryError> {
         let removed = {
             let mut guard = self.lock()?;
             let task_ids: Vec<_> = guard
                 .iter()
-                .filter(|(_, entry)| (self.is_terminal)(&entry.status.borrow()))
+                .filter(|(_, entry)| self.is_settled(&entry.status))
                 .map(|(task_id, _)| task_id.clone())
                 .collect();
             for task_id in &task_ids {
@@ -438,6 +591,39 @@ where
             self.steering.deregister(task_id);
         }
         Ok(removed.len())
+    }
+
+    /// Whether a task is done: its latest status is terminal, or its status
+    /// sender is gone, so nothing will ever publish, drain a steer or settle it.
+    fn is_settled(&self, status: &watch::Receiver<Status>) -> bool {
+        status.has_changed().is_err() || (self.is_terminal)(&status.borrow())
+    }
+
+    /// Removes one terminal entry for trusted adapter-side lifecycle cleanup.
+    ///
+    /// Returns the terminal snapshot when this call removed the entry, and
+    /// `None` when it is still live or has already been removed. Ownership is
+    /// intentionally not checked; callers must establish trust before using
+    /// this process-local supervision API. Steering is deregistered with the
+    /// runtime entry, as it is for every other removal path.
+    pub fn prune_terminal_trusted(
+        &self,
+        task_id: &TaskId,
+    ) -> std::result::Result<Option<Status>, DetachedTaskRegistryError> {
+        let status = {
+            let mut guard = self.lock()?;
+            let Some(entry) = guard.get(task_id) else {
+                return Ok(None);
+            };
+            let status = entry.status.borrow().clone();
+            if !self.is_settled(&entry.status) {
+                return Ok(None);
+            }
+            guard.remove(task_id);
+            status
+        };
+        self.steering.deregister(task_id);
+        Ok(Some(status))
     }
 
     fn ensure_live_owned(
@@ -452,7 +638,7 @@ where
         if entry.owner_id != owner_id {
             return Err(DetachedTaskRegistryError::NotOwned);
         }
-        if (self.is_terminal)(&entry.status.borrow()) {
+        if self.is_settled(&entry.status) {
             return Err(DetachedTaskRegistryError::AlreadyDone);
         }
         Ok(())
@@ -463,7 +649,7 @@ where
         let entry = guard
             .get(task_id)
             .ok_or(DetachedTaskRegistryError::Unknown)?;
-        if (self.is_terminal)(&entry.status.borrow()) {
+        if self.is_settled(&entry.status) {
             return Err(DetachedTaskRegistryError::AlreadyDone);
         }
         Ok(())
@@ -492,6 +678,15 @@ where
             cancellation.cancel();
         }
         if let Some(abort) = &entry.abort {
+            let status = entry.status.borrow().clone();
+            if !self.is_settled(&entry.status) {
+                (self.on_abort)(DetachedAbortEvent {
+                    task_id: task_id.clone(),
+                    owner_id: entry.owner_id.clone(),
+                    metadata: entry.metadata.clone(),
+                    status,
+                });
+            }
             abort.abort();
         }
         Ok(CancelledDetachedTask {
@@ -532,3 +727,7 @@ where
         TinyAgentsError::Graph(error.to_string())
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod tests;

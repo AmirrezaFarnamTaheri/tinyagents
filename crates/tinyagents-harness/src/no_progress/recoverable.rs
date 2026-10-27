@@ -77,6 +77,19 @@ impl RecoverableFailureLadder {
         arg_fingerprint: &str,
         failure_text: &str,
     ) -> Option<String> {
+        self.record_with_cause(policy, tool, arg_fingerprint, failure_text)
+            .map(|cause| cause.summary)
+    }
+
+    /// Record a recoverable failure and preserve its stable class and operation
+    /// when one of the existing budgets halts the run.
+    pub fn record_with_cause(
+        &self,
+        policy: &dyn FailurePolicy,
+        tool: &str,
+        arg_fingerprint: &str,
+        failure_text: &str,
+    ) -> Option<super::ClassifiedStopCause> {
         let key = format!("{tool}\u{1f}{arg_fingerprint}");
         let count = self
             .identical
@@ -96,10 +109,18 @@ impl RecoverableFailureLadder {
             "[no_progress] recoverable failure recorded with extended headroom"
         );
         if count >= self.thresholds.recoverable_repeat_failure {
-            return Some(policy.identical_halt_summary(tool, count, failure_text));
+            return Some(super::ClassifiedStopCause {
+                class: "transient".into(),
+                operation: tool.to_owned(),
+                summary: policy.identical_halt_summary(tool, count, failure_text),
+            });
         }
         if consecutive >= self.thresholds.recoverable_no_progress_failure {
-            return Some(policy.no_progress_halt_summary(consecutive, tool, failure_text));
+            return Some(super::ClassifiedStopCause {
+                class: "transient".into(),
+                operation: tool.to_owned(),
+                summary: policy.no_progress_halt_summary(consecutive, tool, failure_text),
+            });
         }
         None
     }

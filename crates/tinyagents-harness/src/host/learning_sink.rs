@@ -90,6 +90,10 @@ pub struct TurnSummary {
     #[serde(default)]
     pub tools_invoked: Vec<String>,
 
+    /// Content-free outcomes for completed tool calls.
+    #[serde(default)]
+    pub tool_outcomes: Vec<ToolOutcomeRecord>,
+
     /// Token usage accumulated by the turn, for sinks that weight or budget
     /// what they learn from.
     #[serde(default)]
@@ -106,6 +110,7 @@ impl TurnSummary {
             input: String::new(),
             output: String::new(),
             tools_invoked: Vec::new(),
+            tool_outcomes: Vec::new(),
             usage: Usage::default(),
         }
     }
@@ -145,10 +150,51 @@ impl TurnSummary {
         self
     }
 
+    /// Records the result metadata for one completed invocation.
+    pub fn record_tool_outcome(&mut self, outcome: ToolOutcomeRecord) {
+        self.record_tool(&outcome.name);
+        self.tool_outcomes.push(outcome);
+    }
+
     /// Whether the turn invoked any tool. Cheaper than inspecting the vector at
     /// call sites that only branch on "did this turn act, or merely talk".
     pub fn used_tools(&self) -> bool {
         !self.tools_invoked.is_empty()
+    }
+}
+
+/// Content-free outcome for one tool invocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolOutcomeRecord {
+    /// Tool name.
+    pub name: String,
+    /// SHA-256 digest of serialized arguments, never the arguments themselves.
+    pub args_digest: String,
+    /// Whether the tool reported success.
+    pub success: bool,
+    /// Classified failure, absent on success.
+    pub failure_class: Option<String>,
+    /// Execution duration in milliseconds.
+    pub duration_ms: u64,
+}
+
+/// Classify a failure message without retaining its text.
+pub fn classify_tool_failure(output: &str) -> &'static str {
+    let lower = output.to_lowercase();
+    if lower.contains("timeout") {
+        "timeout"
+    } else if lower.contains("not found") || lower.contains("no such file") {
+        "not_found"
+    } else if lower.contains("permission") || lower.contains("denied") {
+        "permission_denied"
+    } else if lower.contains("connection") || lower.contains("network") {
+        "connection_error"
+    } else if lower.contains("parse") || lower.contains("invalid") || lower.contains("syntax") {
+        "parse_error"
+    } else if lower.contains("unknown tool") {
+        "unknown_tool"
+    } else {
+        "error"
     }
 }
 

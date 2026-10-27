@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use tinyagents_harness::tool::{ToolSnapshot, ToolSnapshotError};
+
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
@@ -22,10 +24,69 @@ use tinytools::{Tool, ToolResult, ToolSpec};
 
 use crate::{
     CommitReceipt, DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, PrefixSnapshot,
-    ResumeMode, ResumePreparation, RuntimeError, SessionBuilder, SessionDriver, SessionHooks,
-    SessionStateView, SessionTerminal, SessionTurnOutcome, SessionTurnRequest, ToolSnapshot,
-    TranscriptCodec, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
+    ResolvedSessionStores, ResumeMode, ResumePreparation, RuntimeError, SessionBuilder,
+    SessionDriver, SessionHooks, SessionIdentityRequest, SessionIdentityResolver, SessionStateView,
+    SessionTerminal, SessionTurnOutcome, SessionTurnRequest, TranscriptCodec, TranscriptTarget,
+    TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
+
+struct FixedIdentityResolver {
+    provider: Arc<dyn tinyagents_session::port::SessionStoreProvider>,
+    calls: Arc<Mutex<usize>>,
+    agent_id: Arc<Mutex<String>>,
+}
+
+struct FailingIdentityResolver;
+
+impl SessionIdentityResolver<()> for FailingIdentityResolver {
+    fn resolve(
+        &self,
+        _: &SessionIdentityRequest,
+        _: &(),
+    ) -> Result<ResolvedSessionStores, RuntimeError> {
+        Err(RuntimeError::Driver("actor admission denied".into()))
+    }
+}
+
+struct SwitchableActorResolver {
+    provider: Arc<Mutex<Arc<dyn tinyagents_session::port::SessionStoreProvider>>>,
+}
+
+impl SessionIdentityResolver<()> for SwitchableActorResolver {
+    fn resolve(
+        &self,
+        _: &SessionIdentityRequest,
+        _: &(),
+    ) -> Result<ResolvedSessionStores, RuntimeError> {
+        let provider = self.provider.lock().unwrap().clone();
+        let stores = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+            provider.as_ref(),
+            "shared-agent",
+        )
+        .map_err(|error| RuntimeError::InvalidSessionState(error.to_string()))?;
+        Ok(ResolvedSessionStores {
+            agent_id: "shared-agent".into(),
+            stores,
+        })
+    }
+}
+
+impl SessionIdentityResolver<()> for FixedIdentityResolver {
+    fn resolve(
+        &self,
+        _: &SessionIdentityRequest,
+        _: &(),
+    ) -> Result<ResolvedSessionStores, RuntimeError> {
+        *self.calls.lock().unwrap() += 1;
+        let agent_id = self.agent_id.lock().unwrap().clone();
+        let stores = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+            self.provider.as_ref(),
+            &agent_id,
+        )
+        .map_err(|error| RuntimeError::InvalidSessionState(error.to_string()))?;
+        Ok(ResolvedSessionStores { agent_id, stores })
+    }
+}
 
 struct Driver {
     results: Mutex<VecDeque<Result<DriverOutcome, DriverFailure>>>,
@@ -83,6 +144,7 @@ impl SessionDriver for CancelAwareDriver {
                 output: None,
                 partial: None,
                 interrupted: true,
+                tool_outcomes: Vec::new(),
             }),
         })
     }
@@ -113,6 +175,7 @@ fn outcome(history: Vec<Message>) -> DriverOutcome {
         output: Some("ok".into()),
         partial: None,
         interrupted: false,
+        tool_outcomes: Vec::new(),
     }
 }
 
@@ -130,6 +193,7 @@ fn meta() -> TranscriptMeta {
         updated: "then".into(),
         turn_count: 0,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,
@@ -600,7 +664,7 @@ async fn trailing_input_is_deduplicated_and_tool_collisions_fail_closed() {
                 parameters: serde_json::json!({})
             },
         ]),
-        Err(RuntimeError::ToolNameCollision(_))
+        Err(ToolSnapshotError::NameCollision(_))
     ));
 }
 
@@ -634,6 +698,7 @@ async fn persistence_failure_rolls_back_and_a_partial_never_falls_back_to_two_wr
         output: None,
         partial: Some(crate::TranscriptPartial::new("display only")),
         interrupted: true,
+        tool_outcomes: Vec::new(),
     };
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Err(DriverFailure {
         outcome: None,
@@ -751,7 +816,12 @@ async fn post_commit_errors_cannot_relabel_a_successful_turn() {
 #[tokio::test]
 async fn harness_driver_keeps_the_explicit_model_and_tool_snapshot_boundary() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::new(MockModel::constant("from harness")));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::constant("from harness")),
+        ),
+    ));
     harness.register_tool(Arc::new(RegisteredTool));
     let snapshot = ToolSnapshot::new(harness.tools().declared_specs()).unwrap();
     let driver = Arc::new(HarnessDriver::new(Arc::new(harness), Arc::new(())));
@@ -772,7 +842,12 @@ async fn harness_driver_keeps_the_explicit_model_and_tool_snapshot_boundary() {
 #[tokio::test]
 async fn harness_driver_rejects_a_snapshot_not_registered_by_the_harness() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::new(MockModel::constant("unreachable")));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::constant("unreachable")),
+        ),
+    ));
     let driver = Arc::new(HarnessDriver::new(Arc::new(harness), Arc::new(())));
     let mut session = SessionBuilder::new(driver)
         .tool_snapshot(tools("not-registered"))
@@ -802,6 +877,7 @@ async fn history_commits_partial_model_history_and_display_only_partial_together
         output: None,
         partial: Some(crate::TranscriptPartial::new("display partial")),
         interrupted: true,
+        tool_outcomes: Vec::new(),
     };
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Err(DriverFailure {
         outcome: None,
@@ -900,6 +976,7 @@ async fn partial_usage_error_leaves_the_session_and_target_entirely_uncommitted(
         output: None,
         partial: Some(crate::TranscriptPartial::new("display partial")),
         interrupted: true,
+        tool_outcomes: Vec::new(),
     };
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Err(DriverFailure {
         outcome: None,
@@ -2049,6 +2126,8 @@ async fn after_commit_receipt_observes_durable_append_and_terminal_follows_it() 
         transcript.delta,
         crate::TranscriptDelta::Append { .. }
     ));
+    assert_eq!(transcript.rows.len(), 1);
+    assert_eq!(transcript.rows[0].content, "ok");
     assert!(matches!(
         events.terminal.lock().unwrap().as_slice(),
         [SessionTerminal::Completed(_)]
@@ -2095,6 +2174,10 @@ async fn receipt_reports_a_compaction_as_replacement_not_an_append_range() {
         receipts[1].transcript.as_ref().unwrap().delta,
         crate::TranscriptDelta::Replace { .. }
     ));
+    assert_eq!(
+        receipts[1].transcript.as_ref().unwrap().rows[0].content,
+        "compacted"
+    );
 }
 
 #[tokio::test]
@@ -2519,6 +2602,7 @@ fn session_outcome(history: Vec<Message>, output: &str) -> DriverOutcome {
         output: Some(output.into()),
         partial: None,
         interrupted: false,
+        tool_outcomes: Vec::new(),
     }
 }
 
@@ -2693,7 +2777,7 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
 #[tokio::test]
 async fn a_restart_after_a_compaction_resumes_the_head_generation() {
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
-    let locator = memory();
+    let locator = crate::test_store::in_memory();
     locator
         .open_session(&session_ref, meta())
         .unwrap()
@@ -3254,7 +3338,6 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
         ],
         &legacy,
     );
-
     // The driver extends whatever it was handed by exactly one message.
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
         vec![
@@ -3463,7 +3546,6 @@ async fn a_first_session_resume_adopts_a_pre_identity_conversation() {
         &[TranscriptMessage::new("user", "plan a trip to kashmir")],
         &legacy,
     );
-
     let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
         .codec(Arc::new(Codec::default()))
         .session(
@@ -4495,4 +4577,537 @@ async fn dropping_the_turn_while_the_outcome_hook_is_pending_still_delivers_on_t
         .await
         .expect("on_terminal must still be delivered");
     assert_eq!(hook.terminals.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn direct_resume_resolves_and_uses_the_admitted_lease() {
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
+    );
+    let calls = Arc::new(Mutex::new(0));
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider,
+        calls: calls.clone(),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build()
+        .unwrap();
+    let options = TurnOptions {
+        resume: ResumeMode::Session,
+        thread_id: Some("thread-identity".into()),
+        ..TurnOptions::default()
+    };
+    assert!(!session.resume(&options).await.unwrap().loaded);
+    assert_eq!(*calls.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn child_identity_resolution_preserves_parent_lineage() {
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
+    );
+    let parent = SessionRef::scoped("root-thread", "parent-agent");
+    let child = SessionRef::child_of(&parent, "delegate:worker");
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider: provider.clone(),
+        calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("worker-agent".into())),
+    });
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("child task"),
+        Message::assistant("child result"),
+    ]))]));
+    let mut session = SessionBuilder::new(driver)
+        .codec(Arc::new(Codec::default()))
+        .child_identity_resolver(parent.clone(), "delegate:worker", meta(), resolver)
+        .build()
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("child task")),
+            TurnOptions {
+                resume: ResumeMode::Session,
+                thread_id: Some("root-thread".into()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let lease = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+        provider.as_ref(),
+        "worker-agent",
+    )
+    .unwrap();
+    let transcripts = &lease.stores().transcripts;
+    assert!(transcripts.read_session_transcript(&child).is_some());
+    assert!(transcripts.read_session_transcript(&parent).is_none());
+    assert!(child.is_subagent());
+    assert!(session_stem(&child).starts_with(&format!("{}__", session_stem(&parent))));
+}
+
+struct ReplaceTargetHook(Arc<dyn TranscriptLocator>);
+
+#[async_trait]
+impl SessionHooks for ReplaceTargetHook {
+    async fn before_resume(
+        &self,
+        _: &mut SessionTurnRequest,
+        _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<ResumePreparation, RuntimeError> {
+        Ok(ResumePreparation {
+            transcript: Some(TranscriptTarget::for_session(
+                self.0.clone(),
+                SessionRef::scoped("thread-identity", "agent-resolved"),
+                meta(),
+            )),
+        })
+    }
+    async fn before_turn(
+        &self,
+        _: &mut SessionTurnRequest,
+        _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> {
+        Ok(TurnPreparation::default())
+    }
+    async fn before_commit(
+        &self,
+        _: &SessionTurnOutcome,
+        _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+    async fn on_terminal(&self, _: SessionTerminal) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn hook_cannot_replace_resolved_identity_locator_before_any_read() {
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
+    );
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider,
+        calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let (wrong, wrong_history) = locator(None);
+    let driver = Arc::new(Driver::new(vec![]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .hooks(Arc::new(ReplaceTargetHook(wrong.clone())))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build()
+        .unwrap();
+    let result = session
+        .turn(
+            SessionTurnRequest::new(Message::user("next")),
+            TurnOptions {
+                resume: ResumeMode::Session,
+                ..TurnOptions::default()
+            },
+        )
+        .await;
+    assert!(matches!(result, Err(RuntimeError::InvalidSessionState(_))));
+    assert!(driver.requests.lock().unwrap().is_empty());
+    assert!(wrong.latest_agents.lock().unwrap().is_empty());
+    assert_eq!(*wrong_history.opens.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn resolver_rejects_a_later_agent_change_before_another_driver_call() {
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
+    );
+    let agent_id = Arc::new(Mutex::new("agent-one".to_owned()));
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider,
+        calls: Arc::new(Mutex::new(0)),
+        agent_id: agent_id.clone(),
+    });
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("one"),
+        Message::assistant("done"),
+    ]))]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build()
+        .unwrap();
+    let options = || TurnOptions {
+        resume: ResumeMode::Session,
+        thread_id: Some("thread-identity".into()),
+        ..TurnOptions::default()
+    };
+    session
+        .turn(SessionTurnRequest::new(Message::user("one")), options())
+        .await
+        .unwrap();
+    *agent_id.lock().unwrap() = "agent-two".into();
+    assert!(matches!(
+        session
+            .turn(SessionTurnRequest::new(Message::user("two")), options())
+            .await,
+        Err(RuntimeError::InvalidSessionState(_)),
+    ));
+    assert_eq!(driver.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn same_admission_can_resume_the_current_generation_twice() {
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
+    );
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider,
+        calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let driver = Arc::new(Driver::new(vec![
+        Ok(outcome(vec![
+            Message::user("one"),
+            Message::assistant("done"),
+        ])),
+        Ok(outcome(vec![
+            Message::user("two"),
+            Message::assistant("done"),
+        ])),
+    ]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build()
+        .unwrap();
+    let options = || TurnOptions {
+        resume: ResumeMode::Session,
+        thread_id: Some("thread-identity".into()),
+        ..TurnOptions::default()
+    };
+    session
+        .turn(SessionTurnRequest::new(Message::user("one")), options())
+        .await
+        .unwrap();
+    session
+        .turn(SessionTurnRequest::new(Message::user("two")), options())
+        .await
+        .unwrap();
+    assert_eq!(driver.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn resolver_error_does_not_touch_builder_fallback_locator() {
+    let (fallback, history) = locator(None);
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
+        .codec(Arc::new(Codec::default()))
+        .transcript(fallback.clone(), "fallback", meta())
+        .identity_resolver("thread-identity", meta(), Arc::new(FailingIdentityResolver))
+        .build()
+        .unwrap();
+    let options = TurnOptions {
+        resume: ResumeMode::LatestForAgent,
+        ..TurnOptions::default()
+    };
+    assert!(matches!(
+        session.resume(&options).await,
+        Err(RuntimeError::Driver(_))
+    ));
+    assert!(fallback.latest_agents.lock().unwrap().is_empty());
+    assert_eq!(*history.opens.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn first_admission_ignores_same_identity_fallback_at_generation_nine() {
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
+    );
+    let mut fallback_session = SessionRef::scoped("thread-first-admission", "agent-resolved");
+    for _ in 0..9 {
+        fallback_session = fallback_session.next_generation();
+    }
+    let (fallback, fallback_history) = locator(None);
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider: provider.clone(),
+        calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("first"),
+        Message::assistant("admitted root"),
+    ]))]));
+    let mut session = SessionBuilder::new(driver)
+        .codec(Arc::new(Codec::default()))
+        .session(fallback.clone(), fallback_session.clone(), meta())
+        .identity_resolver("thread-first-admission", meta(), resolver)
+        .build()
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("first")),
+            TurnOptions {
+                resume: ResumeMode::Never,
+                thread_id: Some("thread-first-admission".into()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let lease = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+        provider.as_ref(),
+        "agent-resolved",
+    )
+    .unwrap();
+    let transcripts = &lease.stores().transcripts;
+    let admitted_root = SessionRef::scoped("thread-first-admission", "agent-resolved");
+    assert!(
+        transcripts
+            .read_session_transcript(&admitted_root)
+            .is_some()
+    );
+    assert!(
+        transcripts
+            .read_session_transcript(&fallback_session)
+            .is_none()
+    );
+    assert_eq!(*fallback_history.opens.lock().unwrap(), 0);
+    assert!(fallback.latest_agents.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn explicit_session_override_cannot_change_resolved_identity() {
+    let provider = crate::test_store::driver_session_stores(
+        tinyagents_storage_kit::Scope::new("runtime-tests").unwrap(),
+    );
+    let calls = Arc::new(Mutex::new(0));
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider,
+        calls: calls.clone(),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build()
+        .unwrap();
+    let options = TurnOptions {
+        resume: ResumeMode::Session,
+        session: Some(SessionRef::scoped("other-thread", "agent-resolved")),
+        ..TurnOptions::default()
+    };
+    assert!(matches!(
+        session.resume(&options).await,
+        Err(RuntimeError::InvalidSessionState(_))
+    ));
+    assert_eq!(*calls.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn admitted_identity_keeps_compacted_head_on_following_never_resume_turn() {
+    let provider = Arc::new(tinyagents_session::port::InMemorySessionStores::new());
+    let session_ref = SessionRef::scoped("thread-identity-compact", "agent-resolved");
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider: provider.clone(),
+        calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let driver = Arc::new(Driver::new(vec![
+        Ok(outcome(vec![
+            Message::user("one"),
+            Message::assistant("first"),
+            Message::user("two"),
+            Message::assistant("second"),
+        ])),
+        Ok(outcome(vec![
+            Message::user("three"),
+            Message::assistant("third"),
+        ])),
+        Ok(outcome(vec![
+            Message::user("three"),
+            Message::assistant("third"),
+            Message::user("four"),
+            Message::assistant("fourth"),
+        ])),
+    ]));
+    let mut session = SessionBuilder::new(driver)
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity-compact", meta(), resolver)
+        .build()
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("one")),
+            session_turn_options(ResumeMode::Session, "thread-identity-compact"),
+        )
+        .await
+        .unwrap();
+    let lease = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+        provider.as_ref(),
+        "agent-resolved",
+    )
+    .unwrap();
+    let locator = &lease.stores().transcripts;
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("three")),
+            session_turn_options(ResumeMode::Never, "thread-identity-compact"),
+        )
+        .await
+        .unwrap();
+    let sealed = locator.read_session_transcript(&session_ref).unwrap();
+    let sealed_bytes = fingerprint(sealed.as_ref());
+    assert_eq!(locator.head_generation(&session_ref).generation, 1);
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("four")),
+            session_turn_options(ResumeMode::Never, "thread-identity-compact"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fingerprint(sealed.as_ref()),
+        sealed_bytes,
+        "re-admission must not reset or rewrite the sealed generation"
+    );
+    assert_eq!(locator.head_generation(&session_ref).generation, 1);
+    let active = locator
+        .read_session_transcript(&session_ref.next_generation())
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        active
+            .messages
+            .iter()
+            .map(|row| row.content.as_str())
+            .collect::<Vec<_>>(),
+        ["three", "third", "four", "fourth"]
+    );
+}
+
+#[tokio::test]
+async fn same_agent_backend_change_is_rejected_until_a_fresh_session_admits_it() {
+    use tinyagents_session::port::SessionStoreProvider;
+
+    let backend: Arc<dyn tinystoragedrivers_api::StorageBackend> =
+        Arc::new(tinystoragedrivers_testkit::MemoryBackend::new());
+    let alice_root = crate::test_store::driver_session_stores_over(
+        backend.clone(),
+        tinyagents_storage_kit::Scope::new("tenant:alice").unwrap(),
+    );
+    let bob_root = crate::test_store::driver_session_stores_over(
+        backend,
+        tinyagents_storage_kit::Scope::new("tenant:bob").unwrap(),
+    );
+    let alice: Arc<dyn SessionStoreProvider> = alice_root;
+    let bob: Arc<dyn SessionStoreProvider> = bob_root;
+    let provider = Arc::new(Mutex::new(alice));
+    let resolver = Arc::new(SwitchableActorResolver {
+        provider: provider.clone(),
+    });
+    let first_driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("first"),
+        Message::assistant("alice"),
+    ]))]));
+    let options = || TurnOptions {
+        resume: ResumeMode::Session,
+        thread_id: Some("tenant-thread".into()),
+        ..TurnOptions::default()
+    };
+    let mut established = SessionBuilder::new(first_driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("tenant-thread", meta(), resolver.clone())
+        .build()
+        .unwrap();
+    established
+        .turn(SessionTurnRequest::new(Message::user("first")), options())
+        .await
+        .unwrap();
+    *provider.lock().unwrap() = bob;
+    assert!(matches!(
+        established
+            .turn(SessionTurnRequest::new(Message::user("second")), options())
+            .await,
+        Err(RuntimeError::InvalidSessionState(_)),
+    ));
+    assert_eq!(first_driver.requests.lock().unwrap().len(), 1);
+
+    let fresh_driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("fresh"),
+        Message::assistant("bob"),
+    ]))]));
+    let mut fresh = SessionBuilder::new(fresh_driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("tenant-thread", meta(), resolver)
+        .build()
+        .unwrap();
+    fresh
+        .turn(SessionTurnRequest::new(Message::user("fresh")), options())
+        .await
+        .unwrap();
+    assert_eq!(fresh_driver.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn direct_resume_reads_admitted_transcript_and_rejects_later_actor_change() {
+    use tinyagents_session::port::SessionStoreProvider;
+
+    let backend: Arc<dyn tinystoragedrivers_api::StorageBackend> =
+        Arc::new(tinystoragedrivers_testkit::MemoryBackend::new());
+    let alice_root = crate::test_store::driver_session_stores_over(
+        backend.clone(),
+        tinyagents_storage_kit::Scope::new("tenant:alice").unwrap(),
+    );
+    let bob_root = crate::test_store::driver_session_stores_over(
+        backend,
+        tinyagents_storage_kit::Scope::new("tenant:bob").unwrap(),
+    );
+    let alice: Arc<dyn SessionStoreProvider> = alice_root;
+    let bob: Arc<dyn SessionStoreProvider> = bob_root;
+    let provider = Arc::new(Mutex::new(alice));
+    let resolver = Arc::new(SwitchableActorResolver {
+        provider: provider.clone(),
+    });
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("persisted"),
+        Message::assistant("admitted transcript"),
+    ]))]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("direct-resume-actor", meta(), resolver)
+        .build()
+        .unwrap();
+    let options = TurnOptions {
+        resume: ResumeMode::Session,
+        thread_id: Some("direct-resume-actor".into()),
+        ..TurnOptions::default()
+    };
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("persisted")),
+            TurnOptions {
+                resume: ResumeMode::Never,
+                thread_id: Some("direct-resume-actor".into()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        session.resume(&options).await.unwrap().loaded,
+        "direct resume should read the transcript from the admitted actor lease"
+    );
+    *provider.lock().unwrap() = bob;
+    assert!(
+        matches!(
+            session.resume(&options).await,
+            Err(RuntimeError::InvalidSessionState(_))
+        ),
+        "direct resume must reject a later actor/backend binding before it reads another history"
+    );
+    assert_eq!(driver.requests.lock().unwrap().len(), 1);
 }

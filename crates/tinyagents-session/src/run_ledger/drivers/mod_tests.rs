@@ -1,8 +1,9 @@
 use super::*;
 use crate::run_ledger::LedgerError;
+use crate::testkit::MemoryStorage;
 use chrono::Duration;
 use serde_json::json;
-use tinystoragedrivers_core::{ErrorKind, MemoryStorage, StorageBackend};
+use tinyagents_storage_kit::ErrorKind;
 
 /// Explicit handles share a backend while retaining separate tenant namespaces.
 pub(super) fn ledgers() -> (DriverRunLedger, DriverRunLedger) {
@@ -298,21 +299,16 @@ async fn scoped_workflow_paging_follows_native_cursors() {
     assert_eq!(tail.runs, all.runs[275..]);
 }
 
-/// A native SQLite reopen persists documents without using the classic ledger schema.
+/// Reconstructed drivers over the same backend retain committed documents.
 #[tokio::test]
-async fn scoped_workflow_documents_survive_sqlite_reopen() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("ports.db");
+async fn scoped_workflow_documents_survive_driver_reconstruction() {
     let scope = Scope::new("profile-a").unwrap();
-    let first = {
-        let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
-        let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
-        ledger
-            .upsert_workflow_run(workflow("workflow"))
-            .await
-            .unwrap()
-    };
-    let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let backend = MemoryStorage::new();
+    let first_ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
+    let first = first_ledger
+        .upsert_workflow_run(workflow("workflow"))
+        .await
+        .unwrap();
     let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
     assert_eq!(
         ledger.get_workflow_run("workflow").await.unwrap(),
@@ -324,12 +320,6 @@ async fn scoped_workflow_documents_survive_sqlite_reopen() {
             .unwrap(),
     );
     assert!(other.get_workflow_run("workflow").await.unwrap().is_none());
-    let sql = tinystoragedrivers_sqlite::rusqlite::Connection::open_with_flags(
-        path,
-        tinystoragedrivers_sqlite::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap();
-    assert_eq!(sql.query_row("SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN ('agent_runs', 'sessions', 'workflow_runs')", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
 }
 
 /// Unknown schema bodies are reported as typed corruption and never replaced with default rows.
@@ -344,7 +334,7 @@ async fn scoped_workflow_rejects_malformed_document_body() {
             WORKFLOWS,
             &storage::key(&["workflow"]).unwrap(),
             json!({"unexpected": "shape"}),
-            tinystoragedrivers_core::Precondition::Absent,
+            tinystoragedrivers_types::Precondition::Absent,
         )
         .await
         .unwrap();
@@ -653,7 +643,7 @@ async fn scoped_tool_effects_preserve_restarts_settle_and_unresolved_filter() {
 /// Team and history operations that need atomic batches write only through them: a refused
 /// batch (here: an unavailable dependency check) leaves every scoped record untouched.
 #[tokio::test]
-async fn scoped_ledger_collections_start_empty_and_entry_trees_need_no_writes() {
+async fn scoped_ledger_collections_start_empty_without_side_effects() {
     let (ledger, _) = ledgers();
     let before = ledger
         .upsert_workflow_run(workflow("workflow"))
@@ -680,8 +670,6 @@ async fn scoped_ledger_collections_start_empty_and_entry_trees_need_no_writes() 
             .unwrap()
             .is_none()
     );
-    ledger.entry_import_legacy("session", &[]).await.unwrap();
-    ledger.entry_rebuild_index("session").await.unwrap();
     assert_eq!(ledger.apply_retention(now()).await.unwrap().total(), 0);
     assert_eq!(
         ledger.get_workflow_run("workflow").await.unwrap(),
@@ -706,56 +694,6 @@ async fn scoped_ledger_collections_start_empty_and_entry_trees_need_no_writes() 
         );
     }
 }
-
-/// A supplied native fence remains active through the adapter and refusal retains its native error kind.
-#[tokio::test]
-async fn scoped_workflow_writes_preserve_native_owner_fence_refusal() {
-    use tinystoragedrivers_core::{CollectionSpec, Fence, Precondition};
-    let backend = MemoryStorage::new();
-    let owner_scope = Scope::new("owners").unwrap();
-    let owner = backend.for_scope(&owner_scope).unwrap();
-    owner
-        .documents()
-        .ensure_collection(&CollectionSpec::new("leases"))
-        .await
-        .unwrap();
-    owner
-        .documents()
-        .put(
-            "leases",
-            "profile",
-            json!({"epoch":1}),
-            Precondition::Absent,
-        )
-        .await
-        .unwrap();
-    let scope = Scope::new("profile-a").unwrap();
-    let fence = Fence::epoch(owner_scope, "leases", "profile", "epoch", 1);
-    let ledger = DriverRunLedger::new(backend.for_scope_fenced(&scope, &fence).unwrap());
-    let first = ledger
-        .upsert_workflow_run(workflow("workflow"))
-        .await
-        .unwrap();
-    owner
-        .documents()
-        .put("leases", "profile", json!({"epoch":2}), Precondition::None)
-        .await
-        .unwrap();
-    assert!(
-        matches!(ledger.upsert_workflow_run(workflow("workflow")).await.unwrap_err(),
-        LedgerError::Driver(ref error) if error.kind() == ErrorKind::Fenced)
-    );
-    assert!(
-        matches!(ledger.try_claim_workflow_run("workflow", "worker", Duration::hours(1)).await.unwrap_err(),
-        LedgerError::Driver(ref error) if error.kind() == ErrorKind::Fenced)
-    );
-    let inspect = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
-    assert_eq!(
-        inspect.get_workflow_run("workflow").await.unwrap(),
-        Some(first)
-    );
-}
-
 /// Single-record member lifecycle and task release preserve identity filters and run/evidence history.
 #[tokio::test]
 async fn scoped_member_lifecycle_and_task_release_preserve_history() {
@@ -859,6 +797,109 @@ async fn scoped_member_lifecycle_and_task_release_preserve_history() {
     assert_eq!(released.owner_member_id.as_deref(), Some("owner"));
     assert_eq!(released.depends_on, ["dependency"]);
     assert_eq!(released.source_run_id.as_deref(), Some("source"));
+}
+
+/// Fenced cleanup from an older worker cannot idle or release successor state.
+#[tokio::test]
+async fn stale_team_execution_cleanup_preserves_successor_claim_and_run() {
+    let (ledger, _) = ledgers();
+    ledger
+        .upsert_agent_team_member(AgentTeamMemberUpsert {
+            id: "member".into(),
+            team_id: "team".into(),
+            name: "name".into(),
+            agent_id: None,
+            member_status: AgentTeamMemberStatus::Pending,
+            current_task_id: None,
+            worker_thread_id: None,
+            run_id: None,
+            created_at: None,
+        })
+        .await
+        .unwrap();
+    for (task, thread, run) in [
+        ("task", "thread-old", "run-old"),
+        ("task", "thread-new", "run-new"),
+    ] {
+        ledger
+            .mark_agent_team_member_running("team", "member", task, thread, run)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        ledger
+            .mark_agent_team_member_idle_if_current(
+                "team",
+                "member",
+                "task",
+                "thread-old",
+                "run-old"
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let member = ledger
+        .get_agent_team_member("member")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(member.member_status, AgentTeamMemberStatus::Active);
+    assert_eq!(member.worker_thread_id.as_deref(), Some("thread-new"));
+    assert_eq!(member.run_id.as_deref(), Some("run-new"));
+
+    ledger
+        .upsert_agent_team_task(AgentTeamTaskUpsert {
+            id: "task".into(),
+            team_id: "team".into(),
+            title: "title".into(),
+            objective: None,
+            status: AgentTeamTaskStatus::InProgress,
+            owner_member_id: None,
+            depends_on: vec![],
+            gate_status: None,
+            gate_reason: None,
+            evidence: vec![],
+            source_run_id: None,
+            order_index: 0,
+            created_at: None,
+        })
+        .await
+        .unwrap();
+    ledger
+        .merge(TASKS, "task", |previous: Option<AgentTeamTask>| {
+            let mut row = previous.unwrap();
+            row.claimed_by_member_id = Some("member".into());
+            row.claim_token = Some("successor-token".into());
+            row
+        })
+        .await
+        .unwrap();
+    assert!(
+        !ledger
+            .release_agent_team_task_if_claimed("team", "task", "member", "stale-token")
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        ledger
+            .complete_agent_team_task_if_claimed(
+                "team",
+                "task",
+                "member",
+                "stale-token",
+                &["stale evidence".into()],
+                false,
+            )
+            .await
+            .unwrap(),
+        CompletionOutcome::NotClaimed
+    ));
+    let task = ledger.get_agent_team_task("task").await.unwrap().unwrap();
+    assert_eq!(task.status, AgentTeamTaskStatus::InProgress);
+    assert_eq!(task.claim_token.as_deref(), Some("successor-token"));
+    assert!(task.evidence.is_empty());
 }
 
 /// Nonfinite JSON numeric fields cannot turn a readable rollup into a persisted null.

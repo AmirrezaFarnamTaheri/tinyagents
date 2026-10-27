@@ -11,12 +11,140 @@
 //!
 //! [`TurnStop`] carries that fact from where it is decided to the progress
 //! events, the trace collector and the parent tool result. It is
-//! content-free by construction: the failure class and operation are read
-//! from the breaker's fixed note template and reduced to identifier
-//! characters, never the quoted tool output or target.
+//! content-free by construction: a typed breaker cause carries only stable
+//! class and operation identifiers, never the quoted tool output or target.
+
+use crate::close::{CloseToolResult, interpolate_once};
+use serde::de::Error as _;
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+/// Host-provided prose and line templates for deterministic stop summaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StopCopy {
+    pub opening_template: &'static str,
+    pub what_happened_heading: &'static str,
+    pub success_template: &'static str,
+    pub failure_template: &'static str,
+    pub hidden_calls_template: &'static str,
+    pub proceed_prompt: &'static str,
+}
+
+/// English renderer copy for stopped-turn summaries.
+pub const ENGLISH_STOP_COPY: StopCopy = StopCopy {
+    opening_template: "I stopped this turn early because {reason}.\n",
+    what_happened_heading: "\n**What happened**\n",
+    success_template: "- `{name}` succeeded{count}",
+    failure_template: "- `{name}` failed{count}{error}",
+    hidden_calls_template: "- …and {count} more tool call(s)",
+    proceed_prompt: "\nTell me how you'd like to proceed, or ask me to try again.",
+};
+
+/// Summary row grouped by operation and scrubbed result text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StopSummaryGroup {
+    pub name: String,
+    pub success: bool,
+    pub error: Option<String>,
+    pub count: usize,
+}
+
+/// Group repeated results after the host has scrubbed failure text.
+pub fn group_stop_results<F>(
+    results: &[CloseToolResult],
+    mut scrubbed_error_line: F,
+) -> Vec<StopSummaryGroup>
+where
+    F: FnMut(&str) -> String,
+{
+    let mut groups: Vec<StopSummaryGroup> = Vec::new();
+    for result in results {
+        let error = if result.success {
+            None
+        } else {
+            Some(scrubbed_error_line(&result.content)).filter(|line| !line.is_empty())
+        };
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|g| g.name == result.name && g.success == result.success && g.error == error)
+        {
+            group.count += 1;
+        } else {
+            groups.push(StopSummaryGroup {
+                name: result.name.clone(),
+                success: result.success,
+                error,
+                count: 1,
+            });
+        }
+    }
+    groups
+}
+
+/// Render a bounded stop summary with caller-selected product copy.
+pub fn render_stop_summary_with_copy(
+    reason: &str,
+    groups: &[StopSummaryGroup],
+    copy: &StopCopy,
+) -> String {
+    use std::fmt::Write as _;
+    let mut out = interpolate_once(copy.opening_template, &[("{reason}", reason)]);
+    if !groups.is_empty() {
+        out.push_str(copy.what_happened_heading);
+        let shown_from = groups.len().saturating_sub(8);
+        for group in groups.iter().skip(shown_from) {
+            let name = truncate_stop_name(&group.name, 60);
+            let count = if group.count == 1 {
+                String::new()
+            } else {
+                format!(" {} times", group.count)
+            };
+            let line = if group.success {
+                interpolate_once(
+                    copy.success_template,
+                    &[("{name}", &name), ("{count}", &count)],
+                )
+            } else {
+                let error = group
+                    .error
+                    .as_ref()
+                    .map(|e| format!(": {e}"))
+                    .unwrap_or_default();
+                interpolate_once(
+                    copy.failure_template,
+                    &[("{name}", &name), ("{count}", &count), ("{error}", &error)],
+                )
+            };
+            let _ = writeln!(out, "{line}");
+        }
+        let hidden: usize = groups
+            .iter()
+            .take(shown_from)
+            .map(|group| group.count)
+            .sum();
+        if hidden > 0 {
+            let hidden = hidden.to_string();
+            let _ = writeln!(
+                out,
+                "{}",
+                interpolate_once(copy.hidden_calls_template, &[("{count}", &hidden)])
+            );
+        }
+    }
+    out.push_str(copy.proceed_prompt);
+    out
+}
+
+fn truncate_stop_name(text: &str, max_chars: usize) -> String {
+    match text.char_indices().nth(max_chars) {
+        Some((idx, _)) => format!("{}...", text[..idx].trim_end()),
+        None => text.to_owned(),
+    }
+}
 
 /// Which mechanism stopped the turn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TurnStopKind {
     /// The repeated-failure / classified-failure breaker halted the run.
     Breaker,
@@ -24,6 +152,60 @@ pub enum TurnStopKind {
     WindDown,
     /// The run reached its model-call cap with work still pending.
     IterationCap,
+}
+
+/// Stable typed class for the failure that caused a breaker stop.
+///
+/// The value comes from the failure classifier at the point the stop is
+/// decided. It deliberately does not derive from the human-readable stop
+/// note, whose wording may change independently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnFailureClass(String);
+
+impl TurnFailureClass {
+    /// Construct a class from the classifier's stable identifier.
+    pub fn new(class: impl Into<String>) -> Self {
+        Self(identifier(&class.into()).unwrap_or_else(|| "unknown".to_owned()))
+    }
+
+    /// Stable identifier suitable for logs and host summaries.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Stable user-copy key for this classifier identifier.
+    ///
+    /// The mapping is intentionally exact and does not inspect any stop
+    /// summary or translated copy. Unknown classes use the generic key.
+    pub fn copy_key(&self) -> TurnStopCopyKey {
+        match self.as_str() {
+            "transient" => TurnStopCopyKey::Transient,
+            "uncertain_side_effect" => TurnStopCopyKey::UncertainSideEffect,
+            "authentication" => TurnStopCopyKey::Authentication,
+            "permission" => TurnStopCopyKey::Permission,
+            "policy" | "blocked_by_policy" => TurnStopCopyKey::Policy,
+            "missing_program" | "unsupported" | "missing_app" => TurnStopCopyKey::MissingProgram,
+            "not_found" | "missing_window" => TurnStopCopyKey::NotFound,
+            "invalid_calls" | "validation" | "invalid_arguments" => TurnStopCopyKey::InvalidCalls,
+            "unavailable" | "service_refused" => TurnStopCopyKey::Unavailable,
+            "site_refused" => TurnStopCopyKey::SiteRefused,
+            "repeated_failure" => TurnStopCopyKey::RepeatedFailure,
+            "varied_failures" => TurnStopCopyKey::VariedFailures,
+            "repeating_step" => TurnStopCopyKey::RepeatingStep,
+            "out_of_credits" => TurnStopCopyKey::OutOfCredits,
+            "provider_config" => TurnStopCopyKey::ProviderConfig,
+            "missing_connection" => TurnStopCopyKey::MissingConnection,
+            _ => TurnStopCopyKey::Generic,
+        }
+    }
+}
+
+impl std::ops::Deref for TurnFailureClass {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
 }
 
 impl TurnStopKind {
@@ -37,6 +219,233 @@ impl TurnStopKind {
     }
 }
 
+/// Stable host localization key for a terminal turn-stop reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TurnStopCopyKey {
+    Transient,
+    UncertainSideEffect,
+    Authentication,
+    Permission,
+    Policy,
+    MissingProgram,
+    NotFound,
+    InvalidCalls,
+    Unavailable,
+    SiteRefused,
+    RepeatedFailure,
+    VariedFailures,
+    RepeatingStep,
+    OutOfCredits,
+    ProviderConfig,
+    MissingConnection,
+    Generic,
+}
+
+impl TurnStopCopyKey {
+    /// Stable localization key used by host translation tables.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Transient => "turn_stop.transient",
+            Self::UncertainSideEffect => "turn_stop.uncertain_side_effect",
+            Self::Authentication => "turn_stop.authentication",
+            Self::Permission => "turn_stop.permission",
+            Self::Policy => "turn_stop.policy",
+            Self::MissingProgram => "turn_stop.missing_program",
+            Self::NotFound => "turn_stop.not_found",
+            Self::InvalidCalls => "turn_stop.invalid_calls",
+            Self::Unavailable => "turn_stop.unavailable",
+            Self::SiteRefused => "turn_stop.site_refused",
+            Self::RepeatedFailure => "turn_stop.repeated_failure",
+            Self::VariedFailures => "turn_stop.varied_failures",
+            Self::RepeatingStep => "turn_stop.repeating_step",
+            Self::OutOfCredits => "turn_stop.out_of_credits",
+            Self::ProviderConfig => "turn_stop.provider_config",
+            Self::MissingConnection => "turn_stop.missing_connection",
+            Self::Generic => "turn_stop.generic",
+        }
+    }
+}
+
+/// Typed copy request shared by turn stops and stop-hook halt builders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CopyRequest<'a> {
+    TurnStop {
+        key: TurnStopCopyKey,
+        operation: Option<&'a str>,
+    },
+    RetryExhausted {
+        tool: &'a str,
+        count: u32,
+        last_error: &'a str,
+    },
+    NoProgress {
+        tool: &'a str,
+        consecutive: u32,
+        last_error: &'a str,
+    },
+    Budget {
+        tool: &'a str,
+        last_error: &'a str,
+    },
+    ProviderConfig {
+        tool: &'a str,
+        last_error: &'a str,
+    },
+}
+
+/// Optional host localization for generated stop copy.
+///
+/// Returning `None` for a request uses the harness's neutral English default,
+/// so hosts can override only the keys they localize.
+pub trait CopyProvider: Send + Sync {
+    /// Return host-provided copy for a typed stop request, if available.
+    fn copy_override(&self, _request: &CopyRequest<'_>) -> Option<String> {
+        None
+    }
+}
+
+/// Uses only the neutral English defaults for stop copy.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NeutralCopyProvider;
+
+impl CopyProvider for NeutralCopyProvider {}
+
+/// Bound detail embedded in a halt summary to 600 Unicode scalar values.
+pub fn truncate_for_halt(text: &str) -> String {
+    truncate_with_suffix(text, 600, "\n… [truncated]")
+}
+
+pub(crate) fn truncate_with_suffix(text: &str, max_chars: usize, suffix: &str) -> String {
+    if text.chars().count() <= max_chars {
+        text.to_owned()
+    } else {
+        format!(
+            "{}{suffix}",
+            text.chars().take(max_chars).collect::<String>()
+        )
+    }
+}
+
+/// Render a request using the host override when present, otherwise neutral
+/// library-owned English copy.
+pub fn render_copy(provider: &dyn CopyProvider, request: &CopyRequest<'_>) -> String {
+    let bounded_error = match request {
+        CopyRequest::RetryExhausted { last_error, .. }
+        | CopyRequest::NoProgress { last_error, .. }
+        | CopyRequest::Budget { last_error, .. }
+        | CopyRequest::ProviderConfig { last_error, .. } => Some(truncate_for_halt(last_error)),
+        CopyRequest::TurnStop { .. } => None,
+    };
+    let bounded_request = match (request, bounded_error.as_deref()) {
+        (CopyRequest::RetryExhausted { tool, count, .. }, Some(last_error)) => {
+            CopyRequest::RetryExhausted {
+                tool,
+                count: *count,
+                last_error,
+            }
+        }
+        (
+            CopyRequest::NoProgress {
+                tool, consecutive, ..
+            },
+            Some(last_error),
+        ) => CopyRequest::NoProgress {
+            tool,
+            consecutive: *consecutive,
+            last_error,
+        },
+        (CopyRequest::Budget { tool, .. }, Some(last_error)) => {
+            CopyRequest::Budget { tool, last_error }
+        }
+        (CopyRequest::ProviderConfig { tool, .. }, Some(last_error)) => {
+            CopyRequest::ProviderConfig { tool, last_error }
+        }
+        (CopyRequest::TurnStop { key, operation }, _) => CopyRequest::TurnStop {
+            key: *key,
+            operation: *operation,
+        },
+        _ => unreachable!("detail request has bounded detail"),
+    };
+    if let Some(copy) = provider.copy_override(&bounded_request) {
+        return copy;
+    }
+
+    match &bounded_request {
+        CopyRequest::TurnStop { key, .. } => {
+            let reason = match key {
+                TurnStopCopyKey::Transient => {
+                    "a service I needed kept timing out or was temporarily unavailable"
+                }
+                TurnStopCopyKey::UncertainSideEffect => {
+                    "an action timed out and I could not confirm whether it went through, so I did not repeat it"
+                }
+                TurnStopCopyKey::Authentication => "a service rejected my credentials",
+                TurnStopCopyKey::Permission => "I don't have permission for a step this needs",
+                TurnStopCopyKey::Policy => "a step this needs is blocked by your security settings",
+                TurnStopCopyKey::MissingProgram => {
+                    "a program or feature this needs is not available on this device"
+                }
+                TurnStopCopyKey::NotFound => "something this needs could not be found",
+                TurnStopCopyKey::InvalidCalls => "a tool kept rejecting my requests as invalid",
+                TurnStopCopyKey::Unavailable => "a tool this needs is not available right now",
+                TurnStopCopyKey::SiteRefused => "a website kept refusing my requests",
+                TurnStopCopyKey::RepeatedFailure => "the same step kept failing",
+                TurnStopCopyKey::VariedFailures => "several different tool calls in a row failed",
+                TurnStopCopyKey::RepeatingStep => {
+                    "I kept repeating the same step without getting anything new"
+                }
+                TurnStopCopyKey::OutOfCredits => {
+                    "the account is out of inference credits; add credits, then ask me to try again"
+                }
+                TurnStopCopyKey::ProviderConfig => {
+                    "the configured model or provider rejected the request; check the model and API key"
+                }
+                TurnStopCopyKey::MissingConnection => {
+                    "a service this needs isn't connected; connect it, then ask me to try again"
+                }
+                TurnStopCopyKey::Generic => "my tool calls were not getting anywhere",
+            };
+            reason.to_owned()
+        }
+        CopyRequest::RetryExhausted {
+            tool,
+            count,
+            last_error,
+        } => format!(
+            "Stopping: the `{tool}` call was retried {count} times with identical arguments and kept \
+             failing — repeating it will not help. Last error:\n{}\n\nThis looked recoverable at \
+             first, but the same call exhausted the extended transient-failure headroom. Report this \
+             back instead of retrying.",
+            last_error,
+        ),
+        CopyRequest::NoProgress {
+            tool,
+            consecutive,
+            last_error,
+        } => format!(
+            "Stopping: {consecutive} recoverable-looking tool failures happened in a row with no \
+             successful progress. Last error (from `{tool}`):\n{}\n\nThe turn is still bounded by the \
+             iteration/cost limits, but this many consecutive transient failures means the goal is \
+             not currently reachable. Report this back instead of retrying.",
+            last_error,
+        ),
+        CopyRequest::Budget { tool, last_error } => format!(
+            "Stopping: the `{tool}` step failed because the account is out of inference budget/credits \
+             — every retry hits the same wall. Add credits to your account (or, when using a custom/BYO \
+             provider, top up that provider's own account) and try again. Details:\n{}",
+            last_error,
+        ),
+        CopyRequest::ProviderConfig { tool, last_error } => format!(
+            "Stopping: the `{tool}` step failed because the configured model/provider rejected the request \
+             (e.g. an unknown model, a non-chat/embedding model, a missing credential, or a region block) \
+             — retrying will not help. Fix the model or API key, then try again. Details:\n{}",
+            last_error,
+        ),
+    }
+}
+
 /// A content-free description of how a turn was stopped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnStop {
@@ -44,18 +453,69 @@ pub struct TurnStop {
     /// Breaker only: the failure class (`uncertain_side_effect`,
     /// `permission`, …), or the stop-reason kind for notes without one
     /// (`repeated_failure`, `transient`, …).
-    pub failure_class: Option<String>,
+    pub failure_class: Option<TurnFailureClass>,
     /// Breaker only: the blocked operation (a tool name), when the note names
     /// one.
     pub operation: Option<String>,
 }
 
+impl Serialize for TurnStop {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let failure_class = self.failure_class.as_ref().map(TurnFailureClass::as_str);
+        let operation = self.operation.as_deref().and_then(identifier_ref);
+        let mut state = serializer.serialize_struct("TurnStop", 3)?;
+        state.serialize_field("kind", &self.kind)?;
+        state.serialize_field("failure_class", &failure_class)?;
+        state.serialize_field("operation", &operation)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for TurnStop {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SerializedTurnStop {
+            kind: TurnStopKind,
+            #[serde(default)]
+            failure_class: Option<String>,
+            #[serde(default)]
+            operation: Option<String>,
+        }
+
+        let serialized = SerializedTurnStop::deserialize(deserializer)?;
+        let failure_class = serialized
+            .failure_class
+            .map(|class| {
+                identifier(&class)
+                    .map(TurnFailureClass)
+                    .ok_or_else(|| D::Error::custom("invalid turn-stop failure class"))
+            })
+            .transpose()?;
+        let operation = serialized
+            .operation
+            .map(|operation| {
+                identifier(&operation)
+                    .ok_or_else(|| D::Error::custom("invalid turn-stop operation"))
+            })
+            .transpose()?;
+        Ok(Self {
+            kind: serialized.kind,
+            failure_class,
+            operation,
+        })
+    }
+}
+
 /// The `Incomplete` reason the sub-agent runner reports for an iteration-cap
 /// stop. Shared so the parent can tell a cap from a breaker note.
 pub const SUBAGENT_ITERATION_CAP_REASON: &str = "reached its tool-call limit before finishing";
-
-/// Longest identifier kept from a stop note.
-const MAX_IDENT_CHARS: usize = 64;
 
 impl TurnStop {
     /// A wind-down stop.
@@ -76,29 +536,59 @@ impl TurnStop {
         }
     }
 
-    /// A breaker stop, with the class and operation read from its `note`.
+    /// Render user-facing copy from this stop's typed class.
     ///
-    /// The classified template is `Stopping after N attempt(s): failure class
-    /// `X` still blocks operation `Y` on `Z`.`; only `X` and `Y` are kept
-    /// (the scope `Z` can be a URL or path). Other notes get the stop-reason
-    /// kind as their class and no operation.
+    /// Wind-down and iteration-cap stops have no failure class and use the
+    /// generic key. This display copy is deliberately separate from the
+    /// content-free [`Self::status_message`] and serialized representation.
+    pub fn user_copy(&self, provider: &dyn CopyProvider) -> String {
+        render_copy(
+            provider,
+            &CopyRequest::TurnStop {
+                key: self
+                    .failure_class
+                    .as_ref()
+                    .map_or(TurnStopCopyKey::Generic, TurnFailureClass::copy_key),
+                operation: self.operation.as_deref().and_then(identifier_ref),
+            },
+        )
+    }
+
+    /// A legacy breaker stop using the caller's explicit fallback class.
     ///
-    /// `fallback_class` maps a note with no class to the host's stop-reason
-    /// key (it may carry a `turn_stop.` prefix, which is stripped).
+    /// The note is retained only for the caller; it is not parsed. New code
+    /// should pass the actual classified cause to [`Self::breaker_with_cause`].
     pub fn breaker(note: &str, fallback_class: impl FnOnce(&str) -> &'static str) -> Self {
-        let lead = note.split("Last error").next().unwrap_or(note);
-        let failure_class = backticked_after(lead, "failure class `")
-            .and_then(ident)
-            .or_else(|| {
-                let key = fallback_class(note);
-                ident(key.strip_prefix("turn_stop.").unwrap_or(key))
-            });
-        let operation = backticked_after(lead, "still blocks operation `").and_then(ident);
+        let key = fallback_class(note);
+        let class = key.strip_prefix("turn_stop.").unwrap_or(key);
+        Self::breaker_with_cause(note, TurnFailureClass::new(class), None)
+    }
+
+    /// A breaker stop carrying the classifier's typed cause. `note` is kept
+    /// solely for the legacy human-readable summary; its text is never parsed.
+    pub fn breaker_with_cause(
+        _note: &str,
+        failure_class: TurnFailureClass,
+        operation: Option<String>,
+    ) -> Self {
         Self {
             kind: TurnStopKind::Breaker,
-            failure_class,
-            operation,
+            failure_class: Some(failure_class),
+            operation: operation.as_deref().and_then(identifier),
         }
+    }
+
+    /// Build a stop directly from the typed classified-failure result.
+    pub fn from_classified_cause(cause: crate::no_progress::ClassifiedStopCause) -> Self {
+        Self::breaker_with_cause(
+            &cause.summary,
+            Self::failure_class(cause.class),
+            Some(cause.operation),
+        )
+    }
+
+    fn failure_class(class: String) -> TurnFailureClass {
+        TurnFailureClass::new(class)
     }
 
     /// How a top-level run ended, from the outcome's flags. The breaker is the
@@ -117,6 +607,20 @@ impl TurnStop {
             return Some(Self::wind_down());
         }
         hit_cap.then(Self::iteration_cap)
+    }
+
+    /// Classify a turn using its typed breaker cause when one is available.
+    pub fn classify_with_cause(
+        breaker_halt: Option<&str>,
+        failure_cause: Option<crate::no_progress::ClassifiedStopCause>,
+        wind_down: bool,
+        hit_cap: bool,
+        fallback_class: impl FnOnce(&str) -> &'static str,
+    ) -> Option<Self> {
+        if let Some(cause) = failure_cause {
+            return Some(Self::from_classified_cause(cause));
+        }
+        Self::classify(breaker_halt, wind_down, hit_cap, fallback_class)
     }
 
     /// The stop behind a sub-agent's `Incomplete { reason }`: the runner's
@@ -138,33 +642,40 @@ impl TurnStop {
         let mut out = format!("stopped: {}", self.kind.as_str());
         if let Some(class) = &self.failure_class {
             out.push(' ');
-            out.push_str(class);
+            out.push_str(class.as_str());
         }
-        if let Some(operation) = &self.operation {
+        if let Some(operation) = self.operation.as_deref().and_then(identifier_ref) {
             out.push_str(" on ");
             out.push_str(operation);
         }
         out
     }
+
+    /// Returns a copy whose public string field has been reduced to a safe
+    /// machine identifier. Callers may construct `TurnStop` directly because
+    /// its fields are public, so projection boundaries must normalize it.
+    pub(crate) fn sanitized(&self) -> Self {
+        Self {
+            kind: self.kind,
+            failure_class: self.failure_class.clone(),
+            operation: self.operation.as_deref().and_then(identifier),
+        }
+    }
 }
 
-/// The text between `marker` and the next backtick.
-fn backticked_after<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
-    text.split_once(marker)
-        .and_then(|(_, rest)| rest.split_once('`'))
-        .map(|(value, _)| value)
+/// Keep only bounded machine identifiers in content-free stop summaries.
+fn identifier(value: &str) -> Option<String> {
+    identifier_ref(value).map(str::to_owned)
 }
 
-/// `value` when it is a bounded identifier (`[A-Za-z0-9_.:-]`), else `None`,
-/// so nothing but a class or tool name can reach a trace attribute.
-fn ident(value: &str) -> Option<String> {
+fn identifier_ref(value: &str) -> Option<&str> {
     let value = value.trim();
-    let ok = !value.is_empty()
-        && value.chars().count() <= MAX_IDENT_CHARS
+    let valid = !value.is_empty()
+        && value.chars().count() <= 64
         && value
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'));
-    ok.then(|| value.to_string())
+    valid.then_some(value)
 }
 
 #[cfg(test)]

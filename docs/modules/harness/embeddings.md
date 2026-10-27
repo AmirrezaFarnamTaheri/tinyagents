@@ -59,7 +59,6 @@ enters a model request.
 
 ## Non-Responsibilities
 
-- It does not decide graph routing.
 - It does not automatically inject retrieved documents into every prompt.
 - It does not replace durable application stores.
 - It does not require a vector store for every embedding call.

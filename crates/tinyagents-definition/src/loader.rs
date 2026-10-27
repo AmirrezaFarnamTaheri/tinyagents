@@ -16,6 +16,22 @@ pub enum DefinitionValidation {
     NonemptyInlinePrompt,
 }
 
+/// Parse a TOML definition without filesystem access or semantic validation.
+///
+/// This is intended for host-owned embedded definitions: the host chooses
+/// their provenance and remains responsible for any runtime-specific fields
+/// or validation. Custom files should use [`load_file`] or
+/// [`load_file_with_validation`].
+pub fn parse_str<X: DeserializeOwned + Default>(
+    content: &str,
+    source: DefinitionSource,
+) -> Result<AgentDefinition<X>> {
+    let mut definition: AgentDefinition<X> =
+        toml::from_str(content).context("parsing agent definition TOML")?;
+    definition.source = source;
+    Ok(definition)
+}
+
 /// Read and stamp a custom TOML definition with strict prompt and vocabulary checks.
 pub fn load_file<X: DeserializeOwned + Default>(path: &Path) -> Result<AgentDefinition<X>> {
     load_file_with_validation(path, DefinitionValidation::default())
@@ -28,8 +44,9 @@ pub fn load_file_with_validation<X: DeserializeOwned + Default>(
 ) -> Result<AgentDefinition<X>> {
     let content =
         fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut definition: AgentDefinition<X> = toml::from_str(&content)
-        .with_context(|| format!("parsing {} as AgentDefinition TOML", path.display()))?;
+    let definition: AgentDefinition<X> =
+        parse_str(&content, DefinitionSource::File(path.to_path_buf()))
+            .with_context(|| format!("parsing {} as AgentDefinition TOML", path.display()))?;
     let prompt_is_blank = match &definition.system_prompt {
         PromptSource::Inline(body) | PromptSource::Verbatim(body) => body.trim().is_empty(),
         PromptSource::File { path } => path.trim().is_empty(),
@@ -59,7 +76,6 @@ pub fn load_file_with_validation<X: DeserializeOwned + Default>(
                 .join("; ")
         );
     }
-    definition.source = DefinitionSource::File(path.to_path_buf());
     Ok(definition)
 }
 

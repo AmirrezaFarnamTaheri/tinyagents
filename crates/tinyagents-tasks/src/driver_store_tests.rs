@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::conditional_sqlite::MemoryStorage;
 use crate::store::TaskStore;
 use crate::types::{OrchestrationTaskKind, OrchestrationTaskStatus};
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{DocumentStore, Scope, StorageBackend};
 
 fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
@@ -102,7 +103,7 @@ fn state_and_history_survive_a_reopened_sqlite_file() {
     let path = dir.path().join("tasks.sqlite");
     let id = TaskId::new("task-a");
     {
-        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+        let storage = MemoryStorage::open(&path);
         let store = DriverTaskStore::new(docs_of(&storage, "local")).unwrap();
         store.insert(spec("task-a")).unwrap();
         store.mark_running(&id).unwrap();
@@ -111,7 +112,7 @@ fn state_and_history_survive_a_reopened_sqlite_file() {
             .unwrap();
         assert_eq!(store.history(&id).len(), 3);
     }
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let storage = MemoryStorage::open(&path);
     let reopened = DriverTaskStore::new(docs_of(&storage, "local")).unwrap();
     let record = reopened.get(&id).expect("task survives a restart");
     assert_eq!(record.status, OrchestrationTaskStatus::Completed);
@@ -274,11 +275,11 @@ fn the_opener_returns_a_durable_store_and_degrades_to_memory_when_unusable() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("opener.sqlite");
     {
-        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+        let storage = MemoryStorage::open(&path);
         let durable = crate::open_driver_task_store_or_memory(docs_of(&storage, "local"));
         durable.insert(spec("t1")).unwrap();
     }
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let storage = MemoryStorage::open(&path);
     let reopened = crate::open_driver_task_store_or_memory(docs_of(&storage, "local"));
     assert_eq!(reopened.list(OrchestrationTaskFilter::default()).len(), 1);
 }

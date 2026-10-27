@@ -3,7 +3,7 @@
 //! No host paths/backend lookup, FullText shortcut, or persistent process cache.
 //! Plain append uses a recoverable intent; edits and distributed leases remain unsupported.
 //!
-//! Threads are `conversations.threads` documents (schema v2, see [`super::dto`]).
+//! Threads are `conversations.threads` documents (schema v2, see the private `dto` module).
 //! A change to one thread document is one [`Repo::update`] loop. The loops that
 //! stay hand-written coordinate more than that one document: an append
 //! reconciles an intent, a stream row and the thread together, and a rewrite
@@ -14,12 +14,15 @@ use super::persistence::*;
 use super::schema::{SCHEMA_VERSION, THREADS as COLLECTION, append_spec, stream_name, thread_spec};
 use super::*;
 use async_trait::async_trait;
+use std::future::Future;
 use std::sync::Arc;
-use tinystoragedrivers_core::primitives::Repo;
-use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, ErrorKind, Filter, Key, Precondition, Query, ScopedStorage,
-    StorageError, StreamStore, Versioned, WriteOptions,
+use tinyagents_storage_kit::ScopedStorage;
+use tinyagents_storage_kit::primitives::Repo;
+use tinyagents_storage_kit::{
+    CollectionSpec, ErrorKind, Filter, Key, Precondition, Query, StorageError, Versioned,
+    WriteOptions,
 };
+use tinystoragedrivers_api::{DocumentStore, StreamStore};
 mod append;
 mod pending;
 mod reader;
@@ -113,24 +116,6 @@ impl DriverConversationStore {
         }
     }
 
-    /// A process-lifetime store over the memory driver, for library hosts that
-    /// have no storage backend. Nothing is written to disk and nothing survives
-    /// the process; plain append is fully prepared.
-    ///
-    /// # Panics
-    /// Never in practice: the memory driver accepts every declaration.
-    pub async fn in_memory() -> Self {
-        use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
-        let backend = MemoryStorage::new();
-        let scoped = backend
-            .for_scope(&Scope::new("local").expect("static scope"))
-            .expect("memory scope");
-        Self::prepare_append_schema(scoped.documents().as_ref())
-            .await
-            .expect("memory driver accepts declarations");
-        Self::new(scoped)
-    }
-
     /// The `conversations.threads` declaration.
     ///
     /// There are no required secondary indexes, TTL or full-text fields.
@@ -148,7 +133,7 @@ impl DriverConversationStore {
     /// The native declaration error, preserving its kind and original cause.
     pub async fn prepare_schema(
         documents: &dyn DocumentStore,
-    ) -> tinystoragedrivers_core::Result<()> {
+    ) -> tinystoragedrivers_types::Result<()> {
         for spec in Self::collection_specs() {
             documents.ensure_collection(&spec).await?;
         }
@@ -162,6 +147,88 @@ impl DriverConversationStore {
             }
         }
         Ok(())
+    }
+
+    /// Purge thread documents and notify the caller after each successful removal.
+    ///
+    /// The callback receives the logical thread ID from the stored conversation,
+    /// including for tombstoned threads. It runs synchronously, immediately after
+    /// the document store confirms that row was deleted and before another row is
+    /// processed. A `false` delete result does not invoke the callback.
+    ///
+    /// The callback is infallible by API shape and runs on the caller's executor.
+    /// Keep it limited to recording the obligation; do not perform follow-up work,
+    /// panic, or call back into this store. If durable recording uses synchronous
+    /// I/O, run the purge from an appropriate blocking executor. Completed
+    /// callbacks remain observable if a later query, decode, or delete fails; the
+    /// purge is not crash-atomic, so a process failure between deletion and the
+    /// callback can still leave a deletion obligation unreported. Cancellation
+    /// while a document delete is in flight can likewise leave a deletion that
+    /// the backend completed without a callback.
+    ///
+    /// Purging repeatedly reads from the head until a fresh query returns no
+    /// rows, so rows inserted during deletion or callbacks are included when
+    /// observed before that empty query. This is not a transactional snapshot:
+    /// rows inserted after the final empty query are outside the purge.
+    ///
+    /// The returned counts retain [`ConversationPersistence::purge_threads`]
+    /// semantics: tombstones are removed but are not included in the live thread
+    /// or message totals.
+    ///
+    /// # Errors
+    /// Returns the same admission and driver errors as
+    /// [`ConversationPersistence::purge_threads`].
+    pub async fn purge_threads_with<F>(
+        &self,
+        mut after_delete: F,
+    ) -> ConversationResult<ConversationPurgeStats>
+    where
+        F: FnMut(&str) + Send,
+    {
+        self.admit().await?;
+        self.purge_native_with(move |thread_id| {
+            after_delete(&thread_id);
+            std::future::ready(())
+        })
+        .await
+    }
+
+    /// Purge threads and await a callback after each successfully deleted thread document.
+    ///
+    /// The owned logical thread ID is delivered for live and tombstoned threads.
+    /// The callback is awaited immediately after the document store confirms the
+    /// deletion and before another row is processed. A `false` delete result
+    /// does not invoke the callback. This variant is suitable when recording the
+    /// deletion obligation requires asynchronous work, including work that must
+    /// yield to the storage bridge's executor.
+    ///
+    /// The callback is infallible by API shape. If a later query, decode, or
+    /// delete fails, completed callbacks remain observable and the purge returns
+    /// the same error as [`ConversationPersistence::purge_threads`]. The purge
+    /// is not crash-atomic: a process failure between document deletion and
+    /// callback completion can leave an obligation unreported. Cancellation
+    /// while a document delete is in flight can leave a deletion that the
+    /// backend completed without a callback; cancellation after deletion can
+    /// also stop the purge before an async callback completes.
+    ///
+    /// Purging repeatedly reads from the head until a fresh query returns no
+    /// rows, so rows inserted during deletion or callbacks are included when
+    /// observed before that empty query. This is not a transactional snapshot:
+    /// rows inserted after the final empty query are outside the purge.
+    ///
+    /// The returned counts retain [`ConversationPersistence::purge_threads`]
+    /// semantics: tombstones are removed but are not included in the live thread
+    /// or message totals.
+    pub async fn purge_threads_with_async<F, Fut>(
+        &self,
+        after_delete: F,
+    ) -> ConversationResult<ConversationPurgeStats>
+    where
+        F: FnMut(String) -> Fut + Send,
+        Fut: Future<Output = ()> + Send,
+    {
+        self.admit().await?;
+        self.purge_native_with_async(after_delete).await
     }
 
     fn key(id: &str) -> ConversationResult<String> {
@@ -433,8 +500,7 @@ impl ConversationPersistence for DriverConversationStore {
             .await
     }
     async fn purge_threads(&self) -> ConversationResult<ConversationPurgeStats> {
-        self.admit().await?;
-        self.purge_native().await
+        self.purge_threads_with(|_| {}).await
     }
 }
 fn timestamp(value: &str) -> i64 {
@@ -447,9 +513,9 @@ fn timestamp(value: &str) -> i64 {
 mod tests;
 
 #[cfg(test)]
-#[path = "driver_schema_tests.rs"]
-mod schema_tests;
-
-#[cfg(test)]
 #[path = "driver_append_tests.rs"]
 mod append_tests;
+
+#[cfg(test)]
+#[path = "driver_purge_callback_tests.rs"]
+mod purge_callback_tests;

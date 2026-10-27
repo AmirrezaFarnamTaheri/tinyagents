@@ -10,7 +10,7 @@ credentials, authorization, and runtime installation remain with the host.
 `ModelSpec` represents inherit, exact model, or routing hint. `pin()` returns
 only a concrete exact model; `hint()` returns a separate routing hint.
 `ToolScope::Named([])` explicitly denies all tools. Extra and deferred names
-join the declared scope before exact exclusions; deferred tools enter discovery
+join the declared scope before glob exclusions; deferred tools enter discovery
 instead of the initial wire catalogue. A hosted explicit wildcard policy
 covers live toolsets as well as static registrations. Bare wildcard fallback
 still belongs to the host. Hidden registrations cannot be promoted by deferral.
@@ -23,9 +23,12 @@ rich vocabulary.
 
 `diagnostics()` reports missing required fields, empty entries, and duplicate
 tool/subagent names; `is_valid()` checks that no diagnostics remain.
-`load_file()` requires a custom prompt, rejects parse and semantic failures,
-and stamps file provenance only on success. `load_dir()` appends valid
-lowercase `.toml` files non-recursively and skips invalid entries with warnings.
+`parse_str()` parses TOML without filesystem access or semantic validation and
+stamps caller-supplied provenance, for embedded definitions whose host owns
+runtime-specific setup. `load_file()` requires a custom prompt, rejects parse
+and semantic failures, and stamps file provenance only on success.
+`load_dir()` appends valid lowercase `.toml` files non-recursively and skips
+invalid entries with warnings.
 
 `DefinitionRegistry` provides asynchronous lookup, listing, and delegate
 resolution. `InMemoryDefinitionRegistry` keeps first-write-wins identities
