@@ -157,5 +157,5 @@ unrelated writer that changes a file between the last revision check and rename,
 or power-loss durability of a directory entry. Filesystem confinement remains
 the host gate's responsibility.
 
-See the accepted [specification](../../../../docs/specs/structural-code.md) and
-[implementation plan](../../../../docs/plans/structural-code.md).
+See the accepted [specification](../../../../vendor/tinytools/docs/specs/structural-code.md) and
+[implementation plan](../../../../vendor/tinytools/docs/plans/structural-code.md).
